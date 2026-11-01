@@ -17,6 +17,20 @@ ureq = { version = "2", default-features = false, features = ["tls"] }
 trash = "5"
 # The vault's folder watched, so the tree and an open note follow the disk.
 notify = "7"
+# A note set as a PDF (`pdf.rs`): Typst's compiler, its PDF writer and its
+# drawing of a page for the preview, and MiTeX, which writes LaTeX math as
+# Typst's. pulldown-cmark reads the note as the editor does; fontdb finds
+# a font of the machine's by its name; comemo is Typst's cache.
+typst = "0.15.1"
+typst-layout = "0.15.1"
+typst-pdf = "0.15.1"
+typst-render = "0.15.1"
+mitex = "0.2.4"
+pulldown-cmark = { version = "0.13", default-features = false }
+fontdb = "0.23"
+comemo = "0.5"
+# Spelling and grammar in English, in the process, nothing sent anywhere.
+harper-core = { version = "2.11", default-features = false, features = ["concurrent"] }
 
 [target.'cfg(windows)'.dependencies]
 # The installer and updater on Windows; pinned to the version release.yml's vpk uses.

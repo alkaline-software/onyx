@@ -25,7 +25,7 @@ use onyx_core::update;
 use crate::i18n::{phrase, t, tf, weave};
 use crate::menu::Entry;
 use crate::shell::{Escape, OpenSettings, Shell};
-use crate::widgets::{choice_pill, page_in, small_pill, wordmark, Press};
+use crate::widgets::{page_in, small_pill, wordmark, Press};
 
 /// The window's size as it opens, and the least it is dragged to. It is
 /// never narrower than it opens: the rows are laid out for that width,
@@ -40,7 +40,7 @@ const TOP_H: Pixels = px(52.);
 /// What the widest controls at a row's right take, so those on a page
 /// start and end together.
 const CONTROL_W: Pixels = px(336.);
-const CONTROL_H: Pixels = px(28.);
+pub(crate) const CONTROL_H: Pixels = px(28.);
 const CARD_R: Pixels = px(12.);
 pub const SETTINGS_CONTEXT: &str = "Settings";
 
@@ -136,7 +136,11 @@ pub fn open(shell: WeakEntity<Shell>, cx: &mut App) {
 
 /// A group of the settings: its name over it, what belongs to the whole
 /// group at the name's right, and its rows on one card.
-fn group(title: Option<SharedString>, aside: Option<AnyElement>, rows: Vec<AnyElement>, theme: &gpui_component::Theme) -> AnyElement {
+/// The languages a note can be checked in: the key `check::LANGUAGES`
+/// has, the flag, and the name.
+const WRITING: &[(&str, &str, &str)] = &[("en-US", "icons/flags/us.svg", phrase("English (US)")), ("en-GB", "icons/flags/gb.svg", phrase("English (UK)")), ("es", "icons/flags/es.svg", phrase("Spanish")), ("fr", "icons/flags/fr.svg", phrase("French")), ("de", "icons/flags/de.svg", phrase("German"))];
+
+pub(crate) fn group(title: Option<SharedString>, aside: Option<AnyElement>, rows: Vec<AnyElement>, theme: &gpui_component::Theme) -> AnyElement {
     let head = (title.is_some() || aside.is_some()).then(|| {
         h_flex()
             .min_h(px(20.))
@@ -180,12 +184,18 @@ fn line(title: SharedString, detail: Option<SharedString>, control: AnyElement, 
         .into_any_element()
 }
 
+/// A row of a card on a sheet, where many stand in little room.
+pub(crate) fn compact_line(title: SharedString, control: AnyElement) -> AnyElement {
+    h_flex().min_h(px(40.)).px(px(14.)).py(px(5.)).gap(px(12.)).items_center().child(div().flex_1().min_w_0().text_size(px(13.)).child(title)).child(div().flex_shrink_0().child(control)).into_any_element()
+}
+
 impl Shell {
     pub(crate) fn render_settings(&mut self, focus: FocusHandle, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
         let section = self.settings_section;
         let rows = match section {
             "text" if self.settings_page == "size" => self.size_rows(cx),
+            "text" if self.settings_page == "spelling" => self.spelling_rows(cx),
             "text" => self.fonts_rows(cx),
             "about" => self.about_rows(cx),
             _ => self.appearance_rows(window, cx),
@@ -197,7 +207,7 @@ impl Shell {
             "appearance" => Some(self.language_pill(cx)),
             "text" => Some(self.motion.segmented(
                 "text-page",
-                vec![("fonts", "", t("Fonts").into()), ("size", "", t("Size").into())],
+                vec![("fonts", "", t("Fonts").into()), ("size", "", t("Size").into()), ("spelling", "", t("Spelling").into())],
                 self.settings_page,
                 false,
                 false,
@@ -214,7 +224,7 @@ impl Shell {
             this.menus.close(cx);
             cx.notify();
         });
-        let ours = |m: &crate::menu::Menu| m.what == "language" || m.what == crate::shell::SETTINGS_EDIT;
+        let ours = |m: &crate::menu::Menu| m.what == "language" || m.what == "writing-language" || m.what == crate::shell::SETTINGS_EDIT;
         let menu = if self.menus.open.as_ref().is_some_and(ours) || self.menus.gone.as_ref().is_some_and(|(m, _)| ours(m)) { self.menus.render(pick, close, cx) } else { None };
         div()
             .id("settings-window")
@@ -606,13 +616,24 @@ impl Shell {
     /// Not `live`, it shows a preset's size and nothing in it moves it.
     fn stepper(&self, key: &'static str, value: f32, live: bool, cx: &mut Context<Self>) -> AnyElement {
         use onyx_core::config::TextSizes;
+        let (down, up) = (TextSizes::step(value, false), TextSizes::step(value, true));
+        self.stepper_of(key, value, live, down, up, Rc::new(move |this: &mut Self, to, cx| this.set_sizes(|s| *size_field(s, key) = to, cx)), cx)
+    }
+
+    /// A size with a press down and a press up, for a sheet.
+    pub(crate) fn stepper_with(&self, key: &'static str, value: f32, down: f32, up: f32, set: Rc<dyn Fn(&mut Self, f32, &mut Context<Self>)>, cx: &mut Context<Self>) -> AnyElement {
+        self.stepper_of(key, value, true, down, up, set, cx)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn stepper_of(&self, key: &'static str, value: f32, live: bool, down: f32, up: f32, set: Rc<dyn Fn(&mut Self, f32, &mut Context<Self>)>, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
         let dark = theme.mode.is_dark();
         let track = if dark { theme.tab_bar_segmented } else { theme.muted };
         let plate = if dark { theme.secondary_active } else { theme.popover };
-        let step = |up: bool, icon: &'static str| {
-            let to = TextSizes::step(value, up);
+        let step = |up: bool, to: f32, icon: &'static str, cx: &mut Context<Self>| {
             let able = live && to != value;
+            let set = set.clone();
             div()
                 .id(SharedString::from(format!("size-{key}-{}", if up { "up" } else { "down" })))
                 .size(px(22.))
@@ -624,13 +645,13 @@ impl Shell {
                 .when(able, |d| {
                     d.cursor_pointer().hover(move |s| s.bg(plate).shadow_sm()).on_click(cx.listener(move |this, _, window, cx| {
                         crate::widgets::swallow_click(window, cx);
-                        this.set_sizes(|s| *size_field(s, key) = to, cx);
+                        set(this, to, cx);
                     }))
                 })
                 .child(Icon::default().path(icon).with_size(px(13.)).text_color(if able { theme.foreground } else { theme.muted_foreground.opacity(0.5) }))
         };
-        let down = step(false, "icons/minus.svg");
-        let up = step(true, "icons/plus.svg");
+        let down = step(false, down, "icons/minus.svg", cx);
+        let up = step(true, up, "icons/plus.svg", cx);
         h_flex()
             .w(px(140.))
             .h(CONTROL_H)
@@ -718,9 +739,10 @@ impl Shell {
             .items_center()
             .pt(px(30.))
             .pb(px(28.))
-            .child(weave(&t("{studio} presents"), vec![("studio", studio)], h_flex().text_size(px(14.)).text_color(theme.muted_foreground).gap(px(0.))))
+            .child(weave(&t("{studio} presents"), vec![("studio", studio)], h_flex().text_size(px(14.)).line_height(px(22.)).text_color(theme.muted_foreground).gap(px(0.))))
             .child(img("icon/icon-512.png").mt(px(18.)).size(px(88.)))
-            .child(div().mt(px(6.)).child(wordmark("Onyx", 42., theme.primary, cx)))
+            // The row's height is its own, whatever face or marks the name holds.
+            .child(div().mt(px(6.)).child(wordmark("Onyx", 42., theme.primary, cx).line_height(px(48.))))
             .child(div().mt(px(4.)).text_size(px(12.5)).text_color(theme.muted_foreground).child(tf("Version {version}", &[("version", &update::current_version())])));
         let pills = h_flex()
             .w_full()
@@ -736,7 +758,7 @@ impl Shell {
             (None, None) => ("icons/refresh.svg", t("Check for updates").to_string(), Press::Quiet),
         };
         let busy = u.checking || u.downloading.is_some();
-        let button = choice_pill("update", icon, words, kind, busy, &theme).min_w(px(190.)).justify_center().when(!busy, |d| {
+        let button = small_pill("update", icon, words, kind, busy, &theme).h(CONTROL_H).min_w(px(190.)).justify_center().when(!busy, |d| {
             d.on_click(cx.listener(|this, _, _, cx| {
                 if this.update.found.is_some() {
                     this.install_update(cx);
@@ -801,7 +823,62 @@ impl Shell {
             .into_any_element()
     }
 
+    /// Spelling and grammar: the check on or off, and what it reads in.
+    /// English is read here, for grammar too; the others are the system's
+    /// spelling (`docs/editor.md`).
+    fn spelling_rows(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let theme = cx.theme().clone();
+        let on = self.cfg.editor.check_writing;
+        let check = self.motion.switch(
+            "check-writing",
+            on,
+            Rc::new(|this: &mut Self, on, _, cx| {
+                this.cfg.editor.check_writing = on;
+                let _ = Config::edit(|c| c.editor.check_writing = on);
+                this.push_writing(cx);
+                cx.notify();
+            }),
+            cx,
+        );
+        let chosen = self.cfg.editor.writing_language.clone();
+        let (_, flag, name) = WRITING.iter().find(|(key, _, _)| *key == chosen).copied().unwrap_or(WRITING[0]);
+        let pill = h_flex()
+            .id("writing-pill")
+            .h(CONTROL_H)
+            .px(px(12.))
+            .gap(px(7.))
+            .items_center()
+            .rounded_full()
+            .border_1()
+            .border_color(theme.foreground.opacity(0.16))
+            .text_size(px(12.5))
+            .cursor_pointer()
+            .hover(|s| s.bg(theme.foreground.opacity(0.06)))
+            .on_click(cx.listener(move |this, ev: &ClickEvent, _, cx| {
+                let at = ev.position() + point(px(-60.), px(16.));
+                let chosen = this.cfg.editor.writing_language.clone();
+                let entries = WRITING.iter().map(|(key, flag, name)| Entry::Choice { id: (*key).into(), icon: flag, label: t(name).into(), picture: true, chosen: chosen == *key }).collect();
+                this.menus.show("writing-language", at, entries);
+                cx.notify();
+            }))
+            .child(img(flag).w(px(17.)).h(px(12.)))
+            .child(t(name))
+            .child(Icon::default().path("icons/chevron-down.svg").with_size(px(12.)).text_color(theme.muted_foreground))
+            .into_any_element();
+        let language = div().when(!on, |d| d.opacity(0.45).occlude()).child(pill).into_any_element();
+        vec![group(None, None, vec![line(t("Check spelling and grammar").into(), None, check, &theme), line(t("Language").into(), None, language, &theme)], &theme)]
+    }
+
     fn settings_pick(&mut self, what: &'static str, id: SharedString, window: &mut Window, cx: &mut Context<Self>) {
+        if what == "writing-language" {
+            let code = id.to_string();
+            self.cfg.editor.writing_language = code.clone();
+            let _ = Config::edit(|c| c.editor.writing_language = code);
+            self.push_writing(cx);
+            self.menus.close(cx);
+            cx.notify();
+            return;
+        }
         if what == crate::shell::SETTINGS_EDIT {
             self.menus.close(cx);
             if let Some(focus) = self.menu_focus.take() {

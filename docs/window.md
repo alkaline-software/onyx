@@ -83,13 +83,17 @@ A right click opens a menu of the app's own (`menu.rs`, `Menus`), one card for e
 
 | Right click on | The menu |
 |---|---|
-| A note, in the tree or on its tab (`entry_menu`, one menu wherever) | Rename · Copy Path, Copy Relative Path · Open (unless it shows), Reveal · Close Tab, Close Other Tabs (with a tab) · Move to Trash |
+| A note, in the tree or on its tab (`entry_menu`, one menu wherever) | Rename · Copy Path, Copy Relative Path · Open (unless it shows), Reveal, Export to PDF… · Close Tab, Close Other Tabs (with a tab) · Move to Trash |
 | A folder in the tree | Rename · New Note, New Folder · Copy Path, Copy Relative Path · Open in Finder · Move to Trash |
 | The tree's empty room (`show_vault_room_menu`) | New Note, New Folder · Copy Path · Open in Finder · Collapse All Folders |
 | The vault's name, by either button (`show_vault_menu`) | New Vault…, Open Vault…, Reveal · Close Vault |
 | A folder's handle on the tabs' row (`show_pill_menu`) | Copy Path, Copy Relative Path · Open in Finder · Close Tabs |
 | The path (`show_path_menu`) | Copy Path, Copy Relative Path (not for the vault) · Reveal or Open in Finder |
-| A note's words or the page round them (`canvas_menu`) | Cut, Copy, Paste · Select All; Read mode and a locked note leave out Cut and Paste |
+| A note's words or the page round them (`canvas_menu`) | Cut, Copy, Paste · Select All · Insert Table (on an empty line) · Export to PDF…, Print…; Read mode and a locked note leave out Cut and Paste |
+| A word marked by the check (`issue_entries`) | What could stand there · Learn Spelling, Ignore · the rest as above |
+| A table's cell (`table_entries`) | Cut, Copy, Paste · Select All · Insert Row Above, Below, Insert Column Left, Right · Align Left, Center, Right · Delete Row, Delete Column, Delete Table · Export to PDF…, Print… |
+| A row's handle | Insert Row Above, Below, Duplicate Row · Move Row Up, Down · Delete Row |
+| A column's handle | Insert Column Left, Right · Move Column Left, Right · Align Left, Center, Right · Sort A to Z, Z to A · Delete Column |
 | A link in the note | Open Link or Open Note · Copy Link, Copy Text, Copy Markdown |
 | Any text field: the name over a note, find, search, a sheet's, the settings' (`input_menu`) | Cut, Copy, Paste · Select All |
 | A note found in the search (`show_found_menu`) | Copy Path, Copy Relative Path · Open, Reveal |
@@ -99,7 +103,7 @@ Cut and Copy show only with a selection and Paste only with something on the cli
 
 ## The sheets
 
-`render_sheet` draws one: a card over a scrim with a title, what it asks, its pills and a line of keys; Esc or a press off the card lets it go, and the card occludes, so a press in it let go outside does not close it. Each sheet's name is in the toolkit's `Input` (`rename_input`, `vault_input`, each made with the window, since an input watches the window it was made in), and ↩ keeps it through the input's `PressEnter`. The rename sheet (`render_rename`) and the new-vault sheet (`render_new_vault`) are the two; one is up at a time. After a sheet the keyboard goes back to the editor when a note is open, else to the window.
+`render_sheet` draws one: a card over a scrim with a title, what it asks, its pills and a line of keys; Esc or a press off the card lets it go, and the card occludes, so a press in it let go outside does not close it. Each sheet's name is in the toolkit's `Input` (`rename_input`, `vault_input`, each made with the window, since an input watches the window it was made in), and ↩ keeps it through the input's `PressEnter`. The rename sheet (`render_rename`) and the new-vault sheet (`render_new_vault`) are the two of this kind, and the export sheet (`render_export`, `docs/export.md`) is drawn on the same scrim, wider, with the page in it; one is up at a time. After a sheet the keyboard goes back to the editor when a note is open, else to the window.
 
 ## The settings
 
@@ -107,7 +111,7 @@ Cut and Copy show only with a selection and Paste only with something on the cli
 
 ## What the window remembers
 
-`ui_state.rs`, `~/.onyx/state/ui.json`: the bounds (from `window_bounds()`, never `bounds()`), whether the sidebar is open and how wide, the settings' section, the vault, the note, the mode, the notes shown wide, the recent vaults, the folded folders. Written when any of it changes (the bounds at most every two seconds), at quit, and when the close button closes the window. The writing is a thread's own (`UiState::save_later`, `Shell::save_ui`), the saves in the order asked: `write_atomic` flushes the file to the disk, some 5 ms on an SSD, and a frame is not to wait on that for a tab moved mid-drag or a folder folded. What was last asked is kept and is what `UiState::load` gives, so a state read, changed and written again never misses one still on its way. The window's close (`Shell::save_ui_now`) and the app's quit (`UiState::flush`) wait for the disk, since on Windows and Linux the close ends the app.
+`ui_state.rs`, `~/.onyx/state/ui.json`: the bounds (from `window_bounds()`, never `bounds()`), whether the sidebar is open and how wide, the settings' section, the vault, the note, the mode, the notes shown wide, the recent vaults, the folded folders, the folder the last PDF went to. Written when any of it changes (the bounds at most every two seconds), at quit, and when the close button closes the window. The writing is a thread's own (`UiState::save_later`, `Shell::save_ui`), the saves in the order asked: `write_atomic` flushes the file to the disk, some 5 ms on an SSD, and a frame is not to wait on that for a tab moved mid-drag or a folder folded. What was last asked is kept and is what `UiState::load` gives, so a state read, changed and written again never misses one still on its way. The window's close (`Shell::save_ui_now`) and the app's quit (`UiState::flush`) wait for the disk, since on Windows and Linux the close ends the app.
 
 ## Probing
 

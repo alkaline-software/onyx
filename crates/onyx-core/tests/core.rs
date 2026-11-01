@@ -182,3 +182,184 @@ fn names_sort_as_the_file_manager_sorts_them() {
     assert_eq!(vault::natural_cmp("x", "x"), Equal);
     assert_eq!(vault::natural_cmp("note", "note 1"), Less);
 }
+
+// -- a note as a PDF ------------------------------------------------------
+
+mod pdf {
+    use std::path::Path;
+
+    use onyx_core::config::PdfConfig;
+    use onyx_core::pdf::{self, Laid, Look, Note};
+
+    fn carried() {
+        static FACES: &[&[u8]] = &[
+            include_bytes!("../../onyx-app/assets/fonts/Inter-Regular.ttf"),
+            include_bytes!("../../onyx-app/assets/fonts/Inter-Bold.ttf"),
+            include_bytes!("../../onyx-app/assets/fonts/Inter-SemiBold.ttf"),
+            include_bytes!("../../onyx-app/assets/fonts/Inter-Italic.ttf"),
+            include_bytes!("../../onyx-app/assets/fonts/JetBrainsMono-Regular.ttf"),
+            include_bytes!("../../onyx-app/assets/fonts/NotoSansSC-Regular.otf"),
+        ];
+        pdf::carry(FACES);
+    }
+
+    fn look() -> Look {
+        Look { words: vec!["Inter".into(), "Noto Sans SC".into()], code: vec!["JetBrains Mono".into(), "Noto Sans SC".into()], fallbacks: vec![], accent: "#277580".into(), link: "#1F6F79".into() }
+    }
+
+    fn laid_in(dir: &Path, text: &str, o: &PdfConfig) -> Result<std::sync::Arc<Laid>, String> {
+        carried();
+        let path = dir.join("Field Notes.md");
+        pdf::lay_out(&Note { text, title: "Field Notes", path: &path, vault: Some(dir) }, &look(), o, if o.paper.is_empty() { "a4" } else { &o.paper })
+    }
+
+    fn laid(text: &str, o: &PdfConfig) -> Result<std::sync::Arc<Laid>, String> {
+        laid_in(tempfile::tempdir().expect("a temp folder").path(), text, o)
+    }
+
+    /// How many pages a note comes to: Typst refusing it fails the test.
+    fn pages(text: &str) -> usize {
+        laid(text, &PdfConfig::default()).expect("the note is set").pages()
+    }
+
+    #[test]
+    fn a_note_with_everything_in_it_is_made() {
+        let text = "---\ntags: [a]\n---\nWords, **bold**, *italic*, ~~gone~~, ==marked==, `code`, [a link](https://example.com), [[A Note|words]]. 中文也在。[^1]\n\n# One\n\n$e^{i\\pi} + 1 = 0$\n\n$$\n\\frac{a}{b}\n$$\n\n- [ ] open\n- [x] done\n  - under it\n- plain\n\n1. first\n2. second\n\n> A quote.\n\n| Name | N |\n|:---|--:|\n| a | 1 |\n\n```rust\nfn main() {}\n```\n\n---\n\n<div>html</div>\n\n[^1]: A note under the page.\n";
+        let done = laid(text, &PdfConfig::default()).expect("the note is set");
+        let bytes = done.pdf().expect("the file is written");
+        assert!(bytes.starts_with(b"%PDF-"));
+    }
+
+    #[test]
+    fn a_note_cannot_run_typst() {
+        // None of these is read as markup or code, or the note would fail
+        // or a file would be reached for.
+        let text = "#panic(\"no\") and #read(\"/etc/passwd\") and $ and *a and _b and [c and <d> and @e and \\f and ` and # and // and /* and =\n\n#import \"/x\": *\n\n# #panic(\"heading\")\n\n- #panic()\n\n| #panic() |\n|---|\n| [ |\n";
+        assert_eq!(pages(text), 1);
+    }
+
+    #[test]
+    fn a_formula_typst_refuses_does_not_lose_the_note() {
+        assert_eq!(pages("Before.\n\n$\\frac{a}{$ and $\\badcommand{x}$ and $$x_$$ and $1)($\n\nAfter.\n"), 1);
+    }
+
+    #[test]
+    fn a_picture_that_cannot_be_read_is_its_alt_text() {
+        let dir = tempfile::tempdir().expect("a temp folder");
+        std::fs::write(dir.path().join("broken.png"), b"not a picture").expect("written");
+        let text = "![Gone](gone.png)\n\n![Far](https://example.com/a.png)\n\n![Broken](broken.png)\n\nWords.\n";
+        assert_eq!(laid_in(dir.path(), text, &PdfConfig::default()).expect("the note is set").pages(), 1);
+    }
+
+    #[test]
+    fn a_picture_left_out_leaves_the_others_their_own() {
+        let dir = tempfile::tempdir().expect("a temp folder");
+        std::fs::write(dir.path().join("broken.png"), b"not a picture").expect("written");
+        std::fs::write(dir.path().join("good.png"), include_bytes!("../../onyx-app/assets/icon/icon-128.png")).expect("written");
+        // The good one takes the broken one's number once that is left out.
+        let text = "![B](broken.png)\n\n![G](good.png)\n";
+        assert!(laid_in(dir.path(), text, &PdfConfig::default()).is_ok());
+        // Two footnotes and the note, each with a picture, keep three.
+        let text = "One[^a] and two[^b].\n\n![G](good.png)\n\n[^a]: ![B](broken.png)\n[^b]: ![G](good.png)\n";
+        assert!(laid_in(dir.path(), text, &PdfConfig::default()).is_ok());
+    }
+
+    #[test]
+    fn a_picture_by_its_bare_name_is_found_anywhere_in_the_vault() {
+        let dir = tempfile::tempdir().expect("a temp folder");
+        std::fs::create_dir_all(dir.path().join("attachments/deep")).expect("made");
+        std::fs::write(dir.path().join("attachments/deep/my picture.png"), include_bytes!("../../onyx-app/assets/icon/icon-128.png")).expect("written");
+        // One page of words either way; two only if the picture came in
+        // and took the rest of the first.
+        let filler = "Words.\n\n".repeat(30);
+        let text = format!("{filler}![[my picture.png]]\n\n![A](my%20picture.png)\n\n{filler}");
+        assert!(laid_in(dir.path(), &text, &PdfConfig::default()).expect("set").pages() >= 2);
+    }
+
+    #[test]
+    fn the_options_change_the_page() {
+        let mut o = PdfConfig { paper: "letter".into(), ..Default::default() };
+        let (w, h) = laid("Words.", &o).expect("set").size(0).expect("a page");
+        assert_eq!((w.round(), h.round()), (612., 792.));
+        o.landscape = true;
+        let (w, h) = laid("Words.", &o).expect("set").size(0).expect("a page");
+        assert_eq!((w.round(), h.round()), (792., 612.));
+        // Each top heading on a page of its own, the first where it stands.
+        o = PdfConfig { breaks: true, ..Default::default() };
+        assert_eq!(laid("# One\n\nA\n\n# Two\n\nB\n\n# Three\n", &o).expect("set").pages(), 3);
+        // Every option, at its ends.
+        for spacing in ["tight", "loose"] {
+            for margins in ["small", "large"] {
+                let o = PdfConfig { spacing: spacing.into(), margins: margins.into(), size: PdfConfig::MOST_SIZE, contents: true, color: false, numbers: false, name: false, ..Default::default() };
+                assert!(laid("# One\n\n`code`\n\n```rust\nfn a() {}\n```\n", &o).is_ok());
+            }
+        }
+    }
+
+    #[test]
+    fn a_page_is_drawn_as_it_will_print() {
+        let done = laid("Words.", &PdfConfig::default()).expect("set");
+        let picture = done.draw(0, 1.).expect("a picture");
+        assert_eq!((picture.width, picture.height), (595, 842));
+        assert_eq!(picture.rgba.len(), 595 * 842 * 4);
+        assert!(picture.rgba[..4] == [255, 255, 255, 255], "the paper is white");
+    }
+
+    #[test]
+    fn a_name_the_panel_never_asked_about_is_not_overwritten() {
+        let dir = tempfile::tempdir().expect("a temp folder");
+        let asked = dir.path().join("Asked.pdf");
+        assert_eq!(pdf::output_path(&asked), asked);
+        std::fs::write(dir.path().join("Plain.pdf"), b"keep").expect("written");
+        assert_eq!(pdf::output_path(&dir.path().join("Plain")), dir.path().join("Plain 1.pdf"));
+        assert_eq!(pdf::output_path(&dir.path().join("v1.2")), dir.path().join("v1.2.pdf"));
+    }
+}
+
+mod html_on_paper {
+    use onyx_core::config::PdfConfig;
+    use onyx_core::pdf::{self, Look, Note};
+
+    fn laid(text: &str) -> Result<std::sync::Arc<pdf::Laid>, String> {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("n.md");
+        let note = Note { text, title: "n", path: &path, vault: None };
+        let look = Look { words: vec!["Inter".into()], code: vec!["JetBrains Mono".into()], fallbacks: vec![], accent: "#0d9488".into(), link: "#0f766e".into() };
+        pdf::lay_out(&note, &look, &PdfConfig::default(), "a4")
+    }
+
+    #[test]
+    fn tags_among_the_words_are_set() {
+        let text = "a <u>u</u> <b>b</b> <i>i</i> <s>s</s> <mark>m</mark> <kbd>k</kbd> <sub>2</sub> <sup>3</sup> <small>t</small> <a href=\"https://a.b\">l</a> <span style=\"color: red; background: yellow\">c</span> <!-- no --> <x>y</x> <b>open\n\nline<br>break\n";
+        assert!(laid(text).is_ok());
+    }
+
+    #[test]
+    fn a_block_of_html_is_set() {
+        let text = "<table>\n<tr><th>A</th><th align=\"right\">B</th></tr>\n<tr><td>1<br>2</td><td><b>x</b></td></tr>\n</table>\n\n<div align=\"center\">\n<h2>Title</h2>\n<ul><li>a</li><li>b</li></ul>\n</div>\n\n<details><summary>More</summary>Inside</details>\n\n<script>alert(1)</script>\n\n<!-- nothing -->\n\n</div>\n";
+        assert!(laid(text).is_ok());
+    }
+
+    #[test]
+    fn a_table_with_a_persons_widths_is_set() {
+        let text = format!("| a | b |\n|{}|{}|\n| 1 | 2 |\n", "-".repeat(30), "-".repeat(70));
+        assert!(laid(&text).is_ok());
+    }
+
+    #[test]
+    fn html_cannot_run_typst() {
+        let text = "<span style=\"color: red\">#panic(\"no\")</span>\n\n<p>#panic(\"no\")</p>\n\n| #panic(\"x\") |\n|---|\n";
+        assert!(laid(text).is_ok());
+    }
+}
+
+mod writing {
+    use onyx_core::rhythm::shares_of;
+
+    #[test]
+    fn a_separator_of_a_hundred_dashes_says_widths() {
+        assert_eq!(shares_of(&format!("|{}|{}|", "-".repeat(40), "-".repeat(60))), Some(vec![40., 60.]));
+        assert_eq!(shares_of(&format!("> | :{}: | {}: |", "-".repeat(40), "-".repeat(60))), Some(vec![40., 60.]));
+        assert_eq!(shares_of("|---|---|"), None);
+    }
+}

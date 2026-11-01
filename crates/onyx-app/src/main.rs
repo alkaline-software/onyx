@@ -5,11 +5,13 @@ mod ambient;
 mod assets;
 mod csd;
 mod editor;
+mod export;
 #[allow(dead_code)]
 mod file_icons;
 mod fonts;
 mod i18n;
 mod langs;
+mod layout;
 mod lines;
 mod look;
 mod markdown;
@@ -19,6 +21,7 @@ mod settings;
 mod shell;
 mod tabs;
 mod sys;
+mod tables;
 mod ui_state;
 mod widgets;
 
@@ -27,7 +30,7 @@ use gpui_component::Root;
 
 use i18n::t;
 use onyx_core::config::Config;
-use shell::{CloseTab, CloseVault, Escape, FindInNote, FindNext, FindPrev, NewFolder, NewNote, NewVault, ReopenTab, Tab1, Tab2, Tab3, Tab4, Tab5, Tab6, Tab7, Tab8, Tab9, OpenSettings, OpenVault, Save, Shell, ShowLive, ShowNarrow, ShowMiddle, ShowReading, ShowSource, ShowWide, ToggleReading, ToggleSearch, ToggleSidebar, KEY_CONTEXT, MIN_W};
+use shell::{CloseTab, CloseVault, Escape, ExportPdf, PrintNote, FindInNote, FindNext, FindPrev, NewFolder, NewNote, NewVault, ReopenTab, Tab1, Tab2, Tab3, Tab4, Tab5, Tab6, Tab7, Tab8, Tab9, OpenSettings, OpenVault, Save, Shell, ShowLive, ShowNarrow, ShowMiddle, ShowReading, ShowSource, ShowWide, ToggleReading, ToggleSearch, ToggleSidebar, KEY_CONTEXT, MIN_W};
 
 actions!(onyx_app, [Quit, CloseWindow, Hide, HideOthers, ShowAll, Minimize, Zoom, ToggleFullScreen]);
 
@@ -41,6 +44,12 @@ fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("secondary-shift-n", NewFolder, None),
         KeyBinding::new("secondary-shift-o", OpenVault, None),
         KeyBinding::new("secondary-s", Save, None),
+        KeyBinding::new("secondary-shift-e", ExportPdf, None),
+        KeyBinding::new("secondary-p", PrintNote, None),
+        KeyBinding::new("enter", export::ExportNow, Some(shell::EXPORT_CONTEXT)),
+        KeyBinding::new("left", export::PagePrev, Some(shell::EXPORT_CONTEXT)),
+        KeyBinding::new("right", export::PageNext, Some(shell::EXPORT_CONTEXT)),
+        KeyBinding::new("escape", Escape, Some(shell::EXPORT_CONTEXT)),
         KeyBinding::new("secondary-e", ToggleReading, None),
         KeyBinding::new("secondary-k", ToggleSearch, None),
         KeyBinding::new("secondary-f", FindInNote, None),
@@ -105,6 +114,8 @@ pub(crate) fn app_menus() -> Vec<Menu> {
                 MenuItem::action(t("Close Vault"), CloseVault),
                 MenuItem::separator(),
                 MenuItem::action(t("Save"), Save),
+                MenuItem::action(t("Export to PDF…"), ExportPdf),
+                MenuItem::action(t("Print…"), PrintNote),
                 MenuItem::separator(),
                 MenuItem::action(t("Close Tab"), CloseTab),
                 MenuItem::action(t("Reopen Closed Tab"), ReopenTab),
@@ -233,10 +244,10 @@ fn open_main_window(cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
                 }
                 if let Some(section) = section.as_deref() {
                     // `size` is Text's Size page.
-                    if section == "size" {
-                        s.settings_page = "size";
+                    if section == "size" || section == "spelling" {
+                        s.settings_page = if section == "size" { "size" } else { "spelling" };
                     }
-                    s.open_settings(Some(settings::section_named(if section == "size" { "text" } else { section })), window, cx);
+                    s.open_settings(Some(settings::section_named(if section == "size" || section == "spelling" { "text" } else { section })), window, cx);
                 }
                 if let Some(path) = shot {
                     s.shoot_later(path.into(), window, cx);

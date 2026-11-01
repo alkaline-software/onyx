@@ -14,18 +14,23 @@
 //! composes in place; keys that move or change arrive as actions.
 
 use std::cell::RefCell;
-use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
 use std::ops::Range;
+use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use gpui::*;
 use gpui_component::{input, ActiveTheme as _};
 
+use crate::layout::{Cache, Pictures, Reader, Rhythm, Row, Target, TextRow, Widget, PLATE_X};
 use crate::lines::{list_line, next_marker, quote_line, Doc, ListKind, Pos, Sel};
-use crate::markdown::{self, Analysis, LineKind, Shown, SpanKind};
+use crate::markdown::{self, Analysis, LineKind, SpanKind};
+
+mod cells;
+mod writing;
+
+pub use cells::{CellAt, Scope, TableFacts};
+pub use writing::{MenuIssue, Words};
 
 actions!(
     editor,
@@ -129,6 +134,16 @@ pub struct MenuLink {
     pub raw: String,
 }
 
+/// What a right click was on, as the window needs it to make the menu.
+#[derive(Clone, Debug, Default)]
+pub struct MenuAt {
+    pub link: Option<MenuLink>,
+    pub issue: Option<MenuIssue>,
+    pub table: Option<(CellAt, Scope, TableFacts)>,
+    /// On a line with nothing on it, where a table can stand.
+    pub blank: bool,
+}
+
 /// What the editor tells the view around it.
 pub enum EditorEvent {
     /// The text changed.
@@ -137,9 +152,9 @@ pub enum EditorEvent {
     OpenLink(String),
     /// A `[[note]]` link was clicked: the name it gives.
     OpenNote(String),
-    /// A right click: where, and the link it was on. The window makes the
+    /// A right click: where, and what it was on. The window makes the
     /// menu, as it does every menu.
-    Menu(Point<Pixels>, Option<MenuLink>),
+    Menu(Point<Pixels>, MenuAt),
 }
 
 /// The faces and size a note is set in, from the settings.
@@ -161,25 +176,8 @@ impl Default for Look {
     }
 }
 
-/// The words' line, as a share of their size.
-const LINE: f32 = 1.6;
-/// A blank line's share of a line as the note reads, so a paragraph's
-/// gap is the one the reading view leaves.
-const BLANK_LINE: f32 = 0.75;
-/// A heading's size as a share of the words', its weight, and its line.
-const HEADINGS: [(f32, FontWeight, f32); 6] = [(1.618, FontWeight::BOLD, 1.25), (1.462, FontWeight::SEMIBOLD, 1.25), (1.318, FontWeight::SEMIBOLD, 1.3), (1.188, FontWeight::SEMIBOLD, 1.35), (1.076, FontWeight::SEMIBOLD, 1.4), (1.0, FontWeight::SEMIBOLD, 1.5)];
-/// Each level of a list, and each level of a quote, stands this far in.
-const LIST_INDENT: f32 = 26.;
-const QUOTE_INDENT: f32 = 18.;
-/// The room at a code plate's top and foot, which its fence lines take
-/// while they are hidden, and at its sides.
-const PLATE_PAD: f32 = 12.;
-const PLATE_X: f32 = 12.;
-/// A shown fence stands this far in from the plate's edge above it or
-/// below it: the plate's padding less the fence's own line room.
-const FENCE_PAD: f32 = 6.;
-const CELL_X: f32 = 10.;
-const CELL_Y: f32 = 5.;
+/// A table's corners, as a code plate's.
+const TABLE_R: f32 = 8.;
 const BLINK: Duration = Duration::from_millis(530);
 /// The caret is kept this far from the top and foot of what shows: out
 /// of the page's edge fade, which counts as out of sight (`FADE_H` in
@@ -233,7 +231,9 @@ pub struct Editor {
     preferred_x: Option<f32>,
     /// Where the element was last painted, for an input method's windows.
     origin: Point<Pixels>,
-    over_link: bool,
+    /// The pointer's shape over the page, and where it last was.
+    pointer: CursorStyle,
+    pointer_at: (f32, f32),
     read_only: bool,
     /// The phrase the find bar looks for, every place it is in the note,
     /// and which of them the bar stands on. The one stood on is the
@@ -241,6 +241,14 @@ pub struct Editor {
     find_query: String,
     find: Rc<Vec<(Pos, Pos)>>,
     find_at: usize,
+    /// The pictures a note holds, and where the note is, to find them.
+    pictures: Rc<RefCell<Pictures>>,
+    writing: writing::Writing,
+    /// Where the pointer is in a table, and a drag of its edges or handles.
+    hover: Option<cells::Hover>,
+    table_drag: Option<cells::TableDrag>,
+    /// A table's columns as a drag has them: its first line, and each width.
+    hold: Option<(usize, Vec<f32>)>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -258,93 +266,22 @@ impl Focusable for Editor {
     }
 }
 
-// -- what is laid out -------------------------------------------------------
-
-/// A line laid out at a width: the words that show, their layout, and
-/// the widgets beside them.
-struct TextRow {
-    shown: Shown,
-    source_len: usize,
-    line: WrappedLine,
-    line_h: f32,
-    /// Where the words begin, from the element's left.
-    inset: f32,
-    top_pad: f32,
-    /// Room under the words: a closing fence's, so the plate keeps its
-    /// padding while its fences show.
-    bottom_pad: f32,
-    widgets: Vec<Widget>,
-    /// Which spans' words are links, by their shown range, and where
-    /// each leads.
-    links: Vec<(Range<usize>, Target)>,
-    /// Shown ranges with a plate behind them (code), and with a wash (a highlight).
-    chips: Vec<(Range<usize>, Hsla)>,
-}
-
-#[derive(Clone)]
-enum Target {
-    Link(String),
-    Note(String),
-}
-
-enum Widget {
-    /// A bullet's disc, centered here.
-    Bullet { x: f32, y: f32, r: f32 },
-    /// A number before its item.
-    Number { line: ShapedLine, x: f32, y: f32 },
-    /// A task's box.
-    Task { bounds: Bounds<Pixels>, done: bool },
-    /// An indent guide: a hairline at `x` down the whole row.
-    Guide { x: f32 },
-    /// A quote's bar at `x`.
-    Bar { x: f32 },
-}
-
-struct TableRow {
-    cols: Vec<f32>,
-    heights: Vec<f32>,
-    cells: Vec<Vec<Option<WrappedLine>>>,
-    line_h: f32,
-    inset: f32,
-}
-
-enum Row {
-    Text(TextRow),
-    /// A hidden fence line: the plate's padding, and on the first the
-    /// language's mark: its name shaped, its icon's path and its color.
-    Pad { lang: Option<(ShapedLine, &'static str, Hsla)> },
-    /// A line with no height: a table's row drawn in its first, a hidden underline.
-    Hidden,
-    Rule { inset: f32, line_h: f32 },
-    Table(TableRow),
-}
-
-struct Entry {
-    key: u64,
-    height: f32,
-    row: Rc<Row>,
-}
-
-#[derive(Default)]
-struct Cache {
-    width: f32,
-    look_key: u64,
-    entries: Vec<Entry>,
-    tops: Vec<f32>,
-    total: f32,
-    /// Each code block's colors, by its first line: the key of the text
-    /// they were read from, and a list a line of (bytes, ink).
-    code_colors: HashMap<usize, (u64, Vec<Vec<(Range<usize>, Hsla)>>)>,
-    /// A highlighter a language, kept: making one reads its grammar.
-    highlighters: HashMap<String, gpui_component::highlighter::SyntaxHighlighter>,
-}
-
 /// A caret's place on the page, from the element's top left.
 #[derive(Clone, Copy)]
 struct CaretAt {
     x: f32,
+    /// The line it stands on: what ↑ and ↓ step from and the view keeps in sight.
     y: f32,
     h: f32,
+    /// The caret itself, in the middle of that line.
+    bar_y: f32,
+    bar_h: f32,
+}
+
+impl CaretAt {
+    fn new(x: f32, y: f32, h: f32, bar_h: f32) -> Self {
+        Self { x, y, h, bar_y: y + ((h - bar_h) / 2.).floor(), bar_h }
+    }
 }
 
 // -- the editor -------------------------------------------------------------
@@ -369,11 +306,47 @@ impl Editor {
             want_scroll: false,
             preferred_x: None,
             origin: Point::default(),
-            over_link: false,
+            pointer: CursorStyle::IBeam,
+            pointer_at: (0., 0.),
             read_only: false,
             find_query: String::new(),
             find: Rc::new(Vec::new()),
             find_at: 0,
+            pictures: Rc::default(),
+            writing: writing::Writing::default(),
+            hover: None,
+            table_drag: None,
+            hold: None,
+        }
+    }
+
+    /// Where the note is, which a picture's path goes by.
+    pub fn set_place(&mut self, note: PathBuf, vault: Option<PathBuf>, cx: &mut Context<Self>) {
+        let mut pictures = self.pictures.borrow_mut();
+        if pictures.note != note || pictures.vault != vault {
+            pictures.note = note;
+            pictures.vault = vault;
+            pictures.found.clear();
+            cx.notify();
+        }
+    }
+
+    /// What a layout goes by, as things stand.
+    fn reader(&self) -> Reader<'_> {
+        let revealing = self.revealing();
+        Reader {
+            doc: &self.doc,
+            analysis: &self.analysis,
+            look: &self.look,
+            rhythm: Rhythm::of(&self.look),
+            mode: self.mode,
+            sel: revealing.then(|| self.sel.range()),
+            issues: if self.locked() { &[] } else { self.writing.shown(&self.doc) },
+            quiet: self.writing.quiet(&self.doc, self.sel),
+            pictures: &self.pictures,
+            hold: self.hold.as_ref(),
+            across: Default::default(),
+            nested: false,
         }
     }
 
@@ -386,6 +359,7 @@ impl Editor {
         self.preferred_x = None;
         self.scroll.set_offset(point(px(0.), px(0.)));
         self.reanalyze();
+        self.check_afresh(cx);
         cx.notify();
     }
 
@@ -400,6 +374,7 @@ impl Editor {
         self.sel = Sel { anchor: self.doc.clamp(keep.anchor), head: self.doc.clamp(keep.head) };
         self.marked = None;
         self.reanalyze();
+        self.check_afresh(cx);
         cx.notify();
     }
 
@@ -517,10 +492,16 @@ impl Editor {
     pub fn type_text(&mut self, text: &str, cx: &mut Context<Self>) {
         for ch in text.chars() {
             let (a, b) = self.sel.range();
-            let end = self.doc.replace(a, b, &ch.to_string(), self.sel);
+            let typed = self.cell_words(&ch.to_string());
+            let end = self.doc.replace(a, b, &typed, self.sel);
             self.sel = Sel::caret(end);
             self.after_edit(cx);
         }
+    }
+
+    /// For a probe: where each line stands.
+    pub fn line_tops(&self) -> Vec<f32> {
+        self.cache.borrow().tops.clone()
     }
 
     /// For a probe: the caret at the end, and the view with it.
@@ -537,13 +518,13 @@ impl Editor {
     /// The link at a point of the page, as its menu needs it.
     fn link_at(&self, x: f32, y: f32) -> Option<MenuLink> {
         let Some(Hit::Link(target)) = self.hit(x, y) else { return None };
-        let at = self.doc.offset_of(self.pos_at(x, y, &self.cache.borrow())?);
+        let p = self.pos_at(x, y, &self.cache.borrow())?;
+        let at = self.doc.offset_of(p);
         let (url, note) = match target {
             Target::Link(url) => (Some(url), None),
             Target::Note(name) => (None, Some(name)),
         };
-        let line = self.pos_at(x, y, &self.cache.borrow())?.line;
-        let span = self.analysis.line_spans[line].iter().map(|&ix| &self.analysis.spans[ix]).find(|s| matches!(s.kind, SpanKind::Link(_) | SpanKind::WikiLink(_) | SpanKind::Image(_)) && s.range.start <= at && at <= s.range.end);
+        let span = self.analysis.line_spans[p.line].iter().map(|&ix| &self.analysis.spans[ix]).find(|s| matches!(s.kind, SpanKind::Link(_) | SpanKind::WikiLink(_) | SpanKind::Image(_)) && s.range.start <= at && at <= s.range.end);
         let slice = |a: usize, b: usize| self.doc.slice(self.doc.pos_of(a), self.doc.pos_of(b));
         let (words, raw) = span.map(|s| (slice(s.open.end, s.close.start), slice(s.range.start, s.range.end))).unwrap_or_default();
         Some(MenuLink { url, note, words, raw })
@@ -608,14 +589,9 @@ impl Editor {
             let to = if line == b.line { b.col } else { text.len() };
             match &self.analysis.lines[line].kind {
                 LineKind::FenceOpen(_) | LineKind::FenceClose | LineKind::SetextUnderline | LineKind::Rule => {}
-                LineKind::TableFirst(t) | LineKind::TableRow(t) => {
+                LineKind::TableFirst(t) | LineKind::TableRow(t) if a.line != b.line || self.cell_of(a).is_none() => {
                     let table = &self.analysis.tables[*t];
-                    let row = match line - table.first {
-                        0 => Some(0),
-                        1 => None,
-                        below => Some(below - 1),
-                    };
-                    if let Some(cells) = row.and_then(|r| table.rows.get(r)) {
+                    if let Some(cells) = table.row_of(line).and_then(|r| table.rows.get(r)) {
                         lines.push(cells.join("\t"));
                     }
                 }
@@ -640,6 +616,7 @@ impl Editor {
         if !self.find_query.is_empty() {
             self.refind();
         }
+        self.text_changed(cx);
         self.want_scroll = true;
         self.preferred_x = None;
         self.kick_blink(cx);
@@ -725,7 +702,8 @@ impl Editor {
             return;
         }
         let (a, b) = self.sel.range();
-        let end = self.doc.replace(a, b, text, self.sel);
+        let text = self.cell_words(text);
+        let end = self.doc.replace(a, b, &text, self.sel);
         self.sel = Sel::caret(end);
         self.after_edit(cx);
     }
@@ -739,6 +717,10 @@ impl Editor {
 
     fn enter(&mut self, _: &Enter, _: &mut Window, cx: &mut Context<Self>) {
         if self.locked() {
+            return;
+        }
+        if self.in_cell() {
+            self.cell_down(cx);
             return;
         }
         if !self.sel.is_caret() {
@@ -790,6 +772,10 @@ impl Editor {
         if self.locked() {
             return;
         }
+        if self.in_cell() {
+            self.cell_next(cx);
+            return;
+        }
         let lines: Vec<usize> = self.selected_lines().filter(|l| list_line(self.doc.line(*l)).is_some()).collect();
         if lines.is_empty() {
             self.insert("\t", cx);
@@ -810,6 +796,10 @@ impl Editor {
 
     fn outdent(&mut self, _: &Outdent, _: &mut Window, cx: &mut Context<Self>) {
         if self.locked() {
+            return;
+        }
+        if self.in_cell() {
+            self.cell_prev(cx);
             return;
         }
         let mut changes = Vec::new();
@@ -849,6 +839,12 @@ impl Editor {
             return;
         }
         let at = self.sel.head;
+        if let Some(from) = self.back_stop(at) {
+            if from != at {
+                self.replace_range(from, at, "", cx);
+            }
+            return;
+        }
         let text = self.doc.line(at.line);
         // Right after a list marker with nothing typed yet: the marker goes.
         if let Some(item) = list_line(text) {
@@ -874,7 +870,7 @@ impl Editor {
             return;
         }
         let at = self.sel.head;
-        let to = self.doc.next_grapheme(at);
+        let to = self.forward_stop(at).unwrap_or_else(|| self.doc.next_grapheme(at));
         if to != at {
             self.replace_range(at, to, "", cx);
         }
@@ -889,8 +885,10 @@ impl Editor {
             return;
         }
         let at = self.sel.head;
-        let from = self.doc.word_left(at);
-        self.replace_range(from, at, "", cx);
+        let from = self.in_this_cell(at, self.doc.word_left(at));
+        if from != at {
+            self.replace_range(from, at, "", cx);
+        }
         self.doc.end_step();
     }
 
@@ -900,14 +898,21 @@ impl Editor {
         }
         let at = self.sel.head;
         let from = if at.col > 0 { Pos::new(at.line, 0) } else { self.doc.prev_grapheme(at) };
+        let from = self.in_this_cell(at, from);
         if from != at {
             self.replace_range(from, at, "", cx);
             self.doc.end_step();
         }
     }
 
+    /// ⌘A takes a cell first, its words being a text of their own; again,
+    /// the note.
     fn select_all(&mut self, _: &input::SelectAll, _: &mut Window, cx: &mut Context<Self>) {
-        self.sel = Sel { anchor: Pos::default(), head: self.doc.end() };
+        let cell = self.cell_of(self.sel.head).map(|at| self.cell_span(at));
+        self.sel = match cell {
+            Some((a, b)) if self.sel.range() != (a, b) => Sel { anchor: a, head: b },
+            _ => Sel { anchor: Pos::default(), head: self.doc.end() },
+        };
         cx.notify();
     }
 
@@ -947,6 +952,8 @@ impl Editor {
         if let Some(sel) = self.doc.undo() {
             self.sel = Sel { anchor: self.doc.clamp(sel.anchor), head: self.doc.clamp(sel.head) };
             self.reanalyze();
+            self.sel = self.settled_sel();
+            self.text_changed(cx);
             self.want_scroll = true;
             self.kick_blink(cx);
             cx.emit(EditorEvent::Changed);
@@ -961,6 +968,8 @@ impl Editor {
         if let Some(sel) = self.doc.redo() {
             self.sel = Sel { anchor: self.doc.clamp(sel.anchor), head: self.doc.clamp(sel.head) };
             self.reanalyze();
+            self.sel = self.settled_sel();
+            self.text_changed(cx);
             self.want_scroll = true;
             self.kick_blink(cx);
             cx.emit(EditorEvent::Changed);
@@ -1109,20 +1118,20 @@ impl Editor {
     // -- moves ----------------------------------------------------------------
 
     fn move_to(&mut self, p: Pos, select: bool, cx: &mut Context<Self>) {
-        let p = self.doc.clamp(p);
+        let p = self.settled(self.doc.clamp(p), select);
         self.sel = if select { Sel { anchor: self.sel.anchor, head: p } } else { Sel::caret(p) };
         self.after_move(cx);
     }
 
     fn left(&mut self, select: bool, cx: &mut Context<Self>) {
         stamp("key left");
-        let p = if !select && !self.sel.is_caret() { self.sel.start() } else { self.doc.prev_grapheme(self.sel.head) };
+        let p = if !select && !self.sel.is_caret() { self.sel.start() } else { self.step_back(self.sel.head) };
         self.preferred_x = None;
         self.move_to(p, select, cx);
     }
 
     fn right(&mut self, select: bool, cx: &mut Context<Self>) {
-        let p = if !select && !self.sel.is_caret() { self.sel.end() } else { self.doc.next_grapheme(self.sel.head) };
+        let p = if !select && !self.sel.is_caret() { self.sel.end() } else { self.step_on(self.sel.head) };
         self.preferred_x = None;
         self.move_to(p, select, cx);
     }
@@ -1147,37 +1156,54 @@ impl Editor {
         let (_, qs) = quote_line(text).unwrap_or((0, 0));
         let content = list_line(&text[qs..]).map_or(qs, |i| qs + i.indent.len() + i.marker.len());
         let p = if at.col > content { content } else { 0 };
+        if let Some(cell) = self.cell_of(at) {
+            let (from, _) = self.cell_span(cell);
+            self.preferred_x = None;
+            self.move_to(from, select, cx);
+            return;
+        }
         self.preferred_x = None;
         self.move_to(Pos::new(at.line, p), select, cx);
     }
 
     fn line_end(&mut self, select: bool, cx: &mut Context<Self>) {
         let at = self.sel.head;
+        if let Some(cell) = self.cell_of(at) {
+            let (_, to) = self.cell_span(cell);
+            self.preferred_x = None;
+            self.move_to(to, select, cx);
+            return;
+        }
         self.preferred_x = None;
         self.move_to(Pos::new(at.line, self.doc.line(at.line).len()), select, cx);
     }
 
-    /// ↑ and ↓: a wrapped row up or down in the same line, else the line
-    /// before or after, at the column the first press began in.
+    /// ↑ and ↓: a wrapped row up or down in the same line, or the same
+    /// cell, else the line before or after, at the column the first press
+    /// began in.
     fn vertical(&mut self, down: bool, select: bool, cx: &mut Context<Self>) {
         let head = self.sel.head;
         let Some(at) = self.caret_at(head) else { return };
         let x = *self.preferred_x.get_or_insert(at.x);
         let cache = self.cache.borrow();
-        let Some(entry) = cache.entries.get(head.line) else { return };
+        let Some((top, bottom)) = self.flow_span(head, &cache) else { return };
         let target_y = if down { at.y + at.h + 1. } else { at.y - 1. };
-        let in_row = target_y >= cache.tops[head.line] && target_y < cache.tops[head.line] + entry.height;
-        let target = if in_row {
+        let target = if target_y >= top && target_y < bottom {
             self.pos_at(x, target_y, &cache)
         } else {
-            let line = if down { head.line + 1 } else { head.line.checked_sub(1).unwrap_or(0) };
-            if down && line >= self.doc.line_count() {
-                Some(self.doc.end())
-            } else if !down && head.line == 0 {
-                Some(Pos::default())
-            } else {
-                let y = if down { cache.tops[line] + 1. } else { cache.tops[line] + cache.entries[line].height - 1. };
-                self.pos_at(x, y.max(0.), &cache)
+            // The next line that has height: a table's separator has none.
+            let step = |l: usize| if down { Some(l + 1).filter(|n| *n < self.doc.line_count()) } else { l.checked_sub(1) };
+            let mut next = step(head.line);
+            while let Some(l) = next.filter(|l| cache.entries.get(*l).is_some_and(|e| e.height <= 0.)) {
+                next = step(l);
+            }
+            match next {
+                Some(line) => {
+                    let y = if down { cache.tops[line] + 1. } else { cache.tops[line] + cache.entries[line].height - 1. };
+                    self.pos_at(x, y.max(0.), &cache)
+                }
+                None if down => Some(self.doc.end()),
+                None => Some(Pos::default()),
             }
         };
         drop(cache);
@@ -1200,528 +1226,15 @@ impl Editor {
 
     // -- the layout ---------------------------------------------------------
 
-    fn look_key(&self, theme: &gpui_component::Theme) -> u64 {
-        let mut h = DefaultHasher::new();
-        self.look.text_family.hash(&mut h);
-        self.look.mono_family.hash(&mut h);
-        self.look.text_px.to_bits().hash(&mut h);
-        self.look.mono_px.to_bits().hash(&mut h);
-        theme.mode.is_dark().hash(&mut h);
-        (self.mode as u8).hash(&mut h);
-        h.finish()
+    fn hidden_on(&self, line: usize) -> Vec<std::ops::Range<usize>> {
+        self.reader().hidden_on(line)
     }
 
-    /// Whether the selection touches a line.
-    /// Whether the caret is on a line: never while the keyboard is
-    /// elsewhere, so a note left by a click in the margin reads whole.
-    fn on_line(&self, line: usize) -> bool {
-        if !self.revealing() {
-            return false;
-        }
-        let (a, b) = self.sel.range();
-        a.line <= line && line <= b.line
-    }
-
-    fn touches(&self, r: &Range<usize>, inclusive: bool) -> bool {
-        if !self.revealing() {
-            return false;
-        }
-        let (a, b) = self.sel.range();
-        let (ga, gb) = (self.doc.offset_of(a), self.doc.offset_of(b));
-        if inclusive { ga <= r.end && gb >= r.start } else { ga < r.end && gb > r.start }
-    }
-
-    /// The marks hidden on a line, in the line's bytes, by the mode and
-    /// where the caret is.
-    fn hidden_on(&self, line: usize) -> Vec<Range<usize>> {
-        let info = &self.analysis.lines[line];
-        let on_line = self.on_line(line);
-        let source = self.mode == Mode::Source;
-        let start = self.analysis.line_starts[line];
-        let mut hidden = Vec::new();
-        if !source && !on_line {
-            hidden.extend(info.marks.iter().cloned());
-        }
-        if !source {
-            if let Some(m) = &info.list {
-                hidden.push(0..m.marker.end);
-            } else if info.quote_depth > 0 && !on_line {
-                // The quote's marks are in `marks`; the room before them goes too.
-                if let Some(first) = info.marks.first() {
-                    hidden.push(0..first.start);
-                }
-            }
-        }
-        if !source {
-            for &ix in &self.analysis.line_spans[line] {
-                let s = &self.analysis.spans[ix];
-                let inclusive = !matches!(s.kind, SpanKind::Link(_) | SpanKind::WikiLink(_) | SpanKind::Image(_));
-                if self.touches(&s.range, inclusive) {
-                    continue;
-                }
-                for r in [&s.open, &s.close] {
-                    let (a, b) = (r.start.max(start), r.end.min(start + self.doc.line(line).len()));
-                    if a < b {
-                        hidden.push(a - start..b - start);
-                    }
-                }
-            }
-        }
-        hidden
-    }
-
-    fn block_revealed(&self, first: usize, last: usize) -> bool {
-        let (a, b) = self.sel.range();
-        self.mode == Mode::Source || (self.revealing() && a.line <= last && b.line >= first)
-    }
-
-    /// The whole note laid out at `width`, line by line, each only when
-    /// its key changed. The tops and the total follow.
+    /// The whole note laid out at `width`.
     fn relayout(&mut self, width: f32, window: &mut Window, cx: &mut App) {
         let theme = cx.theme().clone();
-        let look_key = self.look_key(&theme);
-        let n = self.doc.line_count();
         let mut cache = self.cache.borrow_mut();
-        if cache.width != width || cache.look_key != look_key {
-            cache.entries.clear();
-            cache.width = width;
-            cache.look_key = look_key;
-        }
-        cache.entries.truncate(n);
-        self.color_code(&mut cache, &theme);
-        let mut tops = Vec::with_capacity(n);
-        let mut y = 0.;
-        for line in 0..n {
-            let hidden = self.hidden_on(line);
-            let colors: Vec<(Range<usize>, Hsla)> = self.code_colors_of(&cache, line).to_vec();
-            let text = self.doc.line(line);
-            let info = &self.analysis.lines[line];
-            let mut h = DefaultHasher::new();
-            text.hash(&mut h);
-            for (r, c) in &colors {
-                r.hash(&mut h);
-                c.h.to_bits().hash(&mut h);
-                c.s.to_bits().hash(&mut h);
-                c.l.to_bits().hash(&mut h);
-            }
-            hidden.hash(&mut h);
-            info.kind.hash_key(&mut h);
-            info.task_done.hash(&mut h);
-            info.list_depth.hash(&mut h);
-            info.quote_depth.hash(&mut h);
-            let revealed = match &info.kind {
-                LineKind::FenceOpen(_) | LineKind::FenceClose | LineKind::Code => self.analysis.code_block_at(line).map_or(true, |b| self.block_revealed(b.first, b.last)),
-                LineKind::TableFirst(t) | LineKind::TableRow(t) => {
-                    let t = &self.analysis.tables[*t];
-                    t.rows.iter().for_each(|r| r.hash(&mut h));
-                    self.block_revealed(t.first, t.last)
-                }
-                _ => self.on_line(line),
-            };
-            revealed.hash(&mut h);
-            let prev_blank = line > 0 && matches!(self.analysis.lines[line - 1].kind, LineKind::Blank);
-            prev_blank.hash(&mut h);
-            let key = h.finish();
-            let fresh = cache.entries.get(line).is_none_or(|e| e.key != key);
-            if fresh {
-                let row = self.lay_out(line, &hidden, &colors, revealed, prev_blank, width, &theme, window);
-                let height = row_height(&row);
-                let entry = Entry { key, height, row: Rc::new(row) };
-                if line < cache.entries.len() {
-                    cache.entries[line] = entry;
-                } else {
-                    cache.entries.push(entry);
-                }
-            }
-            tops.push(y);
-            y += cache.entries[line].height;
-        }
-        cache.tops = tops;
-        cache.total = y;
-    }
-
-    fn font(&self, family: &SharedString, weight: FontWeight, italic: bool) -> Font {
-        let fallbacks = if *family == self.look.mono_family { self.look.mono_fallbacks.clone() } else { self.look.text_fallbacks.clone() };
-        Font { family: family.clone(), features: FontFeatures::default(), fallbacks, weight, style: if italic { FontStyle::Italic } else { FontStyle::Normal } }
-    }
-
-    /// Each code block's colors read again where its text changed: the
-    /// toolkit's tree-sitter highlighter for the fence's language, the
-    /// inks the theme's `highlight` table names, the same the note gets
-    /// as it reads. A block with no language, or one the toolkit has no
-    /// grammar for, keeps the plain ink.
-    fn color_code(&self, cache: &mut Cache, theme: &gpui_component::Theme) {
-        use gpui_component::highlighter::SyntaxHighlighter;
-        let firsts: Vec<usize> = self.analysis.code_blocks.iter().map(|b| b.first).collect();
-        cache.code_colors.retain(|first, _| firsts.contains(first));
-        for b in &self.analysis.code_blocks {
-            if b.lang.is_empty() {
-                cache.code_colors.remove(&b.first);
-                continue;
-            }
-            let last = if b.closed { b.last.saturating_sub(1) } else { b.last };
-            let lines: Vec<&str> = (b.first + 1..=last).filter(|&l| l < self.doc.line_count()).map(|l| self.doc.line(l)).collect();
-            let code = lines.join("\n");
-            let mut h = DefaultHasher::new();
-            b.lang.hash(&mut h);
-            code.hash(&mut h);
-            theme.mode.is_dark().hash(&mut h);
-            let key = h.finish();
-            if cache.code_colors.get(&b.first).is_some_and(|(k, _)| *k == key) {
-                continue;
-            }
-            let hl = cache.highlighters.entry(b.lang.clone()).or_insert_with(|| SyntaxHighlighter::new(&b.lang));
-            let rope = ropey::Rope::from_str(&code);
-            hl.update(None, &rope, None);
-            let styled = hl.styles(&(0..code.len()), theme.highlight_theme.as_ref());
-            // The block's bytes to each line's own.
-            let mut per_line: Vec<Vec<(Range<usize>, Hsla)>> = vec![Vec::new(); lines.len()];
-            let mut starts = Vec::with_capacity(lines.len());
-            let mut at = 0;
-            for l in &lines {
-                starts.push(at);
-                at += l.len() + 1;
-            }
-            for (range, style) in styled {
-                let Some(color) = style.color else { continue };
-                for (ix, l) in lines.iter().enumerate() {
-                    let (ls, le) = (starts[ix], starts[ix] + l.len());
-                    let (a, bb) = (range.start.max(ls), range.end.min(le));
-                    if a < bb {
-                        per_line[ix].push((a - ls..bb - ls, color));
-                    }
-                }
-            }
-            cache.code_colors.insert(b.first, (key, per_line));
-        }
-    }
-
-    /// The colors of a code line, from its block's reading.
-    fn code_colors_of<'a>(&self, cache: &'a Cache, line: usize) -> &'a [(Range<usize>, Hsla)] {
-        let Some(b) = self.analysis.code_block_at(line) else { return &[] };
-        let Some((_, per_line)) = cache.code_colors.get(&b.first) else { return &[] };
-        line.checked_sub(b.first + 1).and_then(|ix| per_line.get(ix)).map(|v| v.as_slice()).unwrap_or(&[])
-    }
-
-    /// One line laid out: its words with the hidden marks taken out, in
-    /// runs of the faces and inks its spans ask for, and its widgets.
-    fn lay_out(&self, line: usize, hidden: &[Range<usize>], colors: &[(Range<usize>, Hsla)], revealed: bool, prev_blank: bool, width: f32, theme: &gpui_component::Theme, window: &mut Window) -> Row {
-        let info = &self.analysis.lines[line];
-        let text = self.doc.line(line);
-        let px_text = self.look.text_px;
-        let px_mono = self.look.mono_px;
-        let dark = theme.mode.is_dark();
-        let muted = theme.muted_foreground;
-        let ink = theme.foreground;
-        let link = theme.link;
-        let source = self.mode == Mode::Source;
-
-        // Block widgets, when the caret is away.
-        match &info.kind {
-            LineKind::FenceOpen(lang) if !revealed => {
-                // The language's mark at the plate's top right: its icon
-                // in its color and its name, the same the note reads with.
-                let lang = (!lang.is_empty()).then(|| {
-                    let mark = crate::langs::of(lang);
-                    let font = Font { family: theme.font_family.clone(), features: FontFeatures::default(), fallbacks: None, weight: FontWeight::NORMAL, style: FontStyle::Normal };
-                    let run = TextRun { len: mark.name.len(), font, color: muted, background_color: None, underline: None, strikethrough: None };
-                    let line = window.text_system().shape_line(SharedString::from(mark.name.clone()), px(11.5), &[run], None);
-                    (line, mark.icon, gpui::rgb(mark.rgb).into())
-                });
-                return Row::Pad { lang };
-            }
-            LineKind::FenceClose if !revealed => return Row::Pad { lang: None },
-            LineKind::SetextUnderline if !revealed => return Row::Hidden,
-            LineKind::TableRow(_) if !revealed => return Row::Hidden,
-            LineKind::TableFirst(t) if !revealed => return self.lay_out_table(*t, width, theme, window),
-            LineKind::Rule if !revealed => {
-                let inset = self.inset_of(info);
-                return Row::Rule { inset, line_h: px_text * LINE };
-            }
-            _ => {}
-        }
-
-        // The size, weight and line of the words.
-        let (font_px, base_weight, line_factor, top_pad) = match &info.kind {
-            LineKind::Heading(level) => {
-                let (scale, weight, lh) = HEADINGS[(*level as usize).clamp(1, 6) - 1];
-                (px_text * scale, weight, lh, if prev_blank { 0. } else { px_text * 0.35 })
-            }
-            LineKind::Code | LineKind::FrontMatter | LineKind::FrontMatterEdge | LineKind::Html | LineKind::FenceOpen(_) | LineKind::FenceClose => (px_mono, FontWeight::NORMAL, 1.5, 0.),
-            LineKind::TableFirst(_) | LineKind::TableRow(_) => (px_mono, FontWeight::NORMAL, 1.5, 0.),
-            // A blank line as it reads is a paragraph's gap, not a line
-            // of words; as written it is a line like any other.
-            LineKind::Blank if !source => (px_text, FontWeight::NORMAL, LINE * BLANK_LINE, 0.),
-            _ => (px_text, FontWeight::NORMAL, LINE, 0.),
-        };
-        let line_h = (font_px * line_factor).round();
-        let mono_line = matches!(info.kind, LineKind::Code | LineKind::FrontMatter | LineKind::FrontMatterEdge | LineKind::Html | LineKind::FenceOpen(_) | LineKind::FenceClose | LineKind::TableFirst(_) | LineKind::TableRow(_));
-        let muted_line = matches!(info.kind, LineKind::FrontMatter | LineKind::FrontMatterEdge | LineKind::Html | LineKind::FenceOpen(_) | LineKind::FenceClose | LineKind::SetextUnderline);
-
-        // A style a byte of the source.
-        #[derive(Clone, Copy, PartialEq)]
-        struct St {
-            weight: FontWeight,
-            italic: bool,
-            strike: bool,
-            mono: bool,
-            color: Hsla,
-            chip: Option<Hsla>,
-            underline: bool,
-        }
-        let base = St { weight: base_weight, italic: false, strike: info.task_done, mono: mono_line, color: if muted_line || info.task_done { muted } else { ink }, chip: None, underline: false };
-        let mut styles = vec![base; text.len()];
-        let paint = |styles: &mut Vec<St>, r: Range<usize>, f: &dyn Fn(&mut St)| {
-            for s in styles.iter_mut().take(r.end.min(text.len())).skip(r.start.min(text.len())) {
-                f(s);
-            }
-        };
-        // Code's own colors, from its language's grammar.
-        for (r, c) in colors {
-            paint(&mut styles, r.clone(), &|s| s.color = *c);
-        }
-        // Marks shown are quiet.
-        for m in &info.marks {
-            paint(&mut styles, m.clone(), &|s| {
-                s.color = muted;
-                s.weight = FontWeight::NORMAL;
-            });
-        }
-        if let Some(m) = &info.list {
-            paint(&mut styles, 0..m.marker.end, &|s| {
-                s.color = muted;
-                s.strike = false;
-            });
-        }
-        let start = self.analysis.line_starts[line];
-        let local = |r: &Range<usize>| r.start.saturating_sub(start).min(text.len())..r.end.saturating_sub(start).min(text.len());
-        let chip_bg = theme.primary.opacity(if dark { 0.16 } else { 0.10 });
-        let highlight_bg = theme.warning.opacity(if dark { 0.35 } else { 0.4 });
-        let mut links: Vec<(Range<usize>, Target)> = Vec::new();
-        let mut spans: Vec<&markdown::Span> = self.analysis.line_spans[line].iter().map(|&ix| &self.analysis.spans[ix]).collect();
-        // The outer first, so an inner span paints over it.
-        spans.sort_by_key(|s| std::cmp::Reverse(s.range.len()));
-        for s in spans {
-            let inner = local(&s.inner());
-            let (open, close) = (local(&s.open), local(&s.close));
-            let marks_muted = |st: &mut St| {
-                st.color = muted;
-                st.weight = base_weight;
-                st.italic = false;
-            };
-            match &s.kind {
-                SpanKind::Strong => paint(&mut styles, inner.clone(), &|st| st.weight = FontWeight::BOLD),
-                SpanKind::Em => paint(&mut styles, inner.clone(), &|st| st.italic = true),
-                SpanKind::Strike => paint(&mut styles, inner.clone(), &|st| {
-                    st.strike = true;
-                    st.color = muted;
-                }),
-                SpanKind::Code => paint(&mut styles, inner.clone(), &|st| {
-                    st.mono = true;
-                    st.color = link;
-                    st.chip = Some(chip_bg);
-                }),
-                SpanKind::Math => paint(&mut styles, inner.clone(), &|st| {
-                    st.mono = true;
-                    st.color = link;
-                }),
-                SpanKind::Highlight => paint(&mut styles, inner.clone(), &|st| st.chip = Some(highlight_bg)),
-                SpanKind::Link(url) => {
-                    paint(&mut styles, inner.clone(), &|st| {
-                        st.color = link;
-                        st.underline = true;
-                    });
-                    links.push((inner.clone(), Target::Link(url.clone())));
-                }
-                SpanKind::WikiLink(name) => {
-                    paint(&mut styles, inner.clone(), &|st| st.color = link);
-                    links.push((inner.clone(), Target::Note(name.clone())));
-                }
-                SpanKind::Image(src) => {
-                    paint(&mut styles, inner.clone(), &|st| {
-                        st.color = link;
-                        st.italic = true;
-                    });
-                    links.push((inner.clone(), Target::Link(src.clone())));
-                }
-                SpanKind::Footnote => paint(&mut styles, local(&s.range), &|st| st.color = link),
-                SpanKind::Html => paint(&mut styles, local(&s.range), &|st| {
-                    st.mono = true;
-                    st.color = muted;
-                }),
-            }
-            paint(&mut styles, open, &marks_muted);
-            paint(&mut styles, close, &marks_muted);
-        }
-
-        let shown = Shown::new(text, if source { &[] } else { hidden });
-        // The runs over the shown text, one a change of style.
-        let mut runs: Vec<TextRun> = Vec::new();
-        let mut chips: Vec<(Range<usize>, Hsla)> = Vec::new();
-        let mut shown_links: Vec<(Range<usize>, Target)> = Vec::new();
-        for &(d, s, len) in &shown.pieces {
-            let mut at = s;
-            while at < s + len {
-                let st = styles[at];
-                let mut end = at + 1;
-                while end < s + len && styles[end] == st {
-                    end += 1;
-                }
-                let family = if st.mono { &self.look.mono_family } else { &self.look.text_family };
-                runs.push(TextRun {
-                    len: end - at,
-                    font: self.font(family, st.weight, st.italic),
-                    color: st.color,
-                    background_color: None,
-                    underline: st.underline.then(|| UnderlineStyle { thickness: px(1.), color: Some(link.opacity(0.5)), wavy: false }),
-                    strikethrough: st.strike.then(|| StrikethroughStyle { thickness: px(1.), color: Some(st.color) }),
-                });
-                if let Some(c) = st.chip {
-                    let dr = d + (at - s)..d + (end - s);
-                    match chips.last_mut() {
-                        Some((r, col)) if r.end == dr.start && *col == c => r.end = dr.end,
-                        _ => chips.push((dr, c)),
-                    }
-                }
-                at = end;
-            }
-        }
-        for (r, t) in links {
-            let (a, b) = (shown.to_shown(r.start), shown.to_shown(r.end));
-            if a < b {
-                shown_links.push((a..b, t));
-            }
-        }
-        let inset = self.inset_of(info);
-        let wrap = width - inset - if matches!(info.kind, LineKind::Code | LineKind::FenceOpen(_) | LineKind::FenceClose) { PLATE_X } else { 0. };
-        // The language's mark stands in the plate's top right corner, over
-        // the first line of code's end, which wraps short of it: the plate
-        // keeps the same room on every side, with no row for the mark.
-        let mark_room = match (&info.kind, self.analysis.code_block_at(line)) {
-            (LineKind::Code, Some(b)) if !revealed && line == b.first + 1 && !b.lang.is_empty() => {
-                let mark = crate::langs::of(&b.lang);
-                let font = Font { family: theme.font_family.clone(), features: FontFeatures::default(), fallbacks: None, weight: FontWeight::NORMAL, style: FontStyle::Normal };
-                let run = TextRun { len: mark.name.len(), font, color: muted, background_color: None, underline: None, strikethrough: None };
-                f32::from(window.text_system().shape_line(SharedString::from(mark.name), px(11.5), &[run], None).width()) + 13. + 5. + 12.
-            }
-            _ => 0.,
-        };
-        let wrap = (wrap - mark_room).max(40.);
-        let shaped = SharedString::from(shown.text.clone());
-        let mut lines = window.text_system().shape_text(shaped, px(font_px), &runs, Some(px(wrap)), None).unwrap_or_default();
-        let wrapped = lines.pop().unwrap_or_else(|| window.text_system().shape_text(" ".into(), px(font_px), &[TextRun { len: 1, font: self.font(&self.look.text_family, FontWeight::NORMAL, false), color: ink, background_color: None, underline: None, strikethrough: None }], None, None).unwrap().pop().unwrap());
-
-        // The widgets beside the words.
-        let mut widgets = Vec::new();
-        if !source {
-            if let Some(m) = &info.list {
-                let depth = m.depth as f32;
-                let x_mark = inset - LIST_INDENT * 0.5;
-                match m.kind {
-                    ListKind::Bullet => widgets.push(Widget::Bullet { x: x_mark, y: top_pad + line_h / 2., r: (px_text * 0.17).max(2.5) }),
-                    ListKind::Ordered(_) => {
-                        let number = text[m.marker.start..m.marker.end].trim_end().to_string();
-                        let run = TextRun { len: number.len(), font: self.font(&self.look.text_family, FontWeight::NORMAL, false), color: muted, background_color: None, underline: None, strikethrough: None };
-                        let shaped = window.text_system().shape_line(number.into(), px(px_text), &[run], None);
-                        let x = inset - 6. - f32::from(shaped.width());
-                        widgets.push(Widget::Number { line: shaped, x, y: top_pad });
-                    }
-                    ListKind::Task(done) => {
-                        let size = (px_text * 0.95).round();
-                        let bounds = Bounds::new(point(px(x_mark - size / 2.), px(top_pad + (line_h - size) / 2.)), size_px(size));
-                        widgets.push(Widget::Task { bounds, done });
-                    }
-                }
-                for d in 0..depth as usize {
-                    widgets.push(Widget::Guide { x: self.base_inset(info) + LIST_INDENT * d as f32 + LIST_INDENT * 0.5 });
-                }
-            } else if info.list_depth > 0 && info.kind != LineKind::Blank {
-                for d in 0..info.list_depth {
-                    widgets.push(Widget::Guide { x: self.base_inset(info) + LIST_INDENT * d as f32 + LIST_INDENT * 0.5 });
-                }
-            }
-            for d in 0..info.quote_depth {
-                widgets.push(Widget::Bar { x: QUOTE_INDENT * d as f32 + 2. });
-            }
-        }
-        let (top_pad, bottom_pad) = match info.kind {
-            LineKind::FenceOpen(_) => (top_pad + FENCE_PAD, 0.),
-            LineKind::FenceClose => (top_pad, FENCE_PAD),
-            _ => (top_pad, 0.),
-        };
-        Row::Text(TextRow { shown, source_len: text.len(), line: wrapped, line_h, inset, top_pad, bottom_pad, widgets, links: shown_links, chips })
-    }
-
-    /// Where a line's words begin: in by its quotes and its list levels.
-    fn base_inset(&self, info: &markdown::LineInfo) -> f32 {
-        if self.mode == Mode::Source { 0. } else { QUOTE_INDENT * info.quote_depth as f32 }
-    }
-
-    /// Code and its fences stand in from the plate's edge in every mode:
-    /// the source is still read on a plate, with the room a plate has.
-    fn inset_of(&self, info: &markdown::LineInfo) -> f32 {
-        let on_plate = matches!(info.kind, LineKind::Code | LineKind::FenceOpen(_) | LineKind::FenceClose);
-        if self.mode == Mode::Source {
-            return if on_plate { PLATE_X } else { 0. };
-        }
-        let base = self.base_inset(info);
-        match &info.list {
-            Some(m) => base + LIST_INDENT * (m.depth as f32 + 1.),
-            None if info.list_depth > 0 => base + LIST_INDENT * info.list_depth as f32,
-            None => base + if on_plate { PLATE_X } else { 0. },
-        }
-    }
-
-    /// A table drawn as a grid: each column as wide as its longest cell
-    /// wants, shared down when the table is wider than the room.
-    fn lay_out_table(&self, t: usize, width: f32, theme: &gpui_component::Theme, window: &mut Window) -> Row {
-        let table = &self.analysis.tables[t];
-        let info = &self.analysis.lines[table.first];
-        let inset = self.base_inset(info);
-        let px_cell = self.look.mono_px;
-        let line_h = (px_cell * 1.5).round();
-        let ncols = table.rows.iter().map(Vec::len).max().unwrap_or(1).max(table.aligns.len()).max(1);
-        let avail = (width - inset).max(80.);
-        let runs_for = |text: &str, head: bool| vec![TextRun { len: text.len(), font: self.font(&self.look.text_family, if head { FontWeight::SEMIBOLD } else { FontWeight::NORMAL }, false), color: theme.foreground, background_color: None, underline: None, strikethrough: None }];
-        let mut natural = vec![0f32; ncols];
-        for (ri, row) in table.rows.iter().enumerate() {
-            for (ci, cell) in row.iter().enumerate().take(ncols) {
-                if cell.is_empty() {
-                    continue;
-                }
-                let shaped = window.text_system().shape_line(SharedString::from(cell.clone()), px(px_cell), &runs_for(cell, ri == 0), None);
-                natural[ci] = natural[ci].max(f32::from(shaped.width()) + CELL_X * 2.);
-            }
-        }
-        let mut cols: Vec<f32> = natural.iter().map(|w| w.max(40.)).collect();
-        let sum: f32 = cols.iter().sum();
-        if sum > avail {
-            let k = avail / sum;
-            for c in cols.iter_mut() {
-                *c = (*c * k).max(40.);
-            }
-        }
-        let mut cells = Vec::new();
-        let mut heights = Vec::new();
-        for (ri, row) in table.rows.iter().enumerate() {
-            let mut shaped_row = Vec::new();
-            let mut tall = 1usize;
-            for ci in 0..ncols {
-                let cell = row.get(ci).map(String::as_str).unwrap_or("");
-                if cell.is_empty() {
-                    shaped_row.push(None);
-                    continue;
-                }
-                let wrapped = window.text_system().shape_text(SharedString::from(cell.to_string()), px(px_cell), &runs_for(cell, ri == 0), Some(px((cols[ci] - CELL_X * 2.).max(10.))), None).ok().and_then(|mut v| v.pop());
-                if let Some(w) = &wrapped {
-                    tall = tall.max(w.wrap_boundaries().len() + 1);
-                }
-                shaped_row.push(wrapped);
-            }
-            cells.push(shaped_row);
-            heights.push(tall as f32 * line_h + CELL_Y * 2.);
-        }
-        Row::Table(TableRow { cols, heights, cells, line_h, inset })
+        self.reader().lay_out_note(&mut cache, width, &theme, window);
     }
 
     // -- places on the page -------------------------------------------------
@@ -1731,15 +1244,50 @@ impl Editor {
         let cache = self.cache.borrow();
         let entry = cache.entries.get(p.line)?;
         let top = cache.tops[p.line];
+        let on_text = |r: &TextRow, top: f32| {
+            let (x, y) = r.flow.caret(p.col);
+            CaretAt::new(r.inset + x, top + r.top_pad + y, r.flow.line_h, r.flow.caret_h)
+        };
         Some(match &*entry.row {
-            Row::Text(r) => {
-                let shown_ix = r.shown.to_shown(p.col);
-                let at = r.line.position_for_index(shown_ix, px(r.line_h)).unwrap_or_default();
-                CaretAt { x: r.inset + f32::from(at.x), y: top + r.top_pad + f32::from(at.y), h: r.line_h }
+            Row::Text(r) => on_text(r, top),
+            Row::Picture(pic) if pic.source.is_some() => on_text(pic.source.as_ref()?, top),
+            Row::Table(t) => {
+                let c = t.column_of(p.col);
+                let (x, y) = t.cells.get(c)?.caret(p.col);
+                CaretAt::new(t.inset + t.grid.xs[c] + crate::layout::CELL_X + x, top + t.cell_y + y, t.cells[c].line_h, t.cells[c].caret_h)
             }
-            Row::Rule { inset, line_h } => CaretAt { x: *inset, y: top, h: *line_h },
-            _ => CaretAt { x: 0., y: top, h: entry.height.max(self.look.text_px * LINE) },
+            Row::Rule { inset, line_h } => CaretAt::new(*inset, top, *line_h, Rhythm::caret(self.look.text_px, *line_h)),
+            Row::Pad { h, .. } => CaretAt::new(0., top, *h, Rhythm::caret(self.look.text_px, *h)),
+            _ => {
+                let line = entry.height.max(Rhythm::of(&self.look).line);
+                CaretAt::new(0., top, line, Rhythm::caret(self.look.text_px, line))
+            }
         })
+    }
+
+    /// The top and the foot of the words a place stands in, from the
+    /// element's top: its row, or its cell.
+    fn flow_span(&self, p: Pos, cache: &Cache) -> Option<(f32, f32)> {
+        let entry = cache.entries.get(p.line)?;
+        let top = cache.tops[p.line];
+        Some(match &*entry.row {
+            Row::Table(t) => {
+                let flow = t.cells.get(t.column_of(p.col))?;
+                (top + t.cell_y, top + t.cell_y + flow.height)
+            }
+            _ => (top, top + entry.height),
+        })
+    }
+
+    /// The line under `y`: a line of no height is passed by for the one
+    /// that has it.
+    fn line_at(&self, y: f32, cache: &Cache) -> usize {
+        let line = cache.tops.partition_point(|t| *t <= y).saturating_sub(1).min(cache.entries.len().saturating_sub(1));
+        let mut line = line;
+        while line > 0 && cache.entries[line].height <= 0. {
+            line -= 1;
+        }
+        line
     }
 
     /// The place in the text at a point of the page, from the element's
@@ -1748,34 +1296,30 @@ impl Editor {
         if cache.entries.is_empty() {
             return None;
         }
-        let line = match cache.tops.binary_search_by(|t| t.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal)) {
-            Ok(i) => i,
-            Err(i) => i.saturating_sub(1),
-        };
-        // A row of no height is passed by for the one that has it.
-        let mut line = line.min(cache.entries.len() - 1);
-        while cache.entries[line].height <= 0. && line > 0 && cache.tops[line] > y {
-            line -= 1;
-        }
+        let line = self.line_at(y, cache);
         let entry = &cache.entries[line];
         let text_len = self.doc.line(line).len();
-        Some(match &*entry.row {
-            Row::Text(r) => {
-                let local = point(px(x - r.inset), px((y - cache.tops[line] - r.top_pad).max(0.)));
-                let ix = match r.line.closest_index_for_position(local, px(r.line_h)) {
-                    Ok(i) | Err(i) => i,
-                };
-                let ix = ix.min(r.shown.text.len());
-                let mut col = r.shown.to_source(ix, text_len);
-                // A click at a hidden span's right edge stands past the span.
-                let start = self.analysis.line_starts[line];
-                for &six in &self.analysis.line_spans[line] {
-                    let s = &self.analysis.spans[six];
-                    if s.close.start >= start && s.close.start - start == col && s.close.end > s.close.start && r.shown.is_hidden(col) {
-                        col = s.close.end - start;
-                    }
+        let top = cache.tops[line];
+        let on_text = |r: &TextRow| {
+            let mut col = r.flow.col_at(x - r.inset, y - top - r.top_pad);
+            // A click at a hidden span's right edge stands past the span.
+            let start = self.analysis.line_starts[line];
+            let hidden_col = r.flow.paras.iter().find(|p| p.from <= col && col <= p.to).is_some_and(|p| p.shown.is_hidden(col));
+            for &six in &self.analysis.line_spans[line] {
+                let s = &self.analysis.spans[six];
+                if s.close.start >= start && s.close.start - start == col && s.close.end > s.close.start && hidden_col {
+                    col = s.close.end - start;
                 }
-                Pos::new(line, col.min(text_len))
+            }
+            Pos::new(line, col.min(text_len))
+        };
+        Some(match &*entry.row {
+            Row::Text(r) => on_text(r),
+            Row::Picture(pic) if pic.source.is_some() => on_text(pic.source.as_ref()?),
+            Row::Table(t) => {
+                let c = t.column_at(x - t.inset);
+                let flow = t.cells.get(c)?;
+                Pos::new(line, flow.col_at(x - t.inset - t.grid.xs[c] - crate::layout::CELL_X, y - top - t.cell_y).min(text_len))
             }
             _ => Pos::new(line, 0),
         })
@@ -1784,32 +1328,30 @@ impl Editor {
     /// What a press lands on besides words: a task's box, a link.
     fn hit(&self, x: f32, y: f32) -> Option<Hit> {
         let cache = self.cache.borrow();
-        let line = match cache.tops.binary_search_by(|t| t.partial_cmp(&y).unwrap_or(std::cmp::Ordering::Equal)) {
-            Ok(i) => i,
-            Err(i) => i.saturating_sub(1),
-        };
+        if cache.entries.is_empty() {
+            return None;
+        }
+        let line = self.line_at(y, &cache);
         let entry = cache.entries.get(line)?;
         let top = cache.tops[line];
-        let Row::Text(r) = &*entry.row else { return None };
-        for w in &r.widgets {
-            if let Widget::Task { bounds, .. } = w {
-                let b = Bounds::new(point(bounds.origin.x - px(3.), bounds.origin.y + px(top) - px(3.)), bounds.size + size(px(6.), px(6.)));
-                if b.contains(&point(px(x), px(y))) {
-                    return Some(Hit::Task(line));
-                }
-            }
-        }
-        if !r.links.is_empty() {
-            let local = point(px(x - r.inset), px((y - top - r.top_pad).max(0.)));
-            if let Ok(ix) = r.line.index_for_position(local, px(r.line_h)) {
-                for (range, target) in &r.links {
-                    if range.contains(&ix) {
-                        return Some(Hit::Link(target.clone()));
+        match &*entry.row {
+            Row::Text(r) => {
+                for w in &r.widgets {
+                    if let Widget::Task { bounds, .. } = w {
+                        let b = Bounds::new(point(bounds.origin.x - px(3.), bounds.origin.y + px(top) - px(3.)), bounds.size + size(px(6.), px(6.)));
+                        if b.contains(&point(px(x), px(y))) {
+                            return Some(Hit::Task(line));
+                        }
                     }
                 }
+                r.flow.link_at(x - r.inset, y - top - r.top_pad).map(Hit::Link)
             }
+            Row::Table(t) => {
+                let c = t.column_at(x - t.inset);
+                t.cells.get(c)?.link_at(x - t.inset - t.grid.xs[c] - crate::layout::CELL_X, y - top - t.cell_y).map(Hit::Link)
+            }
+            _ => None,
         }
-        None
     }
 
     /// Whether the scroller was moved.
@@ -1840,44 +1382,6 @@ impl Editor {
 enum Hit {
     Task(usize),
     Link(Target),
-}
-
-fn size_px(s: f32) -> Size<Pixels> {
-    size(px(s), px(s))
-}
-
-fn row_height(row: &Row) -> f32 {
-    match row {
-        Row::Text(r) => r.top_pad + (r.line.wrap_boundaries().len() as f32 + 1.) * r.line_h + r.bottom_pad,
-        Row::Pad { .. } => PLATE_PAD,
-        Row::Hidden => 0.,
-        Row::Rule { line_h, .. } => *line_h,
-        Row::Table(t) => t.heights.iter().sum::<f32>() + 1.,
-    }
-}
-
-trait HashKey {
-    fn hash_key(&self, h: &mut DefaultHasher);
-}
-
-impl HashKey for LineKind {
-    fn hash_key(&self, h: &mut DefaultHasher) {
-        match self {
-            LineKind::Text => 0u8.hash(h),
-            LineKind::Blank => 1u8.hash(h),
-            LineKind::Heading(l) => (2u8, l).hash(h),
-            LineKind::SetextUnderline => 3u8.hash(h),
-            LineKind::FenceOpen(l) => (4u8, l).hash(h),
-            LineKind::FenceClose => 5u8.hash(h),
-            LineKind::Code => 6u8.hash(h),
-            LineKind::FrontMatterEdge => 7u8.hash(h),
-            LineKind::FrontMatter => 8u8.hash(h),
-            LineKind::Rule => 9u8.hash(h),
-            LineKind::TableFirst(t) => (10u8, t).hash(h),
-            LineKind::TableRow(t) => (11u8, t).hash(h),
-            LineKind::Html => 12u8.hash(h),
-        }
-    }
 }
 
 // -- the input method -------------------------------------------------------
@@ -1926,7 +1430,8 @@ impl EntityInputHandler for Editor {
             },
         };
         self.marked = None;
-        let end = self.doc.replace(a, b, text, self.sel);
+        let text = self.cell_words(text);
+        let end = self.doc.replace(a, b, &text, self.sel);
         self.sel = Sel::caret(end);
         self.after_edit(cx);
     }
@@ -1950,6 +1455,7 @@ impl EntityInputHandler for Editor {
             None => Sel::caret(end),
         };
         self.reanalyze();
+        self.text_changed(cx);
         self.want_scroll = true;
         self.kick_blink(cx);
         cx.emit(EditorEvent::Changed);
@@ -2041,20 +1547,41 @@ struct EditorElement {
 
 struct Prepainted {
     hitbox: Hitbox,
+    /// The hitbox with room each side for a table's handles, which stand
+    /// out in the page's margin.
+    wide: Hitbox,
+}
+
+/// How much of a table's handles to paint, and where.
+struct Controls {
+    table: cells::TableBox,
+    row: (f32, f32),
+    col: usize,
+    /// Which handle or edge the pointer is on.
+    on: Option<cells::Control>,
+    opacity: f32,
 }
 
 /// What paint takes out of the editor before it draws, since drawing
 /// needs the app the editor is read through.
 struct PaintInfo {
     focus: FocusHandle,
-    over_link: bool,
+    pointer: CursorStyle,
     cache: Rc<RefCell<Cache>>,
     /// Each code block's first and last line, and where its plate begins.
     blocks: Vec<(usize, usize, f32)>,
+    /// Each table's first and last line.
+    tables: Vec<(usize, usize)>,
     sel: Sel,
     marked: Option<(Pos, Pos)>,
-    caret_on: bool,
+    caret: Option<Bounds<Pixels>>,
     find: Rc<Vec<(Pos, Pos)>>,
+    pictures: Rc<RefCell<Pictures>>,
+    /// The cell the caret is in, from the element's top left.
+    cell: Option<Bounds<Pixels>>,
+    controls: Option<Controls>,
+    /// Where a dragged row or column would go: a line, from the element's top left.
+    drop_line: Option<Bounds<Pixels>>,
 }
 
 impl IntoElement for EditorElement {
@@ -2062,6 +1589,223 @@ impl IntoElement for EditorElement {
 
     fn into_element(self) -> Self {
         self
+    }
+}
+
+/// Words, with what stands behind and over them: chips, what the find
+/// bar found, the selection, and an input method's underline. `line` is
+/// the text's line, or none for words that are no part of the text.
+fn paint_flow(flow: &crate::layout::Flow, origin: Point<Pixels>, line: Option<usize>, past_end: bool, info: &PaintInfo, theme: &gpui_component::Theme, window: &mut Window, cx: &mut App) {
+    let lh = flow.line_h;
+    for (b, color) in flow.chips(origin) {
+        let b = Bounds::new(point(b.origin.x - px(2.), b.origin.y + px(lh * 0.08)), size(b.size.width + px(4.), px(lh * 0.84)));
+        window.paint_quad(quad(b, px(4.), color, px(0.), theme.transparent, BorderStyle::default()));
+    }
+    let mut marked_boxes = Vec::new();
+    if let Some(line) = line {
+        // The find bar's matches on this line, washed; the one the bar
+        // stands on is the selection, painted after.
+        if !info.find.is_empty() {
+            let wash = Hsla { s: 0.1, ..theme.selection };
+            for &(fa, fb) in info.find.iter().filter(|(a, b)| a.line <= line && line <= b.line) {
+                let from = if fa.line == line { fa.col } else { 0 };
+                let to = if fb.line == line { fb.col } else { usize::MAX };
+                for b in flow.boxes(from, to, origin) {
+                    window.paint_quad(quad(b, px(2.), wash, px(0.), theme.transparent, BorderStyle::default()));
+                }
+            }
+        }
+        // The selection, as far as it lies on this line.
+        let (sa, sb) = info.sel.range();
+        if sa != sb && sa.line <= line && line <= sb.line {
+            let from = if sa.line == line { sa.col } else { 0 };
+            let to = if sb.line == line { sb.col } else { usize::MAX };
+            let mut boxes = flow.boxes(from, to, origin);
+            if past_end && sb.line > line {
+                // The line's end is selected too: a little past the last word.
+                if let Some(last) = boxes.last_mut() {
+                    last.size.width += px(6.);
+                } else {
+                    boxes.push(Bounds::new(origin, size(px(6.), px(lh))));
+                }
+            }
+            for b in boxes {
+                window.paint_quad(fill(b, theme.selection));
+            }
+        }
+        if let Some((ma, mb)) = info.marked.filter(|(ma, _)| ma.line == line) {
+            let to = if mb.line == line { mb.col } else { usize::MAX };
+            marked_boxes = flow.boxes(ma.col, to, origin);
+        }
+    }
+    flow.paint(origin, window, cx);
+    // An input method's composition, underlined.
+    for b in marked_boxes {
+        window.paint_quad(fill(Bounds::new(point(b.origin.x, b.origin.y + px(lh) - px(2.)), size(b.size.width, px(1.))), theme.foreground));
+    }
+}
+
+/// The ground and the outline of a table, the head's tint inside it. The
+/// lines between its cells are each row's.
+fn paint_plate(left: f32, top: f32, width: f32, height: f32, head: f32, theme: &gpui_component::Theme, window: &mut Window) {
+    let r = px(TABLE_R);
+    let corners = Corners { top_left: r, top_right: r, bottom_left: px(0.), bottom_right: px(0.) };
+    window.paint_quad(quad(Bounds::new(point(px(left), px(top)), size(px(width), px(head))), corners, theme.muted.opacity(0.7), px(0.), theme.transparent, BorderStyle::default()));
+    window.paint_quad(quad(Bounds::new(point(px(left), px(top)), size(px(width), px(height))), r, theme.transparent, px(1.), theme.border, BorderStyle::default()));
+}
+
+/// One row at a place on the page. `line` is the text's line, or none
+/// inside a block of HTML.
+#[allow(clippy::too_many_arguments)]
+fn paint_row(row: &Row, ox: f32, oy: f32, height: f32, full_w: Pixels, line: Option<usize>, info: &PaintInfo, theme: &gpui_component::Theme, window: &mut Window, cx: &mut App) {
+    match row {
+        Row::Text(r) => paint_text(r, ox, oy, height, line, info, theme, window, cx),
+        Row::Pad { lang, h } => {
+            if let Some((l, icon, color)) = lang {
+                let name_w = f32::from(l.width());
+                let icon_px = 13.;
+                // The mark stands in the row's middle, `PLATE_X` in from the right.
+                let x = f32::from(full_w) - name_w - PLATE_X;
+                let y = oy + (*h - 16.) / 2.;
+                let _ = l.paint(point(px(ox + x), px(y)), px(16.), TextAlign::Left, None, window, cx);
+                let ib = Bounds::new(point(px(ox + x - icon_px - 5.), px(y + (16. - icon_px) / 2.)), size(px(icon_px), px(icon_px)));
+                let _ = window.paint_svg(ib, SharedString::from(*icon), None, TransformationMatrix::unit(), *color, cx);
+            }
+        }
+        Row::Hidden => {}
+        Row::Rule { inset, line_h } => {
+            let b = Bounds::new(point(px(ox + inset), px(oy + line_h / 2. - 1.)), size(full_w - px(*inset), px(2.)));
+            window.paint_quad(fill(b, theme.border));
+        }
+        Row::Table(t) => {
+            let left = ox + t.inset;
+            let total = t.grid.width;
+            if !t.head {
+                window.paint_quad(fill(Bounds::new(point(px(left), px(oy)), size(px(total), px(1.))), theme.border));
+            }
+            for (c, flow) in t.cells.iter().enumerate() {
+                let x = left + t.grid.xs[c];
+                if c > 0 {
+                    window.paint_quad(fill(Bounds::new(point(px(x), px(oy)), size(px(1.), px(t.height))), theme.border));
+                }
+                paint_flow(flow, point(px(x + crate::layout::CELL_X), px(oy + t.cell_y)), line, false, info, theme, window, cx);
+            }
+        }
+        Row::Nested(n) => {
+            // A selection over the block is a wash over the whole of it.
+            if let Some(line) = line {
+                let (sa, sb) = info.sel.range();
+                if sa != sb && sa.line <= line && line <= sb.line {
+                    window.paint_quad(fill(Bounds::new(point(px(ox), px(oy)), size(full_w, px(n.height))), theme.selection));
+                }
+            }
+            for &(first, last, inset) in &n.plates.code {
+                let (Some((top, _)), Some((last_top, last_row))) = (n.rows.get(first), n.rows.get(last)) else { continue };
+                let b = Bounds::new(point(px(ox + inset), px(oy + top)), size(full_w - px(inset), px(last_top + last_row.height() - top)));
+                window.paint_quad(quad(b, px(8.), theme.muted, px(1.), theme.border, BorderStyle::default()));
+            }
+            for &(first, last) in &n.plates.tables {
+                let (Some((top, Row::Table(head))), Some((last_top, last_row))) = (n.rows.get(first), n.rows.get(last)) else { continue };
+                paint_plate(ox + head.inset, oy + top, head.grid.width, last_top + last_row.height() - top, head.height, theme, window);
+            }
+            for (top, inner) in &n.rows {
+                paint_row(inner, ox, oy + top, inner.height(), full_w, None, info, theme, window, cx);
+            }
+        }
+        Row::Picture(p) => {
+            let mut y = oy;
+            if let Some(source) = &p.source {
+                paint_text(source, ox, y, source.flow.height, line, info, theme, window, cx);
+                y += source.top_pad + source.flow.height;
+            }
+            let b = Bounds::new(point(px(ox + p.x), px(y)), size(px(p.w), px(p.h)));
+            let drawn = info.pictures.borrow().drawn.get(&p.path).cloned();
+            match drawn {
+                Some(image) => {
+                    let _ = window.paint_image(b, b, Corners::all(px(6.)), image, 0, false);
+                }
+                None => window.paint_quad(quad(b, px(6.), theme.muted, px(0.), theme.transparent, BorderStyle::default())),
+            }
+            if let Some(line) = line {
+                let (sa, sb) = info.sel.range();
+                if sa != sb && sa.line <= line && line <= sb.line {
+                    window.paint_quad(quad(b, px(6.), theme.selection, px(0.), theme.transparent, BorderStyle::default()));
+                }
+            }
+        }
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_text(r: &TextRow, ox: f32, oy: f32, height: f32, line: Option<usize>, info: &PaintInfo, theme: &gpui_component::Theme, window: &mut Window, cx: &mut App) {
+    let text_origin = point(px(ox + r.inset), px(oy + r.top_pad));
+    paint_flow(&r.flow, text_origin, line, true, info, theme, window, cx);
+    let lh = px(r.flow.line_h);
+    for w in &r.widgets {
+        match w {
+            Widget::Bullet { x, y, r: radius } => {
+                let b = Bounds::new(point(px(ox + x - radius), px(oy + y - radius)), size(px(radius * 2.), px(radius * 2.)));
+                window.paint_quad(quad(b, px(*radius), theme.muted_foreground, px(0.), theme.transparent, BorderStyle::default()));
+            }
+            Widget::Number { line: shaped, x, y } => {
+                let _ = shaped.paint(point(px(ox + x), px(oy + y)), lh, TextAlign::Left, None, window, cx);
+            }
+            Widget::Task { bounds: b, done } => {
+                let b = Bounds::new(point(px(ox) + b.origin.x, px(oy) + b.origin.y), b.size);
+                if *done {
+                    window.paint_quad(quad(b, px(4.), theme.primary, px(0.), theme.transparent, BorderStyle::default()));
+                    let inner = Bounds::new(point(b.origin.x + b.size.width * 0.15, b.origin.y + b.size.height * 0.15), size(b.size.width * 0.7, b.size.height * 0.7));
+                    let _ = window.paint_svg(inner, "icons/check.svg".into(), None, TransformationMatrix::unit(), theme.primary_foreground, cx);
+                } else {
+                    window.paint_quad(quad(b, px(4.), theme.transparent, px(1.5), theme.muted_foreground.opacity(0.7), BorderStyle::default()));
+                }
+            }
+            Widget::Guide { x } => window.paint_quad(fill(Bounds::new(point(px(ox + x), px(oy)), size(px(1.), px(height))), theme.border)),
+            Widget::Bar { x } => window.paint_quad(fill(Bounds::new(point(px(ox + x), px(oy)), size(px(2.), px(height))), theme.primary.opacity(0.7))),
+        }
+    }
+}
+
+/// A table's handles and the strips that add to it, over the page.
+fn paint_controls(c: &Controls, ox: f32, oy: f32, theme: &gpui_component::Theme, window: &mut Window, cx: &mut App) {
+    use cells::{Control, ADD, ADD_GAP, GRIP_LONG, GRIP_SHORT};
+    let k = c.opacity;
+    let b = &c.table;
+    // A handle: its dots, two rows of three along its long side.
+    let grip = |bounds: Bounds<Pixels>, upright: bool, on: bool, window: &mut Window| {
+        let ground = if on { theme.primary } else { theme.background };
+        let ink = if on { theme.primary_foreground } else { theme.muted_foreground };
+        window.paint_quad(quad(bounds, px(4.), ground.opacity(k), px(1.), (if on { theme.primary } else { theme.border }).opacity(k), BorderStyle::default()));
+        let (cx0, cy0) = (bounds.origin.x + bounds.size.width / 2., bounds.origin.y + bounds.size.height / 2.);
+        for long in [-4.5, 0., 4.5] {
+            for short in [-2., 2.] {
+                let (dx, dy) = if upright { (short, long) } else { (long, short) };
+                let dot = Bounds::new(point(cx0 + px(dx - 1.), cy0 + px(dy - 1.)), size(px(2.), px(2.)));
+                window.paint_quad(quad(dot, px(1.), ink.opacity(k), px(0.), theme.transparent, BorderStyle::default()));
+            }
+        }
+    };
+    let strip = |bounds: Bounds<Pixels>, on: bool, window: &mut Window, cx: &mut App| {
+        let ground = if on { theme.primary.opacity(0.14 * k) } else { theme.muted.opacity(0.6 * k) };
+        window.paint_quad(quad(bounds, px(4.), ground, px(0.), theme.transparent, BorderStyle::default()));
+        let side = px(12.);
+        let at = point(bounds.origin.x + (bounds.size.width - side) / 2., bounds.origin.y + (bounds.size.height - side) / 2.);
+        let ink = if on { theme.primary } else { theme.muted_foreground };
+        let _ = window.paint_svg(Bounds::new(at, size(side, side)), "icons/plus.svg".into(), None, TransformationMatrix::unit(), ink.opacity(k), cx);
+    };
+    let (left, top, right, bottom) = (ox + b.left, oy + b.top, ox + b.right, oy + b.bottom);
+    strip(Bounds::new(point(px(right + ADD_GAP), px(top)), size(px(ADD), px(bottom - top))), c.on == Some(Control::AddColumn), window, cx);
+    strip(Bounds::new(point(px(left), px(bottom + ADD_GAP)), size(px(right - left), px(ADD))), c.on == Some(Control::AddRow), window, cx);
+    let row_mid = oy + (c.row.0 + c.row.1) / 2.;
+    grip(Bounds::new(point(px(left - GRIP_SHORT / 2.), px(row_mid - GRIP_LONG / 2.)), size(px(GRIP_SHORT), px(GRIP_LONG))), true, matches!(c.on, Some(Control::RowGrip(_))), window);
+    if let (Some(x), Some(w)) = (b.grid.xs.get(c.col), b.grid.cols.get(c.col)) {
+        let mid = left + x + w / 2.;
+        grip(Bounds::new(point(px(mid - GRIP_LONG / 2.), px(top - GRIP_SHORT / 2.)), size(px(GRIP_LONG), px(GRIP_SHORT))), false, matches!(c.on, Some(Control::ColumnGrip(_))), window);
+    }
+    if let Some(Control::Edge(col)) = c.on {
+        if let (Some(x), Some(w)) = (b.grid.xs.get(col), b.grid.cols.get(col)) {
+            window.paint_quad(fill(Bounds::new(point(px(left + x + w - 1.), px(top)), size(px(2.), px(bottom - top))), theme.primary));
+        }
     }
 }
 
@@ -2119,15 +1863,18 @@ impl Element for EditorElement {
     fn prepaint(&mut self, _: Option<&GlobalElementId>, _: Option<&InspectorElementId>, bounds: Bounds<Pixels>, _: &mut (), window: &mut Window, cx: &mut App) -> Prepainted {
         stamp("editor prepaint");
         let hitbox = window.insert_hitbox(bounds, HitboxBehavior::Normal);
+        let far = px(cells::ADD + cells::ADD_GAP + 4.);
+        let wide = window.insert_hitbox(Bounds::new(point(bounds.origin.x - far, bounds.origin.y), size(bounds.size.width + far * 2., bounds.size.height + far)), HitboxBehavior::Normal);
         self.editor.update(cx, |e, cx| {
             e.origin = bounds.origin;
+            e.read_pictures(cx);
             // The scroller reads its offset before its child is laid out,
             // so a move made here shows at the next frame, which is asked for.
             if e.want_scroll && e.scroll_to_caret(bounds, window) {
                 cx.notify();
             }
         });
-        Prepainted { hitbox }
+        Prepainted { hitbox, wide }
     }
 
     fn paint(&mut self, _: Option<&GlobalElementId>, _: Option<&InspectorElementId>, bounds: Bounds<Pixels>, _: &mut (), prepaint: &mut Prepainted, window: &mut Window, cx: &mut App) {
@@ -2135,33 +1882,20 @@ impl Element for EditorElement {
         let editor = self.editor.clone();
         stamp("paint begins");
         let paint_started = Instant::now();
-        let info = editor.update(cx, |e, _| {
+        let (ox, oy) = (f32::from(bounds.origin.x), f32::from(bounds.origin.y));
+        let info = editor.update(cx, |e, cx| {
             e.focused = e.focus.is_focused(window);
-            PaintInfo {
-                focus: e.focus.clone(),
-                over_link: e.over_link,
-                cache: e.cache.clone(),
-                blocks: e.analysis.code_blocks.iter().map(|b| (b.first, b.last, e.base_inset(&e.analysis.lines[b.first]))).collect(),
-                sel: e.sel,
-                marked: e.marked,
-                caret_on: e.caret_shown(),
-                find: e.find.clone(),
-            }
+            e.paint_info(point(px(ox), px(oy)), window, cx)
         });
         window.handle_input(&info.focus, ElementInputHandler::new(bounds, editor.clone()), cx);
-        window.set_cursor_style(if info.over_link { CursorStyle::PointingHand } else { CursorStyle::IBeam }, &prepaint.hitbox);
+        window.set_cursor_style(info.pointer, if info.controls.is_some() { &prepaint.wide } else { &prepaint.hitbox });
 
         let cache = info.cache.borrow();
         let view = window.content_mask().bounds;
-        let origin = bounds.origin;
-        let (ox, oy) = (f32::from(origin.x), f32::from(origin.y));
         let visible = |top: f32, h: f32| oy + top + h >= f32::from(view.top()) - 1. && oy + top <= f32::from(view.bottom()) + 1.;
-        let first = match cache.tops.binary_search_by(|t| t.partial_cmp(&(f32::from(view.top()) - oy)).unwrap_or(std::cmp::Ordering::Equal)) {
-            Ok(i) => i,
-            Err(i) => i.saturating_sub(1),
-        };
+        let first = cache.tops.partition_point(|t| *t <= f32::from(view.top()) - oy).saturating_sub(1);
 
-        // The plates behind code blocks, before anything on them.
+        // The plates behind code blocks and tables, before anything on them.
         for &(first_line, last_line, inset) in &info.blocks {
             let (Some(top), Some(last)) = (cache.tops.get(first_line), cache.entries.get(last_line)) else { continue };
             let bottom = cache.tops[last_line] + last.height;
@@ -2171,10 +1905,14 @@ impl Element for EditorElement {
             let b = Bounds::new(point(px(ox + inset), px(oy + top)), size(bounds.size.width - px(inset), px(bottom - top)));
             window.paint_quad(quad(b, px(8.), theme.muted, px(1.), theme.border, BorderStyle::default()));
         }
+        for &(first_line, last_line) in &info.tables {
+            let (Some(top), Some(last), Some(head)) = (cache.tops.get(first_line), cache.entries.get(last_line), cache.entries.get(first_line)) else { continue };
+            let bottom = cache.tops[last_line] + last.height;
+            if let (Row::Table(t), true) = (&*head.row, visible(*top, bottom - top)) {
+                paint_plate(ox + t.inset, oy + top, t.grid.width, bottom - top, head.height, &theme, window);
+            }
+        }
 
-        let (sa, sb) = info.sel.range();
-        let is_caret = info.sel.is_caret();
-        let mut caret_box: Option<Bounds<Pixels>> = None;
         for line in first..cache.entries.len() {
             let entry = &cache.entries[line];
             let top = cache.tops[line];
@@ -2184,166 +1922,47 @@ impl Element for EditorElement {
             if entry.height <= 0. || !visible(top, entry.height) {
                 continue;
             }
-            let row_origin = point(px(ox), px(oy + top));
-            match &*entry.row {
-                Row::Text(r) => {
-                    let text_origin = point(px(ox + r.inset), px(oy + top + r.top_pad));
-                    let lh = px(r.line_h);
-                    // The chips: a plate behind inline code, a wash behind a highlight.
-                    for (range, color) in &r.chips {
-                        for b in text_boxes(&r.line, range.clone(), r.line_h, text_origin) {
-                            let b = Bounds::new(point(b.origin.x - px(2.), b.origin.y + px(r.line_h * 0.08)), size(b.size.width + px(4.), px(r.line_h * 0.84)));
-                            window.paint_quad(quad(b, px(4.), *color, px(0.), theme.transparent, BorderStyle::default()));
-                        }
-                    }
-                    // The find bar's matches on this line, washed; the one
-                    // the bar stands on is the selection, painted after.
-                    if !info.find.is_empty() {
-                        let wash = Hsla { s: 0.1, ..theme.selection };
-                        for &(fa, fb) in info.find.iter().filter(|(a, b)| a.line <= line && line <= b.line) {
-                            let from = if fa.line == line { r.shown.to_shown(fa.col) } else { 0 };
-                            let to = if fb.line == line { r.shown.to_shown(fb.col) } else { r.shown.text.len() };
-                            if from < to {
-                                for b in text_boxes(&r.line, from..to, r.line_h, text_origin) {
-                                    window.paint_quad(quad(b, px(2.), wash, px(0.), theme.transparent, BorderStyle::default()));
-                                }
-                            }
-                        }
-                    }
-                    // The selection, as far as it lies on this line.
-                    if sa != sb && sa.line <= line && line <= sb.line {
-                        let from = if sa.line == line { r.shown.to_shown(sa.col) } else { 0 };
-                        let to = if sb.line == line { r.shown.to_shown(sb.col) } else { r.shown.text.len() };
-                        let past_end = sb.line > line;
-                        if from < to || past_end {
-                            let mut boxes = text_boxes(&r.line, from..to.max(from), r.line_h, text_origin);
-                            if past_end {
-                                // The line's end is selected too: a little past the last word.
-                                if let Some(last) = boxes.last_mut() {
-                                    last.size.width += px(6.);
-                                } else {
-                                    boxes.push(Bounds::new(text_origin, size(px(6.), lh)));
-                                }
-                            }
-                            for b in boxes {
-                                window.paint_quad(fill(b, theme.selection));
-                            }
-                        }
-                    }
-                    // The words.
-                    let _ = r.line.paint(text_origin, lh, TextAlign::Left, None, window, cx);
-                    // An input method's composition, underlined.
-                    if let Some((ma, mb)) = info.marked {
-                        if ma.line == line {
-                            let (a, b) = (r.shown.to_shown(ma.col), r.shown.to_shown(if mb.line == line { mb.col } else { r.source_len }));
-                            for bx in text_boxes(&r.line, a..b, r.line_h, text_origin) {
-                                window.paint_quad(fill(Bounds::new(point(bx.origin.x, bx.origin.y + lh - px(2.)), size(bx.size.width, px(1.))), theme.foreground));
-                            }
-                        }
-                    }
-                    // The widgets.
-                    for w in &r.widgets {
-                        match w {
-                            Widget::Bullet { x, y, r: radius } => {
-                                let b = Bounds::new(point(px(ox + x - radius), px(oy + top + y - radius)), size_px(radius * 2.));
-                                window.paint_quad(quad(b, px(*radius), theme.muted_foreground, px(0.), theme.transparent, BorderStyle::default()));
-                            }
-                            Widget::Number { line: shaped, x, y } => {
-                                let _ = shaped.paint(point(px(ox + x), px(oy + top + y)), lh, TextAlign::Left, None, window, cx);
-                            }
-                            Widget::Task { bounds: b, done } => {
-                                let b = Bounds::new(point(px(ox) + b.origin.x, px(oy + top) + b.origin.y), b.size);
-                                if *done {
-                                    window.paint_quad(quad(b, px(4.), theme.primary, px(0.), theme.transparent, BorderStyle::default()));
-                                    let inner = Bounds::new(point(b.origin.x + b.size.width * 0.15, b.origin.y + b.size.height * 0.15), size(b.size.width * 0.7, b.size.height * 0.7));
-                                    let _ = window.paint_svg(inner, "icons/check.svg".into(), None, TransformationMatrix::unit(), theme.primary_foreground, cx);
-                                } else {
-                                    window.paint_quad(quad(b, px(4.), theme.transparent, px(1.5), theme.muted_foreground.opacity(0.7), BorderStyle::default()));
-                                }
-                            }
-                            Widget::Guide { x } => {
-                                let b = Bounds::new(point(px(ox + x), row_origin.y), size(px(1.), px(entry.height)));
-                                window.paint_quad(fill(b, theme.border));
-                            }
-                            Widget::Bar { x } => {
-                                let b = Bounds::new(point(px(ox + x), row_origin.y), size(px(2.), px(entry.height)));
-                                window.paint_quad(fill(b, theme.primary.opacity(0.7)));
-                            }
-                        }
-                    }
-                    // The caret.
-                    if is_caret && sa.line == line {
-                        let shown_ix = r.shown.to_shown(sa.col);
-                        let at = r.line.position_for_index(shown_ix, lh).unwrap_or_default();
-                        caret_box = Some(Bounds::new(point(text_origin.x + at.x, text_origin.y + at.y), size(px(1.5), lh)));
-                    }
-                }
-                Row::Pad { lang } => {
-                    if let Some((l, icon, color)) = lang {
-                        let name_w = f32::from(l.width());
-                        let icon_px = 13.;
-                        // The name's glyphs stand `PLATE_X` in from the right
-                        // and `PLATE_PAD` down from the top: the line box is
-                        // 16 tall for 11.5 of type, so its top sits 3 above
-                        // the caps.
-                        let x = f32::from(bounds.size.width) - name_w - PLATE_X;
-                        let y = oy + top + PLATE_PAD - 3.;
-                        let _ = l.paint(point(px(ox + x), px(y)), px(16.), TextAlign::Left, None, window, cx);
-                        let ib = Bounds::new(point(px(ox + x - icon_px - 5.), px(y + (16. - icon_px) / 2.)), size_px(icon_px));
-                        let _ = window.paint_svg(ib, SharedString::from(*icon), None, TransformationMatrix::unit(), *color, cx);
-                    }
-                }
-                Row::Hidden => {}
-                Row::Rule { inset, line_h } => {
-                    let b = Bounds::new(point(px(ox + inset), px(oy + top + line_h / 2. - 1.)), size(bounds.size.width - px(*inset), px(2.)));
-                    window.paint_quad(fill(b, theme.border));
-                    if is_caret && sa.line == line {
-                        caret_box = Some(Bounds::new(point(px(ox + inset), px(oy + top)), size(px(1.5), px(*line_h))));
-                    }
-                }
-                Row::Table(t) => {
-                    let total_w: f32 = t.cols.iter().sum();
-                    let left = ox + t.inset;
-                    let mut y = oy + top;
-                    for (ri, row) in t.cells.iter().enumerate() {
-                        let h = t.heights[ri];
-                        if ri == 0 {
-                            window.paint_quad(fill(Bounds::new(point(px(left), px(y)), size(px(total_w), px(h))), theme.muted.opacity(0.6)));
-                        }
-                        let mut x = left;
-                        for (ci, cell) in row.iter().enumerate() {
-                            if let Some(c) = cell {
-                                let _ = c.paint(point(px(x + CELL_X), px(y + CELL_Y)), px(t.line_h), TextAlign::Left, None, window, cx);
-                            }
-                            window.paint_quad(fill(Bounds::new(point(px(x), px(y)), size(px(1.), px(h))), theme.border));
-                            x += t.cols[ci];
-                        }
-                        window.paint_quad(fill(Bounds::new(point(px(x), px(y)), size(px(1.), px(h))), theme.border));
-                        window.paint_quad(fill(Bounds::new(point(px(left), px(y)), size(px(total_w + 1.), px(1.))), theme.border));
-                        y += h;
-                    }
-                    window.paint_quad(fill(Bounds::new(point(px(left), px(y)), size(px(total_w + 1.), px(1.))), theme.border));
-                }
-            }
-        }
-        if let Some(b) = caret_box.filter(|_| info.caret_on) {
-            window.paint_quad(fill(b, theme.caret));
+            paint_row(&entry.row, ox, oy + top, entry.height, bounds.size.width, Some(line), &info, &theme, window, cx);
         }
         drop(cache);
+        if let Some(b) = info.cell {
+            window.paint_quad(quad(Bounds::new(point(px(ox) + b.origin.x, px(oy) + b.origin.y), b.size), px(3.), theme.transparent, px(1.5), theme.primary, BorderStyle::default()));
+        }
+        if let Some(c) = &info.controls {
+            window.with_content_mask(None, |window| paint_controls(c, ox, oy, &theme, window, cx));
+            if c.opacity < 1. {
+                window.request_animation_frame();
+            }
+        }
+        if let Some(b) = info.drop_line {
+            window.paint_quad(fill(Bounds::new(point(px(ox) + b.origin.x, px(oy) + b.origin.y), b.size), theme.primary));
+        }
+        if let Some(b) = info.caret {
+            window.paint_quad(fill(b, theme.caret));
+        }
         trace("paint", paint_started);
 
         // The pointer: a press places the caret or takes a widget, a drag
         // selects, a press on a link follows it.
-        let hitbox = prepaint.hitbox.clone();
+        let (hitbox, wide) = (prepaint.hitbox.clone(), prepaint.wide.clone());
         let ed = editor.clone();
         window.on_mouse_event(move |ev: &MouseDownEvent, phase, window, cx| {
-            if phase != DispatchPhase::Bubble || ev.button != MouseButton::Left || !hitbox.is_hovered(window) {
+            if phase != DispatchPhase::Bubble || ev.button != MouseButton::Left || !wide.is_hovered(window) {
+                return;
+            }
+            let (x, y) = (f32::from(ev.position.x - bounds.origin.x), f32::from(ev.position.y - bounds.origin.y));
+            let taken = ed.update(cx, |e, cx| e.press_control(x, y, ev.position, cx));
+            if taken {
+                cx.stop_propagation();
+                crate::widgets::swallow_click(window, cx);
+                return;
+            }
+            if !hitbox.is_hovered(window) {
                 return;
             }
             // The press is the editor's: the scroller around it hears a
             // press in the margin only, which takes the keyboard back.
             cx.stop_propagation();
-            let (x, y) = (f32::from(ev.position.x - bounds.origin.x), f32::from(ev.position.y - bounds.origin.y));
             stamp("mouse down");
             ed.update(cx, |e, cx| {
                 // As the note reads a press selects as anywhere else, for
@@ -2375,7 +1994,7 @@ impl Element for EditorElement {
                         };
                         let (a, b) = e.grain_range(p, grain);
                         if ev.modifiers.shift && grain == Grain::Char {
-                            e.sel.head = p;
+                            e.sel.head = e.held_to(e.sel.anchor, p);
                         } else {
                             e.sel = Sel { anchor: a, head: b };
                         }
@@ -2388,24 +2007,20 @@ impl Element for EditorElement {
             });
             crate::widgets::swallow_click(window, cx);
         });
-        let (hitbox, ed) = (prepaint.hitbox.clone(), editor.clone());
+        let (hitbox, wide, ed) = (prepaint.hitbox.clone(), prepaint.wide.clone(), editor.clone());
         window.on_mouse_event(move |ev: &MouseDownEvent, phase, window, cx| {
-            if phase != DispatchPhase::Bubble || ev.button != MouseButton::Right || !hitbox.is_hovered(window) {
+            if phase != DispatchPhase::Bubble || ev.button != MouseButton::Right || !wide.is_hovered(window) {
+                return;
+            }
+            let (x, y) = (f32::from(ev.position.x - bounds.origin.x), f32::from(ev.position.y - bounds.origin.y));
+            let on_control = ed.read(cx).control_at(x, y).is_some_and(|c| matches!(c, cells::Control::RowGrip(_) | cells::Control::ColumnGrip(_)));
+            if !on_control && !hitbox.is_hovered(window) {
                 return;
             }
             cx.stop_propagation();
-            let (x, y) = (f32::from(ev.position.x - bounds.origin.x), f32::from(ev.position.y - bounds.origin.y));
             ed.update(cx, |e, cx| {
-                // On a link nothing moves: the keyboard taken here would
-                // wake the marks on the caret's line.
-                let link = e.link_at(x, y);
-                if link.is_none() {
-                    if !e.focus.is_focused(window) {
-                        window.focus(&e.focus, cx);
-                    }
-                    e.select_for_menu(x, y, cx);
-                }
-                cx.emit(EditorEvent::Menu(ev.position, link));
+                let at = e.right_press(x, y, window, cx);
+                cx.emit(EditorEvent::Menu(ev.position, at));
                 cx.notify();
             });
         });
@@ -2416,10 +2031,14 @@ impl Element for EditorElement {
             }
             let (x, y) = (f32::from(ev.position.x - bounds.origin.x), f32::from(ev.position.y - bounds.origin.y));
             ed.update(cx, |e, cx| {
+                if ev.pressed_button == Some(MouseButton::Left) && e.drag_control(x, y, cx) {
+                    return;
+                }
                 if let (Some((grain, a, b)), Some(MouseButton::Left)) = (e.drag, ev.pressed_button) {
                     if let Some(p) = e.pos_at(x, y.max(0.), &e.cache.borrow()) {
                         let (pa, pb) = e.grain_range(p, grain);
                         let (anchor, head) = if pa < a { (b, pa) } else { (a, pb.max(b)) };
+                        let head = e.held_to(anchor, head);
                         if e.sel != (Sel { anchor, head }) {
                             e.sel = Sel { anchor, head };
                             e.want_scroll = true;
@@ -2430,13 +2049,20 @@ impl Element for EditorElement {
                         }
                     }
                 } else {
-                    let over = window.mouse_position().x >= bounds.origin.x && match e.hit(x, y) {
-                        Some(Hit::Link(_)) => true,
-                        Some(Hit::Task(_)) => !e.read_only,
-                        None => false,
+                    e.pointer_at = (x, y);
+                    e.point_at_table(x, y, cx);
+                    let inside = window.mouse_position().x >= bounds.origin.x;
+                    let pointer = match e.control_at(x, y) {
+                        Some(cells::Control::Edge(_)) => CursorStyle::ResizeColumn,
+                        Some(_) => CursorStyle::PointingHand,
+                        None => match e.hit(x, y) {
+                            Some(Hit::Link(_)) if inside => CursorStyle::PointingHand,
+                            Some(Hit::Task(_)) if inside && !e.read_only => CursorStyle::PointingHand,
+                            _ => CursorStyle::IBeam,
+                        },
                     };
-                    if over != e.over_link {
-                        e.over_link = over;
+                    if pointer != e.pointer {
+                        e.pointer = pointer;
                         cx.notify();
                     }
                 }
@@ -2446,6 +2072,9 @@ impl Element for EditorElement {
         window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
             if phase == DispatchPhase::Bubble {
                 ed.update(cx, |e, cx| {
+                    if e.drop_control(cx) {
+                        return;
+                    }
                     if let Some(target) = e.pressed_link.take() {
                         e.follow(target, cx);
                     }
@@ -2460,6 +2089,144 @@ impl Element for EditorElement {
                 });
             }
         });
+    }
+}
+
+impl Editor {
+    /// What the drawing needs, read once.
+    fn paint_info(&mut self, _: Point<Pixels>, _: &mut Window, _: &mut Context<Self>) -> PaintInfo {
+        let (sa, _) = self.sel.range();
+        let cache = self.cache.borrow();
+        let gridded = self.mode != Mode::Source;
+        let caret = (self.sel.is_caret() && self.caret_shown()).then(|| self.caret_at(sa)).flatten().map(|c| Bounds::new(point(px(c.x), px(c.bar_y)), size(px(1.5), px(c.bar_h))));
+        let cell = self.revealing().then(|| self.cell_of(self.sel.head)).flatten().and_then(|at| {
+            let t = self.table(at.table)?;
+            let b = cells::table_box(t, &cache)?;
+            let line = t.line_of(at.row);
+            let (x, w) = (*b.grid.xs.get(at.col)?, *b.grid.cols.get(at.col)?);
+            Some(Bounds::new(point(px(b.left + x), px(cache.tops[line])), size(px(w), px(cache.entries.get(line)?.height + 1.))))
+        });
+        let (mut control_on, mut hover_row) = (None, None);
+        if let Some(h) = self.hover {
+            if let Some(t) = self.table(h.first) {
+                let line = t.line_of(h.row);
+                hover_row = cache.entries.get(line).map(|e| (cache.tops[line], cache.tops[line] + e.height));
+            }
+            let p = self.pointer_at;
+            drop(cache);
+            control_on = self.control_at(p.0, p.1);
+            return self.finish_info(sa, caret, cell, control_on, hover_row, gridded);
+        }
+        drop(cache);
+        self.finish_info(sa, caret, cell, control_on, hover_row, gridded)
+    }
+
+    fn finish_info(&self, _: Pos, caret: Option<Bounds<Pixels>>, cell: Option<Bounds<Pixels>>, on: Option<cells::Control>, hover_row: Option<(f32, f32)>, gridded: bool) -> PaintInfo {
+        let origin = point(self.origin.x, self.origin.y);
+        let shift = |b: Bounds<Pixels>| Bounds::new(point(origin.x + b.origin.x, origin.y + b.origin.y), b.size);
+        let cache = self.cache.borrow();
+        let controls = self.hover.and_then(|h| {
+            let table = cells::table_box(self.table(h.first)?, &cache)?;
+            let opacity = (h.since.elapsed().as_secs_f32() / 0.12).min(1.);
+            Some(Controls { table, row: hover_row?, col: h.col, on, opacity })
+        });
+        let drop_line = self.table_drag.as_ref().and_then(|d| match d {
+            cells::TableDrag::Row { first, row, to, moved: true, .. } => {
+                let t = self.table(*first)?;
+                let b = cells::table_box(t, &cache)?;
+                let line = t.line_of(*to);
+                let y = if to > row { cache.tops[line] + cache.entries.get(line)?.height } else { cache.tops[line] };
+                Some(Bounds::new(point(px(b.left), px(y - 1.)), size(px(b.right - b.left), px(2.))))
+            }
+            cells::TableDrag::Column { first, col, to, moved: true, .. } => {
+                let b = cells::table_box(self.table(*first)?, &cache)?;
+                let x = b.left + b.grid.xs.get(*to)? + if to > col { *b.grid.cols.get(*to)? } else { 0. };
+                Some(Bounds::new(point(px(x - 1.), px(b.top)), size(px(2.), px(b.bottom - b.top))))
+            }
+            _ => None,
+        });
+        PaintInfo {
+            focus: self.focus.clone(),
+            pointer: self.pointer,
+            cache: self.cache.clone(),
+            blocks: self.analysis.code_blocks.iter().filter(|b| gridded || b.first < usize::MAX).map(|b| (b.first, b.last, self.reader().base_inset(&self.analysis.lines[b.first]))).collect(),
+            tables: if gridded { self.analysis.tables.iter().map(|t| (t.first, t.last)).collect() } else { Vec::new() },
+            sel: self.sel,
+            marked: self.marked,
+            caret: caret.map(shift),
+            find: self.find.clone(),
+            pictures: self.pictures.clone(),
+            cell,
+            controls,
+            drop_line,
+        }
+    }
+
+    /// A right click: what it was on, with the selection put as a Mac's
+    /// text puts it.
+    fn right_press(&mut self, x: f32, y: f32, window: &mut Window, cx: &mut Context<Self>) -> MenuAt {
+        if let Some(control) = self.control_at(x, y) {
+            let hover = self.hover;
+            let scope = match control {
+                cells::Control::RowGrip(_) => Some(Scope::Row),
+                cells::Control::ColumnGrip(_) => Some(Scope::Column),
+                _ => None,
+            };
+            if let (Some(scope), Some(h)) = (scope, hover) {
+                let cell = CellAt { table: h.first, row: h.row, col: h.col };
+                return MenuAt { table: self.table_facts(cell).map(|f| (cell, scope, f)), ..Default::default() };
+            }
+        }
+        // On a link nothing moves: the keyboard taken here would wake the
+        // marks on the caret's line.
+        let link = self.link_at(x, y);
+        if link.is_some() {
+            return MenuAt { link, ..Default::default() };
+        }
+        if !self.focus.is_focused(window) {
+            window.focus(&self.focus, cx);
+        }
+        let place = self.pos_at(x, y, &self.cache.borrow());
+        let issue = place.and_then(|p| self.issue_at(self.doc.offset_of(p)));
+        if issue.is_some() {
+            if let Some(p) = place {
+                self.sel = Sel::caret(p);
+                self.kick_blink(cx);
+            }
+        } else {
+            self.select_for_menu(x, y, cx);
+        }
+        let table = place.and_then(|p| self.cell_of(p)).and_then(|c| Some((c, Scope::Cell, self.table_facts(c)?)));
+        let blank = !self.locked() && self.doc.line(self.sel.head.line).trim().is_empty() && table.is_none();
+        MenuAt { link: None, issue, table, blank }
+    }
+
+    /// The pictures a layout met, read off the window's thread.
+    fn read_pictures(&mut self, cx: &mut Context<Self>) {
+        let wanted = std::mem::take(&mut self.pictures.borrow_mut().wanted);
+        for path in wanted {
+            if !self.pictures.borrow_mut().reading.insert(path.clone()) {
+                continue;
+            }
+            cx.spawn(async move |this, cx| {
+                let file = path.clone();
+                let image = cx.background_spawn(async move { crate::layout::read_picture(&file) }).await;
+                let _ = this.update(cx, |e, cx| {
+                    if let Some(image) = image {
+                        e.pictures.borrow_mut().drawn.insert(path, image);
+                    }
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
+    }
+
+    /// Lets the pictures go, as a note is closed.
+    pub fn let_pictures_go(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        for (_, image) in self.pictures.borrow_mut().drawn.drain() {
+            cx.drop_image(image, Some(window));
+        }
     }
 }
 
@@ -2487,41 +2254,10 @@ impl Editor {
                     (Pos::new(p.line, w.start), Pos::new(p.line, w.end))
                 }
             }
-            Grain::Line => (Pos::new(p.line, 0), if p.line + 1 < self.doc.line_count() { Pos::new(p.line + 1, 0) } else { self.doc.end() }),
+            Grain::Line => match self.cell_of(p) {
+                Some(cell) => self.cell_span(cell),
+                None => (Pos::new(p.line, 0), if p.line + 1 < self.doc.line_count() { Pos::new(p.line + 1, 0) } else { self.doc.end() }),
+            },
         }
     }
-}
-
-/// The boxes a range of a wrapped line's text takes, one a wrapped row.
-fn text_boxes(line: &WrappedLine, range: Range<usize>, line_h: f32, origin: Point<Pixels>) -> Vec<Bounds<Pixels>> {
-    let mut out = Vec::new();
-    if range.start > range.end {
-        return out;
-    }
-    let lh = px(line_h);
-    // The rows' starts, by the glyph each wrap begins at.
-    let mut starts: Vec<usize> = vec![0];
-    for wb in line.wrap_boundaries() {
-        let run = &line.runs()[wb.run_ix];
-        starts.push(run.glyphs[wb.glyph_ix].index);
-    }
-    let len = line.len();
-    for (ri, &row_start) in starts.iter().enumerate() {
-        let row_end = starts.get(ri + 1).copied().unwrap_or(len);
-        let a = range.start.max(row_start);
-        let b = range.end.min(row_end);
-        if a > b || (a == b && !(range.start == range.end && a == row_start)) {
-            continue;
-        }
-        let xa = line.position_for_index(a, lh).map(|p| p.x).unwrap_or_default();
-        let xb = if b == row_end && ri + 1 < starts.len() {
-            // To the row's end: the x of its last glyph plus its width.
-            line.position_for_index(b, lh).map(|p| if (p.y / lh) as usize > ri { px(f32::from(line.width())) } else { p.x }).unwrap_or(line.width())
-        } else {
-            line.position_for_index(b, lh).map(|p| p.x).unwrap_or(line.width())
-        };
-        let w = (xb - xa).max(px(0.));
-        out.push(Bounds::new(point(origin.x + xa, origin.y + lh * ri as f32), size(w, lh)));
-    }
-    out
 }

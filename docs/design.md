@@ -6,6 +6,7 @@ The standard every part of Onyx a person sees is held to: the window, the sideba
 
 - **Calm.** One accent, the person's choice of seven, for what is on, in use, chosen, or the one thing a page is for: a link, inline code's plate, a quote's bar, a done task's box, the chosen tile. Nothing else competes with it.
 - **Everything fits.** Every section of the settings shows all it has without scrolling. The page still scrolls for a window made smaller.
+- **The canvas has one rhythm.** Every height, gap and pad of a note comes from `Rhythm` (`layout.rs`) and `onyx_core::rhythm`, in whole pixels, scaled from the words' size: a body line of 1.6, code of 1.5, and the room over a heading a share of the body's line. Nothing on the canvas sets a height of its own (`docs/editor.md`).
 - **Nothing jumps.** What appears, goes, opens, closes, grows, moves or turns does so over a moment, with the pattern its neighbors use (`docs/window.md`, Motion). No pause at the end of a motion.
 - **What is cut says so.** A list or a note that runs past an edge fades out at that edge, and the fade grows and goes with the scroll, so nothing snaps on at the first pixel or off at the last. What is under a fade counts as out of sight: it takes no press, and a caret is never there.
 - **A gesture stays where it began.** A scroll moves only the scroller it started in (`scroll.rs`).
@@ -54,7 +55,8 @@ Laid out as the studio's windows are, after emaki's: the frame is the window's g
 - **The search**, ⌘K: a palette over the window with the notes the phrase is in, each with its first lines and the phrase marked.
 - **With no vault** the card is the landing page: the name, one sentence, Open a vault… as the one primary pill, and the vaults opened before on a card, each with its folder's path under its name. With a vault and no note, the page is emaki's home page with Obsidian's new tab on it: the icon's picture (a notebook on a tile of onyx, a pen that writes on it while the pointer is over, on a spring as emaki's handscroll is), the greeting by the hour and the account's first name in the note's face, and under them what can be done next, each on a pill with its key at the right: New Note, New Folder, Reopen Closed Tab while there is one, Open Vault….
 - **A rename** is a sheet over the window: a card with the name in a field, Cancel and Rename, ↩ and Esc on caps under it, on a scrim any press puts away.
-- **A notice** (a note that could not be written, a name not changed) is one line in the danger's ink under the strip, gone after a few seconds.
+- **A notice** is one line under the strip, opening and going over a moment, gone after a few seconds: in the danger's ink for what went wrong (a note that could not be written, a name not changed), and quiet for something asked for and done (a PDF made), when a press on it shows the file.
+- **Export to PDF** is a sheet as wide as the window allows, the page as it will print on the left and how it is set on the right (`docs/export.md`). The paper is always light, whatever the appearance.
 
 ### The settings
 

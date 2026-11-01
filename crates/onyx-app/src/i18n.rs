@@ -292,7 +292,7 @@ mod tests {
     #[test]
     fn every_phrase_asked_for_is_in_the_table() {
         let table = table();
-        let sources = [include_str!("main.rs"), include_str!("shell.rs"), include_str!("settings.rs"), include_str!("widgets.rs"), include_str!("menu.rs"), include_str!("look.rs"), include_str!("sys.rs"), include_str!("editor.rs"), include_str!("fonts.rs"), include_str!("tabs.rs")];
+        let sources = [include_str!("main.rs"), include_str!("shell.rs"), include_str!("export.rs"), include_str!("settings.rs"), include_str!("widgets.rs"), include_str!("menu.rs"), include_str!("look.rs"), include_str!("sys.rs"), include_str!("editor.rs"), include_str!("fonts.rs"), include_str!("tabs.rs")];
         let mut asked: Vec<String> = Vec::new();
         for src in sources {
             asked_in(src, &mut asked);

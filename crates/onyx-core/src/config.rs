@@ -59,11 +59,15 @@ pub struct EditorConfig {
     /// The person's own sizes, kept while a preset is chosen so Custom
     /// comes back to them; `None` until Custom was chosen once.
     pub sizes: Option<TextSizes>,
+    /// Whether a note's spelling and grammar are marked.
+    pub check_writing: bool,
+    /// The language they are checked in, by its key in `check::LANGUAGES`.
+    pub writing_language: String,
 }
 
 impl Default for EditorConfig {
     fn default() -> Self {
-        Self { text_face: "inter".into(), mono_face: "jetbrains".into(), cjk_face: "auto".into(), text_custom: String::new(), mono_custom: String::new(), cjk_custom: String::new(), text_size: "medium".into(), sizes: None }
+        Self { text_face: "inter".into(), mono_face: "jetbrains".into(), cjk_face: "auto".into(), text_custom: String::new(), mono_custom: String::new(), cjk_custom: String::new(), text_size: "medium".into(), sizes: None, check_writing: true, writing_language: "en-US".into() }
     }
 }
 
@@ -122,11 +126,51 @@ impl TextSizes {
     }
 }
 
+/// How a note is set as a PDF, as the export sheet last left it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct PdfConfig {
+    /// `a3`, `a4`, `a5`, `letter`, `legal` or `tabloid`; empty, what the
+    /// person's region prints on (`pdf::paper_of_locale`).
+    pub paper: String,
+    pub landscape: bool,
+    /// `small`, `normal` or `large`.
+    pub margins: String,
+    /// The face the words and code are set in, by their keys in the app's
+    /// `fonts`; empty, the note's own.
+    pub face: String,
+    pub mono: String,
+    /// The words' size in points. Code goes with it.
+    pub size: f32,
+    /// `tight`, `normal` or `loose`.
+    pub spacing: String,
+    /// The note's name over its words.
+    pub name: bool,
+    pub numbers: bool,
+    pub contents: bool,
+    /// Off, the page is ink on paper alone, for a printer with no color.
+    pub color: bool,
+    /// Each top heading starts a page.
+    pub breaks: bool,
+}
+
+impl PdfConfig {
+    pub const LEAST_SIZE: f32 = 8.;
+    pub const MOST_SIZE: f32 = 16.;
+}
+
+impl Default for PdfConfig {
+    fn default() -> Self {
+        Self { paper: String::new(), landscape: false, margins: "normal".into(), face: String::new(), mono: String::new(), size: 10.5, spacing: "normal".into(), name: true, numbers: true, contents: false, color: true, breaks: false }
+    }
+}
+
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct Config {
     pub app: AppConfig,
     pub editor: EditorConfig,
+    pub pdf: PdfConfig,
 }
 
 impl Config {

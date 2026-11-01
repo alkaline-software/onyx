@@ -26,6 +26,33 @@
     "de": "Akzentfarbe",
     "es": "Color de acentuación"
   },
+  "Align Center": {
+    "zh-Hans": "居中",
+    "zh-Hant": "置中",
+    "ja": "中央揃え",
+    "ko": "가운데 정렬",
+    "fr": "Centrer",
+    "de": "Zentriert",
+    "es": "Centrar"
+  },
+  "Align Left": {
+    "zh-Hans": "左对齐",
+    "zh-Hant": "靠左對齊",
+    "ja": "左揃え",
+    "ko": "왼쪽 정렬",
+    "fr": "Aligner à gauche",
+    "de": "Linksbündig",
+    "es": "Alinear a la izquierda"
+  },
+  "Align Right": {
+    "zh-Hans": "右对齐",
+    "zh-Hant": "靠右對齊",
+    "ja": "右揃え",
+    "ko": "오른쪽 정렬",
+    "fr": "Aligner à droite",
+    "de": "Rechtsbündig",
+    "es": "Alinear a la derecha"
+  },
   "Amber": {
     "zh-Hans": "琥珀",
     "zh-Hant": "琥珀",
@@ -43,6 +70,15 @@
     "fr": "Apparence",
     "de": "Erscheinungsbild",
     "es": "Apariencia"
+  },
+  "As in the note": {
+    "zh-Hans": "与笔记相同",
+    "zh-Hant": "與筆記相同",
+    "ja": "ノートと同じ",
+    "ko": "노트와 같게",
+    "fr": "Comme la note",
+    "de": "Wie in der Notiz",
+    "es": "Como en la nota"
   },
   "Auto": {
     "zh-Hans": "自动",
@@ -88,6 +124,15 @@
     "fr": "Rechercher les mises à jour",
     "de": "Nach Updates suchen",
     "es": "Buscar actualizaciones"
+  },
+  "Check spelling and grammar": {
+    "zh-Hans": "检查拼写和语法",
+    "zh-Hant": "檢查拼字和文法",
+    "ja": "スペルと文法をチェック",
+    "ko": "맞춤법과 문법 검사",
+    "fr": "Vérifier l’orthographe et la grammaire",
+    "de": "Rechtschreibung und Grammatik prüfen",
+    "es": "Revisar ortografía y gramática"
   },
   "Chinese font": {
     "zh-Hans": "中文字体",
@@ -188,6 +233,15 @@
     "de": "Code",
     "es": "Código"
   },
+  "Code font": {
+    "zh-Hans": "代码字体",
+    "zh-Hant": "程式碼字體",
+    "ja": "コードのフォント",
+    "ko": "코드 글꼴",
+    "fr": "Police du code",
+    "de": "Code-Schrift",
+    "es": "Fuente del código"
+  },
   "Collapse All Folders": {
     "zh-Hans": "折叠所有文件夹",
     "zh-Hant": "收合所有資料夾",
@@ -196,6 +250,24 @@
     "fr": "Réduire tous les dossiers",
     "de": "Alle Ordner einklappen",
     "es": "Contraer todas las carpetas"
+  },
+  "Color": {
+    "zh-Hans": "彩色",
+    "zh-Hant": "彩色",
+    "ja": "カラー",
+    "ko": "컬러",
+    "fr": "Couleur",
+    "de": "Farbe",
+    "es": "Color"
+  },
+  "Contents": {
+    "zh-Hans": "目录",
+    "zh-Hant": "目錄",
+    "ja": "目次",
+    "ko": "목차",
+    "fr": "Sommaire",
+    "de": "Inhalt",
+    "es": "Índice"
   },
   "Copy": {
     "zh-Hans": "拷贝",
@@ -287,6 +359,33 @@
     "de": "Dunkel",
     "es": "Oscuro"
   },
+  "Delete Column": {
+    "zh-Hans": "删除列",
+    "zh-Hant": "刪除欄",
+    "ja": "列を削除",
+    "ko": "열 삭제",
+    "fr": "Supprimer la colonne",
+    "de": "Spalte löschen",
+    "es": "Eliminar columna"
+  },
+  "Delete Row": {
+    "zh-Hans": "删除行",
+    "zh-Hant": "刪除列",
+    "ja": "行を削除",
+    "ko": "행 삭제",
+    "fr": "Supprimer la ligne",
+    "de": "Zeile löschen",
+    "es": "Eliminar fila"
+  },
+  "Delete Table": {
+    "zh-Hans": "删除表格",
+    "zh-Hant": "刪除表格",
+    "ja": "表を削除",
+    "ko": "표 삭제",
+    "fr": "Supprimer le tableau",
+    "de": "Tabelle löschen",
+    "es": "Eliminar tabla"
+  },
   "Downloading… {percent}%": {
     "zh-Hans": "正在下载… {percent}%",
     "zh-Hant": "正在下載… {percent}%",
@@ -295,6 +394,15 @@
     "fr": "Téléchargement… {percent} %",
     "de": "Lädt … {percent} %",
     "es": "Descargando… {percent} %"
+  },
+  "Duplicate Row": {
+    "zh-Hans": "复制此行",
+    "zh-Hant": "複製此列",
+    "ja": "行を複製",
+    "ko": "행 복제",
+    "fr": "Dupliquer la ligne",
+    "de": "Zeile duplizieren",
+    "es": "Duplicar fila"
   },
   "Edit": {
     "zh-Hans": "编辑",
@@ -313,6 +421,69 @@
     "fr": "Édition (⌃1)",
     "de": "Bearbeiten (⌃1)",
     "es": "Edición (⌃1)"
+  },
+  "English (UK)": {
+    "zh-Hans": "英语（英国）",
+    "zh-Hant": "英文（英國）",
+    "ja": "英語（英国）",
+    "ko": "영어(영국)",
+    "fr": "Anglais (Royaume-Uni)",
+    "de": "Englisch (UK)",
+    "es": "Inglés (Reino Unido)"
+  },
+  "English (US)": {
+    "zh-Hans": "英语（美国）",
+    "zh-Hant": "英文（美國）",
+    "ja": "英語（米国）",
+    "ko": "영어(미국)",
+    "fr": "Anglais (États-Unis)",
+    "de": "Englisch (USA)",
+    "es": "Inglés (EE. UU.)"
+  },
+  "Export to PDF": {
+    "zh-Hans": "导出为 PDF",
+    "zh-Hant": "匯出為 PDF",
+    "ja": "PDF として書き出す",
+    "ko": "PDF로 내보내기",
+    "fr": "Exporter en PDF",
+    "de": "Als PDF exportieren",
+    "es": "Exportar a PDF"
+  },
+  "Export to PDF (⇧⌘E)": {
+    "zh-Hans": "导出为 PDF (⇧⌘E)",
+    "zh-Hant": "輸出為 PDF (⇧⌘E)",
+    "ja": "PDF に書き出す (⇧⌘E)",
+    "ko": "PDF로 내보내기 (⇧⌘E)",
+    "fr": "Exporter en PDF (⇧⌘E)",
+    "de": "Als PDF exportieren (⇧⌘E)",
+    "es": "Exportar a PDF (⇧⌘E)"
+  },
+  "Export to PDF…": {
+    "zh-Hans": "导出为 PDF…",
+    "zh-Hant": "匯出為 PDF…",
+    "ja": "PDF として書き出す…",
+    "ko": "PDF로 내보내기…",
+    "fr": "Exporter en PDF…",
+    "de": "Als PDF exportieren …",
+    "es": "Exportar a PDF…"
+  },
+  "Exported {name}": {
+    "zh-Hans": "已导出 {name}",
+    "zh-Hant": "已匯出 {name}",
+    "ja": "{name} を書き出しました",
+    "ko": "{name} 내보냄",
+    "fr": "{name} exporté",
+    "de": "{name} exportiert",
+    "es": "{name} exportado"
+  },
+  "Export…": {
+    "zh-Hans": "导出…",
+    "zh-Hant": "匯出…",
+    "ja": "書き出す…",
+    "ko": "내보내기…",
+    "fr": "Exporter…",
+    "de": "Exportieren …",
+    "es": "Exportar…"
   },
   "File": {
     "zh-Hans": "文件",
@@ -359,6 +530,15 @@
     "de": "Suchen…",
     "es": "Buscar…"
   },
+  "Font": {
+    "zh-Hans": "字体",
+    "zh-Hant": "字體",
+    "ja": "フォント",
+    "ko": "글꼴",
+    "fr": "Police",
+    "de": "Schrift",
+    "es": "Fuente"
+  },
   "Font name": {
     "zh-Hans": "字体名称",
     "zh-Hant": "字體名稱",
@@ -368,6 +548,15 @@
     "de": "Schriftname",
     "es": "Nombre de la fuente"
   },
+  "Font size": {
+    "zh-Hans": "字号",
+    "zh-Hant": "字級",
+    "ja": "フォントサイズ",
+    "ko": "글꼴 크기",
+    "fr": "Taille",
+    "de": "Schriftgröße",
+    "es": "Tamaño de fuente"
+  },
   "Fonts": {
     "zh-Hans": "字体",
     "zh-Hant": "字體",
@@ -376,6 +565,24 @@
     "fr": "Polices",
     "de": "Schriften",
     "es": "Fuentes"
+  },
+  "French": {
+    "zh-Hans": "法语",
+    "zh-Hant": "法文",
+    "ja": "フランス語",
+    "ko": "프랑스어",
+    "fr": "Français",
+    "de": "Französisch",
+    "es": "Francés"
+  },
+  "German": {
+    "zh-Hans": "德语",
+    "zh-Hant": "德文",
+    "ja": "ドイツ語",
+    "ko": "독일어",
+    "fr": "Allemand",
+    "de": "Deutsch",
+    "es": "Alemán"
   },
   "Good afternoon": {
     "zh-Hans": "下午好",
@@ -440,6 +647,60 @@
     "de": "Wie die Seite des Tresors Sie begrüßt und die Seitenleiste Sie zeigt.",
     "es": "Cómo te saluda la página de la bóveda y cómo te muestra la barra lateral."
   },
+  "Ignore": {
+    "zh-Hans": "忽略",
+    "zh-Hant": "忽略",
+    "ja": "無視",
+    "ko": "무시",
+    "fr": "Ignorer",
+    "de": "Ignorieren",
+    "es": "Ignorar"
+  },
+  "Insert Column Left": {
+    "zh-Hans": "在左侧插入列",
+    "zh-Hant": "在左側插入欄",
+    "ja": "左に列を挿入",
+    "ko": "왼쪽에 열 삽입",
+    "fr": "Insérer une colonne à gauche",
+    "de": "Spalte links einfügen",
+    "es": "Insertar columna a la izquierda"
+  },
+  "Insert Column Right": {
+    "zh-Hans": "在右侧插入列",
+    "zh-Hant": "在右側插入欄",
+    "ja": "右に列を挿入",
+    "ko": "오른쪽에 열 삽입",
+    "fr": "Insérer une colonne à droite",
+    "de": "Spalte rechts einfügen",
+    "es": "Insertar columna a la derecha"
+  },
+  "Insert Row Above": {
+    "zh-Hans": "在上方插入行",
+    "zh-Hant": "在上方插入列",
+    "ja": "上に行を挿入",
+    "ko": "위에 행 삽입",
+    "fr": "Insérer une ligne au-dessus",
+    "de": "Zeile oberhalb einfügen",
+    "es": "Insertar fila arriba"
+  },
+  "Insert Row Below": {
+    "zh-Hans": "在下方插入行",
+    "zh-Hant": "在下方插入列",
+    "ja": "下に行を挿入",
+    "ko": "아래에 행 삽입",
+    "fr": "Insérer une ligne au-dessous",
+    "de": "Zeile unterhalb einfügen",
+    "es": "Insertar fila abajo"
+  },
+  "Insert Table": {
+    "zh-Hans": "插入表格",
+    "zh-Hant": "插入表格",
+    "ja": "表を挿入",
+    "ko": "표 삽입",
+    "fr": "Insérer un tableau",
+    "de": "Tabelle einfügen",
+    "es": "Insertar tabla"
+  },
   "Installed font": {
     "zh-Hans": "已安装的字体",
     "zh-Hant": "已安裝的字體",
@@ -476,6 +737,24 @@
     "de": "Jade",
     "es": "Jade"
   },
+  "Landscape": {
+    "zh-Hans": "横向",
+    "zh-Hant": "橫向",
+    "ja": "横",
+    "ko": "가로",
+    "fr": "Paysage",
+    "de": "Querformat",
+    "es": "Horizontal"
+  },
+  "Language": {
+    "zh-Hans": "语言",
+    "zh-Hant": "語言",
+    "ja": "言語",
+    "ko": "언어",
+    "fr": "Langue",
+    "de": "Sprache",
+    "es": "Idioma"
+  },
   "Large": {
     "zh-Hans": "大",
     "zh-Hant": "大",
@@ -485,6 +764,33 @@
     "de": "Groß",
     "es": "Grande"
   },
+  "Learn Spelling": {
+    "zh-Hans": "学习拼写",
+    "zh-Hant": "學習拼字",
+    "ja": "スペルを学習",
+    "ko": "철자 학습",
+    "fr": "Mémoriser l’orthographe",
+    "de": "Schreibweise lernen",
+    "es": "Aprender ortografía"
+  },
+  "Legal": {
+    "zh-Hans": "Legal",
+    "zh-Hant": "Legal",
+    "ja": "Legal",
+    "ko": "Legal",
+    "fr": "Légal US",
+    "de": "Legal",
+    "es": "Legal"
+  },
+  "Letter": {
+    "zh-Hans": "Letter",
+    "zh-Hant": "Letter",
+    "ja": "Letter",
+    "ko": "Letter",
+    "fr": "Lettre US",
+    "de": "Letter",
+    "es": "Carta"
+  },
   "Light": {
     "zh-Hans": "浅色",
     "zh-Hant": "淺色",
@@ -493,6 +799,33 @@
     "fr": "Clair",
     "de": "Hell",
     "es": "Claro"
+  },
+  "Line spacing": {
+    "zh-Hans": "行距",
+    "zh-Hant": "行距",
+    "ja": "行間",
+    "ko": "줄 간격",
+    "fr": "Interligne",
+    "de": "Zeilenabstand",
+    "es": "Interlineado"
+  },
+  "Loose": {
+    "zh-Hans": "宽松",
+    "zh-Hant": "寬鬆",
+    "ja": "広い",
+    "ko": "넓게",
+    "fr": "Aéré",
+    "de": "Weit",
+    "es": "Amplio"
+  },
+  "Margins": {
+    "zh-Hans": "页边距",
+    "zh-Hant": "邊界",
+    "ja": "余白",
+    "ko": "여백",
+    "fr": "Marges",
+    "de": "Ränder",
+    "es": "Márgenes"
   },
   "Medium": {
     "zh-Hans": "中",
@@ -548,6 +881,42 @@
     "de": "Moos",
     "es": "Musgo"
   },
+  "Move Column Left": {
+    "zh-Hans": "左移一列",
+    "zh-Hant": "左移一欄",
+    "ja": "列を左に移動",
+    "ko": "열을 왼쪽으로 이동",
+    "fr": "Déplacer la colonne à gauche",
+    "de": "Spalte nach links",
+    "es": "Mover columna a la izquierda"
+  },
+  "Move Column Right": {
+    "zh-Hans": "右移一列",
+    "zh-Hant": "右移一欄",
+    "ja": "列を右に移動",
+    "ko": "열을 오른쪽으로 이동",
+    "fr": "Déplacer la colonne à droite",
+    "de": "Spalte nach rechts",
+    "es": "Mover columna a la derecha"
+  },
+  "Move Row Down": {
+    "zh-Hans": "下移一行",
+    "zh-Hant": "下移一列",
+    "ja": "行を下に移動",
+    "ko": "행을 아래로 이동",
+    "fr": "Descendre la ligne",
+    "de": "Zeile nach unten",
+    "es": "Bajar fila"
+  },
+  "Move Row Up": {
+    "zh-Hans": "上移一行",
+    "zh-Hant": "上移一列",
+    "ja": "行を上に移動",
+    "ko": "행을 위로 이동",
+    "fr": "Monter la ligne",
+    "de": "Zeile nach oben",
+    "es": "Subir fila"
+  },
   "Move to Trash": {
     "zh-Hans": "移到废纸篓",
     "zh-Hant": "移到垃圾桶",
@@ -601,6 +970,15 @@
     "fr": "Nouvelle note (⌘N)",
     "de": "Neue Notiz (⌘N)",
     "es": "Nueva nota (⌘N)"
+  },
+  "New page for each top heading": {
+    "zh-Hans": "每个一级标题另起一页",
+    "zh-Hant": "每個一級標題另起一頁",
+    "ja": "大見出しごとに改ページ",
+    "ko": "큰 제목마다 새 페이지",
+    "fr": "Nouvelle page à chaque titre principal",
+    "de": "Neue Seite für jede Hauptüberschrift",
+    "es": "Página nueva por cada título principal"
   },
   "New Vault": {
     "zh-Hans": "新建仓库",
@@ -656,6 +1034,15 @@
     "de": "Noch keine Notizen. Mit der Taste oben eine anlegen.",
     "es": "Aún no hay notas. Crea una con el botón de arriba."
   },
+  "No spelling found": {
+    "zh-Hans": "未找到拼写建议",
+    "zh-Hant": "找不到拼字建議",
+    "ja": "候補が見つかりません",
+    "ko": "철자 제안 없음",
+    "fr": "Aucune suggestion trouvée",
+    "de": "Keine Vorschläge gefunden",
+    "es": "No se han encontrado sugerencias"
+  },
   "No vault": {
     "zh-Hans": "没有仓库",
     "zh-Hant": "沒有儲存庫",
@@ -664,6 +1051,15 @@
     "fr": "Aucun coffre",
     "de": "Kein Tresor",
     "es": "Sin bóveda"
+  },
+  "Normal": {
+    "zh-Hans": "标准",
+    "zh-Hant": "標準",
+    "ja": "標準",
+    "ko": "보통",
+    "fr": "Normale",
+    "de": "Normal",
+    "es": "Normal"
   },
   "Note font": {
     "zh-Hans": "笔记字体",
@@ -683,6 +1079,15 @@
     "de": "Text der Notizen",
     "es": "Texto de las notas"
   },
+  "Note's name": {
+    "zh-Hans": "笔记名称",
+    "zh-Hant": "筆記名稱",
+    "ja": "ノートの名前",
+    "ko": "노트 이름",
+    "fr": "Nom de la note",
+    "de": "Name der Notiz",
+    "es": "Nombre de la nota"
+  },
   "Notes": {
     "zh-Hans": "笔记",
     "zh-Hant": "筆記",
@@ -700,6 +1105,15 @@
     "fr": "Les notes vivent dans un dossier à vous, un coffre, sous forme de simples fichiers Markdown.",
     "de": "Notizen liegen in einem eigenen Ordner, einem Tresor, als einfache Markdown-Dateien.",
     "es": "Las notas viven en una carpeta tuya, una bóveda, como simples archivos Markdown."
+  },
+  "On the page": {
+    "zh-Hans": "页面内容",
+    "zh-Hant": "頁面內容",
+    "ja": "ページの内容",
+    "ko": "페이지 구성",
+    "fr": "Sur la page",
+    "de": "Auf der Seite",
+    "es": "En la página"
   },
   "On this computer": {
     "zh-Hans": "在这台电脑上",
@@ -782,6 +1196,51 @@
     "de": "Orchidee",
     "es": "Orquídea"
   },
+  "Orientation": {
+    "zh-Hans": "方向",
+    "zh-Hant": "方向",
+    "ja": "向き",
+    "ko": "방향",
+    "fr": "Orientation",
+    "de": "Ausrichtung",
+    "es": "Orientación"
+  },
+  "Page": {
+    "zh-Hans": "页面",
+    "zh-Hant": "頁面",
+    "ja": "ページ",
+    "ko": "페이지",
+    "fr": "Page",
+    "de": "Seite",
+    "es": "Página"
+  },
+  "Page numbers": {
+    "zh-Hans": "页码",
+    "zh-Hant": "頁碼",
+    "ja": "ページ番号",
+    "ko": "페이지 번호",
+    "fr": "Numéros de page",
+    "de": "Seitenzahlen",
+    "es": "Números de página"
+  },
+  "Page size": {
+    "zh-Hans": "页面大小",
+    "zh-Hant": "頁面大小",
+    "ja": "用紙サイズ",
+    "ko": "용지 크기",
+    "fr": "Format",
+    "de": "Seitengröße",
+    "es": "Tamaño de página"
+  },
+  "Page {page} of {pages}": {
+    "zh-Hans": "第 {page} 页，共 {pages} 页",
+    "zh-Hant": "第 {page} 頁，共 {pages} 頁",
+    "ja": "{page} / {pages} ページ",
+    "ko": "{page} / {pages}쪽",
+    "fr": "Page {page} sur {pages}",
+    "de": "Seite {page} von {pages}",
+    "es": "Página {page} de {pages}"
+  },
   "Paste": {
     "zh-Hans": "粘贴",
     "zh-Hant": "貼上",
@@ -800,6 +1259,15 @@
     "de": "Immergrün",
     "es": "Pervinca"
   },
+  "Portrait": {
+    "zh-Hans": "纵向",
+    "zh-Hant": "直向",
+    "ja": "縦",
+    "ko": "세로",
+    "fr": "Portrait",
+    "de": "Hochformat",
+    "es": "Vertical"
+  },
   "Previous (⇧↩)": {
     "zh-Hans": "上一个 (⇧↩)",
     "zh-Hant": "上一個 (⇧↩)",
@@ -808,6 +1276,24 @@
     "fr": "Précédent (⇧↩)",
     "de": "Vorheriger (⇧↩)",
     "es": "Anterior (⇧↩)"
+  },
+  "Print (⌘P)": {
+    "zh-Hans": "打印 (⌘P)",
+    "zh-Hant": "列印 (⌘P)",
+    "ja": "プリント (⌘P)",
+    "ko": "인쇄 (⌘P)",
+    "fr": "Imprimer (⌘P)",
+    "de": "Drucken (⌘P)",
+    "es": "Imprimir (⌘P)"
+  },
+  "Print…": {
+    "zh-Hans": "打印…",
+    "zh-Hant": "列印…",
+    "ja": "プリント…",
+    "ko": "인쇄…",
+    "fr": "Imprimer…",
+    "de": "Drucken …",
+    "es": "Imprimir…"
   },
   "Quit Onyx": {
     "zh-Hans": "退出 Onyx",
@@ -1079,6 +1565,24 @@
     "de": "Klein",
     "es": "Pequeño"
   },
+  "Sort A to Z": {
+    "zh-Hans": "按 A 到 Z 排序",
+    "zh-Hant": "依 A 到 Z 排序",
+    "ja": "昇順に並べ替え",
+    "ko": "오름차순 정렬",
+    "fr": "Trier de A à Z",
+    "de": "Von A bis Z sortieren",
+    "es": "Ordenar de A a Z"
+  },
+  "Sort Z to A": {
+    "zh-Hans": "按 Z 到 A 排序",
+    "zh-Hant": "依 Z 到 A 排序",
+    "ja": "降順に並べ替え",
+    "ko": "내림차순 정렬",
+    "fr": "Trier de Z à A",
+    "de": "Von Z bis A sortieren",
+    "es": "Ordenar de Z a A"
+  },
   "Source": {
     "zh-Hans": "源代码",
     "zh-Hant": "原始碼",
@@ -1097,6 +1601,24 @@
     "de": "Quelltext (⌃2)",
     "es": "Código fuente (⌃2)"
   },
+  "Spanish": {
+    "zh-Hans": "西班牙语",
+    "zh-Hant": "西班牙文",
+    "ja": "スペイン語",
+    "ko": "스페인어",
+    "fr": "Espagnol",
+    "de": "Spanisch",
+    "es": "Español"
+  },
+  "Spelling": {
+    "zh-Hans": "拼写",
+    "zh-Hant": "拼字",
+    "ja": "スペル",
+    "ko": "맞춤법",
+    "fr": "Orthographe",
+    "de": "Rechtschreibung",
+    "es": "Ortografía"
+  },
   "Still up": {
     "zh-Hans": "还没睡",
     "zh-Hant": "還沒睡",
@@ -1114,6 +1636,15 @@
     "fr": "Système",
     "de": "System",
     "es": "Sistema"
+  },
+  "Tabloid": {
+    "zh-Hans": "Tabloid",
+    "zh-Hant": "Tabloid",
+    "ja": "タブロイド",
+    "ko": "타블로이드",
+    "fr": "Tabloïd",
+    "de": "Tabloid",
+    "es": "Tabloide"
   },
   "Teal": {
     "zh-Hans": "青绿",
@@ -1169,6 +1700,15 @@
     "de": "Die Notiz konnte nicht angelegt werden: {why}",
     "es": "No se pudo crear la nota: {why}"
   },
+  "The note could not be printed: {why}": {
+    "zh-Hans": "无法打印这篇笔记：{why}",
+    "zh-Hant": "無法列印這篇筆記：{why}",
+    "ja": "ノートをプリントできませんでした: {why}",
+    "ko": "노트를 인쇄할 수 없습니다: {why}",
+    "fr": "La note n’a pas pu être imprimée : {why}",
+    "de": "Die Notiz konnte nicht gedruckt werden: {why}",
+    "es": "No se pudo imprimir la nota: {why}"
+  },
   "The note could not be read: {why}": {
     "zh-Hans": "无法读取笔记：{why}",
     "zh-Hant": "無法讀取筆記：{why}",
@@ -1186,6 +1726,15 @@
     "fr": "La note n’a pas pu être écrite : {why}",
     "de": "Die Notiz konnte nicht geschrieben werden: {why}",
     "es": "No se pudo escribir la nota: {why}"
+  },
+  "The PDF was not made: {why}": {
+    "zh-Hans": "未能生成 PDF：{why}",
+    "zh-Hant": "未能產生 PDF：{why}",
+    "ja": "PDF を作成できませんでした：{why}",
+    "ko": "PDF를 만들지 못했습니다: {why}",
+    "fr": "Le PDF n’a pas été créé : {why}",
+    "de": "Das PDF wurde nicht erstellt: {why}",
+    "es": "No se creó el PDF: {why}"
   },
   "The picture could not be used: {why}": {
     "zh-Hans": "无法使用这张图片：{why}",
@@ -1222,6 +1771,15 @@
     "fr": "Le coffre n'a pas été créé : {why}",
     "de": "Der Tresor wurde nicht erstellt: {why}",
     "es": "La bóveda no se creó: {why}"
+  },
+  "Tight": {
+    "zh-Hans": "紧凑",
+    "zh-Hant": "緊密",
+    "ja": "狭い",
+    "ko": "좁게",
+    "fr": "Serré",
+    "de": "Eng",
+    "es": "Estrecho"
   },
   "Toggle Full Screen": {
     "zh-Hans": "进入或退出全屏幕",

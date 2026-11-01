@@ -248,6 +248,12 @@ pub fn kbd_hint(text: &str, theme: &gpui_component::Theme) -> Div {
     key_text(text).text_color(theme.muted_foreground)
 }
 
+/// One key on its cap by its name: `key_text` reads a name as a key only
+/// after a sign.
+pub fn kbd_key(key: &str, theme: &gpui_component::Theme) -> Div {
+    div().flex_shrink_0().text_color(theme.muted_foreground).child(key_cap(key))
+}
+
 /// A hover's label, with the keys it names on caps: what every
 /// `managed_tooltip` in the window builds. The toolkit's managed tooltip
 /// comes in, and slides to the next element on a row; gpui's plain

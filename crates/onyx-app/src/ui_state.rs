@@ -49,6 +49,9 @@ pub struct UiState {
     /// `mode` is. Not `wide`, which earlier builds kept as a list of
     /// notes: a file with that list has to go on reading.
     pub page_width: Option<String>,
+    /// The folder the last PDF went to, where the next save panel opens.
+    /// One since moved or gone is passed over for the note's own.
+    pub export_folder: Option<PathBuf>,
 }
 
 fn file() -> std::path::PathBuf {

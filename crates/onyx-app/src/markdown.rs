@@ -9,6 +9,7 @@
 
 use std::ops::Range;
 
+use onyx_core::html::{self, Rgb, Style};
 use pulldown_cmark::{CodeBlockKind, Event, LinkType, Options, Parser, Tag, TagEnd};
 
 use crate::lines::{list_line, quote_line, ListKind};
@@ -78,7 +79,17 @@ pub enum SpanKind {
     Highlight,
     Math,
     Footnote,
-    Html,
+    Underline,
+    Sub,
+    Sup,
+    Small,
+    /// A tag's ink, its wash, or both.
+    Color(Option<Rgb>, Option<Rgb>),
+    /// `<br>`: the words after it stand on a line of their own.
+    Break,
+    /// A tag with no look of its own, or left unpaired; a comment; a
+    /// backslash before a mark. Each is hidden and nothing else.
+    Quiet,
 }
 
 /// An inline span in the whole text: its range, what it is, and its
@@ -108,12 +119,45 @@ pub enum Align {
 
 /// A table, read from its lines: the header row first, the separator
 /// left out.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct Table {
     pub first: usize,
     pub last: usize,
     pub aligns: Vec<Align>,
     pub rows: Vec<Vec<String>>,
+    /// Each row's cells, as bytes of their line: the words between the
+    /// bars, or an empty range where a cell holds none.
+    pub cells: Vec<Vec<Range<usize>>>,
+    /// Each column's share of the room in hundredths, when a person has
+    /// set them (`tables::shares_of`).
+    pub shares: Option<Vec<f32>>,
+}
+
+impl Table {
+    /// The line a row is written on: the separator stands after the head.
+    pub fn line_of(&self, row: usize) -> usize {
+        if row == 0 { self.first } else { self.first + 1 + row }
+    }
+
+    /// The row written on a line; the separator is none.
+    pub fn row_of(&self, line: usize) -> Option<usize> {
+        match line.checked_sub(self.first)? {
+            0 => Some(0),
+            1 => None,
+            below => Some(below - 1),
+        }
+    }
+
+    pub fn columns(&self) -> usize {
+        self.aligns.len().max(1)
+    }
+}
+
+/// A block of HTML: its lines.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct HtmlBlock {
+    pub first: usize,
+    pub last: usize,
 }
 
 /// A fenced block of code: its fence lines and its language.
@@ -144,6 +188,7 @@ pub struct Analysis {
     pub line_spans: Vec<Vec<usize>>,
     pub tables: Vec<Table>,
     pub code_blocks: Vec<CodeBlock>,
+    pub html_blocks: Vec<HtmlBlock>,
     pub line_starts: Vec<usize>,
 }
 
@@ -160,6 +205,19 @@ impl Analysis {
     /// The code block a line is in, fences included.
     pub fn code_block_at(&self, line: usize) -> Option<&CodeBlock> {
         self.code_blocks.iter().find(|b| b.first <= line && line <= b.last)
+    }
+
+    /// The block of HTML a line is in.
+    pub fn html_block_at(&self, line: usize) -> Option<&HtmlBlock> {
+        self.html_blocks.iter().find(|b| b.first <= line && line <= b.last)
+    }
+
+    /// The table a line is in, by the line's kind.
+    pub fn table_at(&self, line: usize) -> Option<&Table> {
+        match self.lines.get(line)?.kind {
+            LineKind::TableFirst(t) | LineKind::TableRow(t) => self.tables.get(t),
+            _ => None,
+        }
     }
 }
 
@@ -196,6 +254,8 @@ pub fn analyze(text: &str) -> Analysis {
     }
     let mut links: Vec<OpenLink> = Vec::new();
     let mut item_line: Option<usize> = None;
+    // Tags among the words waiting for their closing one.
+    let mut tags: Vec<(String, Style, Range<usize>)> = Vec::new();
 
     for (ev, r) in parser.into_offset_iter() {
         match ev {
@@ -304,11 +364,13 @@ pub fn analyze(text: &str) -> Analysis {
                 }
             }
             Event::Start(Tag::HtmlBlock) => {
-                for l in line_of(r.start)..=last_line_of(&r).min(n - 1) {
+                let (first, last) = (line_of(r.start), last_line_of(&r).min(n - 1));
+                for l in first..=last {
                     if lines[l].kind == LineKind::Text {
                         lines[l].kind = LineKind::Html;
                     }
                 }
+                a.html_blocks.push(HtmlBlock { first, last });
             }
             Event::Rule => {
                 lines[line_of(r.start)].kind = LineKind::Rule;
@@ -326,12 +388,19 @@ pub fn analyze(text: &str) -> Analysis {
                 }
                 let ix = a.tables.len();
                 let mut rows = Vec::new();
+                let mut spots = Vec::new();
                 for l in first..=last {
                     if l != first + 1 {
-                        rows.push(cells(line_text(l)));
+                        let t = line_text(l);
+                        let from = crate::tables::body_start(t);
+                        rows.push(cells(&t[from..]));
+                        let mut row = cell_ranges(t, from);
+                        row.truncate(aligns.len().max(1));
+                        spots.push(row);
                     }
                     lines[l].kind = if l == first { LineKind::TableFirst(ix) } else { LineKind::TableRow(ix) };
                 }
+                let shares = (first < last).then(|| crate::tables::shares_of(line_text(first + 1))).flatten();
                 let aligns = aligns
                     .iter()
                     .map(|al| match al {
@@ -341,7 +410,7 @@ pub fn analyze(text: &str) -> Analysis {
                         pulldown_cmark::Alignment::None => Align::None,
                     })
                     .collect();
-                a.tables.push(Table { first, last, aligns, rows });
+                a.tables.push(Table { first, last, aligns, rows, cells: spots, shares });
             }
             Event::Start(Tag::Emphasis) => a.spans.push(Span { range: r.clone(), kind: SpanKind::Em, open: r.start..r.start + 1, close: r.end - 1..r.end }),
             Event::Start(Tag::Strong) => a.spans.push(Span { range: r.clone(), kind: SpanKind::Strong, open: r.start..r.start + 2, close: r.end - 2..r.end }),
@@ -359,7 +428,35 @@ pub fn analyze(text: &str) -> Analysis {
                 a.spans.push(Span { range: r.clone(), kind: SpanKind::Math, open: r.start..r.start + m, close: r.end - m..r.end });
             }
             Event::FootnoteReference(_) => a.spans.push(Span { range: r.clone(), kind: SpanKind::Footnote, open: r.start..r.start, close: r.end..r.end }),
-            Event::InlineHtml(_) => a.spans.push(Span { range: r.clone(), kind: SpanKind::Html, open: r.start..r.start, close: r.end..r.end }),
+            Event::InlineHtml(tag) => match html::read_tag(&tag) {
+                html::Tag::Comment => a.spans.push(Span { range: r.clone(), kind: SpanKind::Quiet, open: r.clone(), close: r.end..r.end }),
+                html::Tag::Break => a.spans.push(Span { range: r.clone(), kind: SpanKind::Break, open: r.clone(), close: r.end..r.end }),
+                html::Tag::Image { src, alt, .. } => {
+                    let words = if alt.is_empty() { r.end..r.end } else { r.start + alt.start..r.start + alt.end };
+                    a.spans.push(Span { range: r.clone(), kind: SpanKind::Image(src), open: r.start..words.start, close: words.end..r.end });
+                }
+                html::Tag::Open { name, style } => tags.push((name, style, r.clone())),
+                html::Tag::Close { name } => match tags.iter().rposition(|(n, _, _)| *n == name) {
+                    Some(at) => {
+                        for (_, _, left) in tags.drain(at + 1..) {
+                            a.spans.push(Span { range: left.clone(), kind: SpanKind::Quiet, open: left.clone(), close: left.end..left.end });
+                        }
+                        if let Some((_, style, open)) = tags.pop() {
+                            a.spans.push(Span { range: open.start..r.end, kind: span_of(style), open, close: r.clone() });
+                        }
+                    }
+                    None => a.spans.push(Span { range: r.clone(), kind: SpanKind::Quiet, open: r.clone(), close: r.end..r.end }),
+                },
+                html::Tag::Not => {}
+            },
+            Event::End(TagEnd::Paragraph | TagEnd::Heading(_) | TagEnd::TableCell | TagEnd::Item) => {
+                for (_, _, left) in tags.drain(..) {
+                    a.spans.push(Span { range: left.clone(), kind: SpanKind::Quiet, open: left.clone(), close: left.end..left.end });
+                }
+                if let Some(l) = links.last_mut() {
+                    l.words_end = l.words_end.max(r.end.min(l.range.end));
+                }
+            }
             Event::Start(Tag::Link { link_type, dest_url, .. }) => {
                 let (kind, open_len) = match link_type {
                     LinkType::WikiLink { .. } => (SpanKind::WikiLink(dest_url.to_string()), 2),
@@ -389,16 +486,16 @@ pub fn analyze(text: &str) -> Analysis {
                 if let Some(l) = links.last_mut() {
                     l.words_end = r.end;
                 }
+                // A backslash before a mark is hidden as the mark is.
+                let slashes = text[..r.start].bytes().rev().take_while(|b| *b == b'\\').count();
+                if slashes % 2 == 1 && text[r.start..].starts_with(|c: char| c.is_ascii_punctuation()) && lines[line_of(r.start)].kind != LineKind::Code {
+                    let at = r.start - 1;
+                    a.spans.push(Span { range: at..r.start, kind: SpanKind::Quiet, open: at..r.start, close: r.start..r.start });
+                }
                 // `==words==`, which the parser does not know.
-                let s = &text[r.clone()];
-                let mut from = 0;
-                while let Some(open) = s[from..].find("==").map(|i| i + from) {
-                    let after = open + 2;
-                    let Some(close) = s[after..].find("==").map(|i| i + after) else { break };
-                    if close > after && !s[after..close].starts_with(' ') && !s[after..close].ends_with(' ') {
-                        a.spans.push(Span { range: r.start + open..r.start + close + 2, kind: SpanKind::Highlight, open: r.start + open..r.start + after, close: r.start + close..r.start + close + 2 });
-                    }
-                    from = close + 2;
+                for h in onyx_core::pdf::highlights(&text[r.clone()]) {
+                    let (from, to) = (r.start + h.start, r.start + h.end);
+                    a.spans.push(Span { range: from..to, kind: SpanKind::Highlight, open: from..from + 2, close: to - 2..to });
                 }
             }
             Event::Start(_) | Event::End(_) | Event::Html(_) | Event::SoftBreak | Event::HardBreak => {
@@ -453,6 +550,166 @@ pub fn analyze(text: &str) -> Analysis {
     a
 }
 
+/// What a tag does to its words, as a span of the kind the text's own
+/// marks make, so a tag and its markdown read alike.
+fn span_of(style: Style) -> SpanKind {
+    match style {
+        Style::Strong => SpanKind::Strong,
+        Style::Em => SpanKind::Em,
+        Style::Underline => SpanKind::Underline,
+        Style::Strike => SpanKind::Strike,
+        Style::Mark => SpanKind::Highlight,
+        Style::Code => SpanKind::Code,
+        Style::Sub => SpanKind::Sub,
+        Style::Sup => SpanKind::Sup,
+        Style::Small => SpanKind::Small,
+        Style::Link(url) => SpanKind::Link(url),
+        Style::Color { ink, wash } => SpanKind::Color(ink, wash),
+        Style::Plain => SpanKind::Quiet,
+    }
+}
+
+/// A run of a note's prose, for the check: where it starts in the text,
+/// its words with everything that is not prose blanked, byte for byte,
+/// and whether it is a paragraph, which has sentences.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Prose {
+    pub start: usize,
+    pub text: String,
+    pub sentences: bool,
+}
+
+/// What of the note is prose: the whole text with what is not blanked,
+/// byte for byte, and its runs, one to a block, so a check reads a list's
+/// items or a table's cells apart and a change costs only its own block.
+pub fn prose(text: &str, a: &Analysis) -> (String, Vec<Prose>) {
+    let mut mask = text.as_bytes().to_vec();
+    let blank = |mask: &mut Vec<u8>, r: Range<usize>| {
+        for b in mask.iter_mut().take(r.end.min(text.len())).skip(r.start.min(text.len())) {
+            if *b != b'\n' {
+                *b = b' ';
+            }
+        }
+    };
+    let line_range = |i: usize| a.line_starts[i]..a.line_starts.get(i + 1).map_or(text.len(), |e| e - 1);
+    for s in &a.spans {
+        match &s.kind {
+            SpanKind::Code | SpanKind::Math | SpanKind::Footnote | SpanKind::Image(_) | SpanKind::Quiet | SpanKind::Break => blank(&mut mask, s.range.clone()),
+            SpanKind::WikiLink(_) if s.open.len() == 2 => blank(&mut mask, s.range.clone()),
+            _ => {
+                blank(&mut mask, s.open.clone());
+                blank(&mut mask, s.close.clone());
+            }
+        }
+    }
+    for (i, info) in a.lines.iter().enumerate() {
+        let from = a.line_starts[i];
+        for m in &info.marks {
+            blank(&mut mask, from + m.start..from + m.end);
+        }
+        if let Some(m) = &info.list {
+            blank(&mut mask, from..from + m.marker.end);
+        }
+        if matches!(info.kind, LineKind::Code | LineKind::FenceOpen(_) | LineKind::FenceClose | LineKind::FrontMatter | LineKind::FrontMatterEdge | LineKind::Html | LineKind::Rule | LineKind::SetextUnderline) {
+            blank(&mut mask, line_range(i));
+        }
+    }
+    for t in &a.tables {
+        for l in t.first..=t.last {
+            let range = line_range(l);
+            let keep: Vec<Range<usize>> = t.row_of(l).and_then(|r| t.cells.get(r)).cloned().unwrap_or_default();
+            let mut at = range.start;
+            for c in &keep {
+                blank(&mut mask, at..range.start + c.start);
+                at = range.start + c.end;
+            }
+            blank(&mut mask, at..range.end);
+        }
+    }
+    for b in &a.html_blocks {
+        blank(&mut mask, a.line_starts[b.first]..line_range(b.last).end);
+    }
+    let whole = String::from_utf8(mask).unwrap_or_else(|_| " ".repeat(text.len()));
+    let mut runs = Vec::new();
+    let mut push = |range: Range<usize>, sentences: bool| {
+        if let Some(words) = whole.get(range.clone()) {
+            if !words.trim().is_empty() {
+                runs.push(Prose { start: range.start, text: words.to_string(), sentences });
+            }
+        }
+    };
+    let n = a.lines.len();
+    let mut i = 0;
+    while i < n {
+        let info = &a.lines[i];
+        match info.kind {
+            LineKind::Heading(_) => push(line_range(i), false),
+            LineKind::TableFirst(t) => {
+                let table = &a.tables[t];
+                for (r, cells) in table.cells.iter().enumerate() {
+                    let from = a.line_starts[table.line_of(r)];
+                    for c in cells {
+                        push(from + c.start..from + c.end, false);
+                    }
+                }
+                i = table.last;
+            }
+            LineKind::Text => {
+                let sentences = info.list.is_none();
+                let start = i;
+                while i + 1 < n && a.lines[i + 1].kind == LineKind::Text && a.lines[i + 1].list.is_none() && a.lines[i + 1].quote_depth == info.quote_depth {
+                    i += 1;
+                }
+                push(a.line_starts[start]..line_range(i).end, sentences);
+            }
+            _ => {}
+        }
+        i += 1;
+    }
+    (whole, runs)
+}
+
+/// Where each cell of a row stands in its line, the words between the
+/// bars, from `from`, where the row begins. A cell of no words is an
+/// empty range past the first space after its bar.
+pub fn cell_ranges(line: &str, from: usize) -> Vec<Range<usize>> {
+    let bytes = line.as_bytes();
+    let end = line.trim_end().len();
+    let mut at = from;
+    if bytes.get(at) == Some(&b'|') {
+        at += 1;
+    }
+    let mut out = Vec::new();
+    let mut cell = at;
+    let mut i = at;
+    let mut push = |a: usize, b: usize| {
+        let part = &line[a..b];
+        let trimmed = part.trim();
+        out.push(if trimmed.is_empty() {
+            let spot = (a + 1).min(b);
+            spot..spot
+        } else {
+            let lead = part.len() - part.trim_start().len();
+            a + lead..a + lead + trimmed.len()
+        });
+    };
+    while i < end {
+        match bytes[i] {
+            b'\\' => i += 2,
+            b'|' => {
+                push(cell, i);
+                cell = i + 1;
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    if cell < end {
+        push(cell, end);
+    }
+    out
+}
+
 /// A table row's cells, as written between its bars, trimmed. A bar
 /// escaped with a backslash is part of its cell.
 pub fn cells(row: &str) -> Vec<String> {
@@ -483,14 +740,22 @@ pub fn cells(row: &str) -> Vec<String> {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Shown {
     pub text: String,
-    /// (start in `text`, start in the source, length), in order.
-    pub pieces: Vec<(usize, usize, usize)>,
+    /// (start in `text`, start in the source, length in the source,
+    /// length in `text`), in order. The two lengths differ only for a
+    /// character drawn as another (`Shown::with`).
+    pub pieces: Vec<(usize, usize, usize, usize)>,
 }
 
 impl Shown {
     /// `source` with `hidden` taken out. The ranges are in the line's bytes,
     /// in any order, and may overlap.
     pub fn new(source: &str, hidden: &[Range<usize>]) -> Shown {
+        Self::with(source, hidden, &[])
+    }
+
+    /// As `new`, with some bytes drawn as other words: `²` for the `2` in
+    /// `<sup>2</sup>`. `swaps` are in order and hold no hidden byte.
+    pub fn with(source: &str, hidden: &[Range<usize>], swaps: &[(Range<usize>, String)]) -> Shown {
         let mut hidden: Vec<Range<usize>> = hidden.iter().filter(|r| r.end > r.start).cloned().collect();
         hidden.sort_by_key(|r| r.start);
         let mut merged: Vec<Range<usize>> = Vec::new();
@@ -504,24 +769,40 @@ impl Shown {
         let mut at = 0;
         for r in merged.iter().chain(std::iter::once(&(source.len()..source.len()))) {
             let start = r.start.min(source.len());
-            if start > at {
-                shown.pieces.push((shown.text.len(), at, start - at));
-                shown.text.push_str(&source[at..start]);
+            let mut from = at;
+            for (swap, with) in swaps {
+                if swap.start < from || swap.end > start {
+                    continue;
+                }
+                if swap.start > from {
+                    shown.push_same(source, from, swap.start);
+                }
+                shown.pieces.push((shown.text.len(), swap.start, swap.len(), with.len()));
+                shown.text.push_str(with);
+                from = swap.end;
+            }
+            if start > from {
+                shown.push_same(source, from, start);
             }
             at = at.max(r.end.min(source.len()));
         }
         shown
     }
 
+    fn push_same(&mut self, source: &str, from: usize, to: usize) {
+        self.pieces.push((self.text.len(), from, to - from, to - from));
+        self.text.push_str(&source[from..to]);
+    }
+
     /// Where a byte of the source stands in the words; a hidden byte
     /// stands where its hidden run begins.
     pub fn to_shown(&self, source_col: usize) -> usize {
-        for &(d, s, len) in &self.pieces {
+        for &(d, s, len, out) in &self.pieces {
             if source_col < s {
                 return d;
             }
             if source_col <= s + len {
-                return d + (source_col - s);
+                return if len == out { d + (source_col - s) } else if source_col == s { d } else { d + out };
             }
         }
         self.text.len()
@@ -532,9 +813,9 @@ impl Shown {
     /// hidden bytes: a caret put at a span's left edge stands before the
     /// whole span, and the editor snaps one at the right edge past it.
     pub fn to_source(&self, shown_col: usize, source_len: usize) -> usize {
-        for &(d, s, len) in &self.pieces {
-            if shown_col <= d + len {
-                return s + shown_col.saturating_sub(d);
+        for &(d, s, len, out) in &self.pieces {
+            if shown_col <= d + out {
+                return if len == out { s + shown_col.saturating_sub(d) } else if shown_col <= d { s } else { s + len };
             }
         }
         source_len
@@ -542,7 +823,7 @@ impl Shown {
 
     /// Whether a byte of the source is among the hidden.
     pub fn is_hidden(&self, source_col: usize) -> bool {
-        !self.pieces.iter().any(|&(_, s, len)| source_col >= s && source_col < s + len)
+        !self.pieces.iter().any(|&(_, s, len, _)| source_col >= s && source_col < s + len)
     }
 }
 
@@ -697,9 +978,74 @@ mod tests {
     }
 
     #[test]
+    fn a_character_drawn_as_another_maps_both_ways() {
+        // x<sup>2</sup>y with the tags hidden and the 2 drawn raised.
+        let src = "x<sup>2</sup>y";
+        let s = Shown::with(src, &[1..6, 7..13], &[(6..7, "²".to_string())]);
+        assert_eq!(s.text, "x²y");
+        assert_eq!(s.to_shown(6), 1);
+        assert_eq!(s.to_shown(7), 3);
+        assert_eq!(s.to_shown(13), 3);
+        assert_eq!(s.to_source(1, src.len()), 1);
+        assert_eq!(s.to_source(3, src.len()), 7);
+        assert_eq!(s.to_source(4, src.len()), 14);
+    }
+
+    #[test]
     fn table_cells_are_split_on_unescaped_bars() {
         assert_eq!(cells("| a \\| b | c |"), vec!["a | b", "c"]);
         assert_eq!(cells("x|y"), vec!["x", "y"]);
+    }
+
+    #[test]
+    fn a_cell_knows_where_it_stands() {
+        let line = "| ab | 费城 |  | c\\|d |";
+        let cells = cell_ranges(line, 0);
+        assert_eq!(cells.iter().map(|c| &line[c.clone()]).collect::<Vec<_>>(), vec!["ab", "费城", "", "c\\|d"]);
+        assert!(cells[2].is_empty());
+        assert_eq!(cell_ranges("a | b", 0).iter().map(|c| &"a | b"[c.clone()]).collect::<Vec<_>>(), vec!["a", "b"]);
+        assert_eq!(cell_ranges("> | a |", 2).len(), 1);
+        assert_eq!(cell_ranges("||", 0), vec![1..1]);
+    }
+
+    #[test]
+    fn a_table_reads_its_words_as_any_line_does() {
+        let text = "| [a](http://x) | **b** |\n|---|---|\n| c<br>d | e\\|f |";
+        let a = analyze(text);
+        let t = &a.tables[0];
+        assert_eq!((t.line_of(0), t.line_of(1), t.row_of(1), t.row_of(2)), (0, 2, None, Some(1)));
+        assert!(a.line_spans[0].iter().any(|&s| matches!(a.spans[s].kind, SpanKind::Link(_))));
+        assert!(a.line_spans[2].iter().any(|&s| a.spans[s].kind == SpanKind::Break));
+        assert!(a.line_spans[2].iter().any(|&s| a.spans[s].kind == SpanKind::Quiet), "the backslash before a bar is hidden");
+    }
+
+    #[test]
+    fn tags_among_the_words_read_as_marks_do() {
+        let text = "a <u>under</u> <b>bold</b> <span style=\"color: red\">red</span> <mark>hi</mark> <!-- no --> <x>y</x> <i>open";
+        let a = analyze(text);
+        let find = |k: &SpanKind| a.spans.iter().find(|s| &s.kind == k).unwrap().clone();
+        let s = find(&SpanKind::Underline);
+        assert_eq!((&text[s.open.clone()], &text[s.inner()], &text[s.close.clone()]), ("<u>", "under", "</u>"));
+        assert_eq!(&text[find(&SpanKind::Strong).inner()], "bold");
+        assert_eq!(&text[find(&SpanKind::Highlight).inner()], "hi");
+        assert_eq!(&text[find(&SpanKind::Color(Some(Rgb(255, 0, 0)), None)).inner()], "red");
+        // The comment, `<x>`, `</x>` and the `<i>` left open are hidden.
+        let quiet: Vec<&str> = a.spans.iter().filter(|s| s.kind == SpanKind::Quiet).map(|s| &text[s.range.clone()]).collect();
+        assert_eq!(quiet, vec!["<!-- no -->", "<x>y</x>", "<i>"]);
+    }
+
+    #[test]
+    fn prose_is_the_words_and_nothing_else() {
+        let text = "---\ntitle: x\n---\n# Heading **bold**\n\nOne `code` [word](http://x.y) [[Note]] and $m$\ntwo\n\n- item\n- more\n\n```\nfn x\n```\n\n| cell | two |\n|---|---|\n| three | four |\n\n<div>skip</div>\n";
+        let a = analyze(text);
+        let (whole, runs) = prose(text, &a);
+        assert_eq!(whole.len(), text.len());
+        let words: Vec<(String, bool)> = runs.iter().map(|r| (r.text.split_whitespace().collect::<Vec<_>>().join(" "), r.sentences)).collect();
+        let want = [("Heading bold", false), ("One word and two", true), ("item", false), ("more", false), ("cell", false), ("two", false), ("three", false), ("four", false)];
+        assert_eq!(words, want.iter().map(|(w, s)| (w.to_string(), *s)).collect::<Vec<_>>());
+        for r in &runs {
+            assert_eq!(whole.get(r.start..r.start + r.text.len()), Some(r.text.as_str()));
+        }
     }
 
     #[test]

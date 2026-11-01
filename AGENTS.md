@@ -23,6 +23,7 @@ Each is here because breaking it loses data or brings back a fixed bug. The doc 
 - **A note is written whole, through `onyx_core::vault::write`**, a temp file and a rename, never in place and never in part, and only when it is left or at ⌘S, never on a keystroke or a timer. (`docs/window.md`)
 - **A note that has changes is never replaced by what the disk holds.** The disk's text goes in only while nothing is unsaved. (`docs/window.md`)
 - **Nothing goes straight off the disk.** A note or a folder deleted goes to the system's trash (`vault::trash`). (`docs/window.md`)
+- **A row's height goes by its kind, never by what stands in it or beside it**, in all three modes, from `Rhythm`: a word typed on a blank line moves nothing. (`docs/editor.md`)
 - **The editor never slices a line at a byte that is not a character's boundary**, and the caret steps by grapheme (`lines::Doc`). (`docs/editor.md`)
 - **Typed text arrives through gpui's input handler, never through a key binding**, so an input method composes in place. Keys that move or change are actions. (`docs/editor.md`)
 - **A change made in many places at once is one step of undo** (`Doc::replace_many`): a list renumbered after Enter is not ten steps. (`docs/editor.md`)
@@ -39,10 +40,11 @@ Each is here because breaking it loses data or brings back a fixed bug. The doc 
 
 | You are about to touch | Read first |
 |---|---|
-| `editor.rs`, `lines.rs`, `markdown.rs`: the live preview, the caret, the keys, the modes | `docs/editor.md` |
+| `editor.rs`, `editor/`, `layout.rs`, `lines.rs`, `markdown.rs`, `tables.rs`; `onyx-core/src/rhythm.rs`, `html.rs`, `check.rs`: the live preview, spacing, the caret, the keys, the modes, tables, HTML, pictures, spelling | `docs/editor.md` |
 | `shell.rs`, `tabs.rs`, `ui_state.rs`, `main.rs`: the sidebar, the vault, a note's life, the tabs, the strip, the landing page, the menus; `onyx-core/src/vault.rs` | `docs/window.md` |
 | `settings.rs`, `look.rs`, `fonts.rs`, `assets.rs`, `themes/onyx.json`, `scripts/icon/`; anything a person sees, new or changed | `docs/design.md`, then the doc of the part it is in |
 | `sys.rs`, `csd.rs`, `update.rs`, `process.rs`, `vendor/`, `Cargo.toml`, `.github/workflows/`, any `cfg` for an OS | `docs/platform.md` |
+| `export.rs`, `onyx-core/src/pdf.rs`, `pdf/template.typ`: Export to PDF, printing, its sheet, how a note looks on paper | `docs/export.md` |
 | Checking a change in the window from a script | `docs/probing.md` |
 | Bumping the version and cutting a release | `docs/release.md` |
 
@@ -56,13 +58,22 @@ crates/onyx-core/          everything without a window
   src/paths.rs               ~/.onyx, overridden by ONYX_HOME; atomic writes
   src/update.rs              the newest release and its installer
   src/process.rs             every child process, with no console window on Windows
-  src/bin/onyx-core.rs       paths | config | update | vault <folder> [new <name>]
+  src/pdf.rs                 a note set as a PDF by Typst; pdf/ holds its template, code theme and math
+  src/rhythm.rs              the note's vertical measures, for the canvas and the page
+  src/html.rs                the HTML a note may hold, read one way for both
+  src/check.rs               spelling and grammar
+  src/bin/onyx-core.rs       paths | config | update | vault <folder> [new <name>] | pdf <note> <out> <fonts>
   tests/core.rs
 crates/onyx-app/           the window
   src/main.rs                menus, key bindings, the main window, the probe's variables
   src/shell.rs               the frame, the sidebar (the vault's tree), the strip, the landing page, a note's life, the tabs
   src/tabs.rs                the tabs' drawing and motion: a folder's on one pill, the plate, the widths
-  src/editor.rs              the live-preview editor: layout, paint, the caret, the keys, the input method
+  src/export.rs              Export to PDF: the sheet, its preview, the file; printing
+  src/editor.rs              the live-preview editor: paint, the caret, the keys, the input method
+  src/editor/cells.rs        a table on the canvas: the caret in its cells, its handles and edges
+  src/editor/writing.rs      a note's spelling and grammar, off the window's thread
+  src/layout.rs              a note laid out: Rhythm, Reader, Flow, the rows, the grid
+  src/tables.rs              a table's lines changed as a whole, as text
   src/lines.rs               a note's text as lines: places, graphemes, edits, undo
   src/markdown.rs            what each line is and every inline span with its marks
   src/settings.rs            the settings window: Appearance, Editor, About

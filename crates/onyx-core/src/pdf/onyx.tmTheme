@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!-- Code's inks on paper: the light appearance's (`look::INKS_LIGHT`). -->
+<plist version="1.0">
+<dict>
+  <key>name</key><string>Onyx</string>
+  <key>settings</key>
+  <array>
+    <dict><key>settings</key><dict><key>foreground</key><string>#1F1F1F</string></dict></dict>
+    <dict><key>scope</key><string>comment</string><key>settings</key><dict><key>foreground</key><string>#85818F</string></dict></dict>
+    <dict><key>scope</key><string>string, markup.raw</string><key>settings</key><dict><key>foreground</key><string>#8A6A1E</string></dict></dict>
+    <dict><key>scope</key><string>constant.character.escape, string.regexp</string><key>settings</key><dict><key>foreground</key><string>#A3566F</string></dict></dict>
+    <dict><key>scope</key><string>constant, keyword.control, storage.modifier, meta.preprocessor</string><key>settings</key><dict><key>foreground</key><string>#7A6398</string></dict></dict>
+    <dict><key>scope</key><string>keyword, storage.type.function, storage.type.class, entity.name.tag, variable.language</string><key>settings</key><dict><key>foreground</key><string>#286983</string></dict></dict>
+    <dict><key>scope</key><string>entity.name.function, support.function, variable.function</string><key>settings</key><dict><key>foreground</key><string>#A3566F</string></dict></dict>
+    <dict><key>scope</key><string>entity.name.type, entity.name.class, entity.name.struct, entity.name.enum, support.type, support.class, storage.type, entity.other.attribute-name</string><key>settings</key><dict><key>foreground</key><string>#357783</string></dict></dict>
+    <dict><key>scope</key><string>keyword.operator, punctuation</string><key>settings</key><dict><key>foreground</key><string>#1F1F1F</string></dict></dict>
+  </array>
+</dict>
+</plist>

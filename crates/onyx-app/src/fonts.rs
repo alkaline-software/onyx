@@ -153,7 +153,13 @@ pub fn cjk_fallbacks(family: &str, cjk_key: &str, cjk_custom: &str) -> gpui::Fon
         faces.push(cjk_custom.trim().to_string());
     }
     faces.push(cjk_family(cjk_key, serif).to_string());
-    let system: &[&str] = if cfg!(target_os = "macos") {
+    faces.extend(system_fallbacks(serif).iter().map(|f| f.to_string()));
+    gpui::FontFallbacks::from_fonts(faces)
+}
+
+/// The system's faces for what the carried ones lack, and its emoji last.
+fn system_fallbacks(serif: bool) -> &'static [&'static str] {
+    if cfg!(target_os = "macos") {
         if serif { &["Songti SC", "Songti TC", "Hiragino Mincho ProN", "Apple SD Gothic Neo", "Apple Color Emoji"] } else { &["PingFang SC", "PingFang TC", "Hiragino Sans", "Apple SD Gothic Neo", "Apple Color Emoji"] }
     } else if cfg!(target_os = "windows") {
         if serif { &["SimSun", "PMingLiU", "Yu Mincho", "Batang", "Segoe UI Emoji"] } else { &["Microsoft YaHei", "Microsoft JhengHei", "Yu Gothic", "Malgun Gothic", "Segoe UI Emoji"] }
@@ -161,13 +167,34 @@ pub fn cjk_fallbacks(family: &str, cjk_key: &str, cjk_custom: &str) -> gpui::Fon
         &["Noto Serif CJK SC", "Noto Serif CJK TC", "Noto Serif CJK JP", "Noto Serif CJK KR", "Noto Color Emoji"]
     } else {
         &["Noto Sans CJK SC", "Noto Sans CJK TC", "Noto Sans CJK JP", "Noto Sans CJK KR", "Noto Color Emoji"]
+    }
+}
+
+/// How a note is set as a PDF, from the settings: the export sheet's
+/// faces where it names one, else the note's, each with its Chinese face
+/// behind it as the editor has it, and the accent's light shades.
+pub fn pdf_look(cfg: &onyx_core::config::Config) -> onyx_core::pdf::Look {
+    let (e, o) = (&cfg.editor, &cfg.pdf);
+    let words = if o.face.is_empty() { text_family(&e.text_face, &e.text_custom) } else { text_family(&o.face, "") };
+    let code = if o.mono.is_empty() { mono_family(&e.mono_face, &e.mono_custom) } else { mono_family(&o.mono, "") };
+    let serif = is_serif(&words);
+    let behind = |serif: bool| {
+        let own = (!e.cjk_custom.trim().is_empty()).then(|| e.cjk_custom.trim().to_string());
+        own.into_iter().chain([cjk_family(&e.cjk_face, serif).to_string()]).collect::<Vec<_>>()
     };
-    faces.extend(system.iter().map(|f| f.to_string()));
-    gpui::FontFallbacks::from_fonts(faces)
+    let accent = crate::look::accent(&cfg.app.accent);
+    onyx_core::pdf::Look {
+        words: std::iter::once(words.to_string()).chain(behind(serif)).collect(),
+        code: std::iter::once(code.to_string()).chain(behind(false)).collect(),
+        fallbacks: system_fallbacks(serif).iter().map(|f| f.to_string()).collect(),
+        accent: accent.light[0].to_string(),
+        link: accent.link[0].to_string(),
+    }
 }
 
 /// Load the carried faces. Called once at start.
 pub fn install(cx: &mut App) {
+    onyx_core::pdf::carry(FACES);
     let faces = FACES.iter().map(|b| Cow::Borrowed(*b)).collect();
     if let Err(e) = cx.text_system().add_fonts(faces) {
         eprintln!("onyx: the carried faces did not load: {e}");

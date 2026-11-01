@@ -32,6 +32,7 @@ opener = "0.7"
 sys-locale = "0.3"
 # A code block's text as the highlighter takes it.
 ropey = "2.0.0-beta.1"
+futures = "0.3"
 # Markdown read for the live preview: every span with where it stands in the text.
 pulldown-cmark = { version = "0.13", default-features = false }
 # A caret steps by grapheme, not by byte or by char.
@@ -51,8 +52,8 @@ winresource = "0.1"
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = "0.6"
 block2 = "0.6"
-objc2-app-kit = { version = "0.3", features = ["NSView", "NSWindow", "NSResponder", "NSApplication", "NSImage", "NSColor"] }
-objc2-foundation = { version = "0.3", features = ["NSData", "NSString", "NSArray", "NSDictionary", "NSUserDefaults", "NSBundle", "NSFileManager", "NSURL"] }
+objc2-app-kit = { version = "0.3", features = ["NSView", "NSWindow", "NSResponder", "NSApplication", "NSImage", "NSColor", "NSSpellChecker", "NSPrintInfo", "NSPrintOperation", "NSPrintPanel", "NSPrinter"] }
+objc2-foundation = { version = "0.3", features = ["NSData", "NSString", "NSArray", "NSDictionary", "NSUserDefaults", "NSBundle", "NSFileManager", "NSURL", "NSRange", "NSGeometry", "NSOrthography", "NSTextCheckingResult"] }
 raw-window-handle = "0.6"
 
 # Installers: `cargo packager --release` (cargo-packager) wraps the app for

@@ -361,6 +361,150 @@ pub fn set_own_language(code: Option<&str>) {
 #[cfg(not(target_os = "macos"))]
 pub fn set_own_language(_code: Option<&str>) {}
 
+/// The words of `text` the system's checker does not know in `language`,
+/// for the languages Harper does not read. The system's checker is the
+/// Mac's (`NSSpellChecker`); Windows and Linux mark nothing. Asked on the
+/// main thread and found off it, by the checker's own request in the
+/// background. What a word would be is asked when its menu opens
+/// (`spelling_fixes`).
+#[cfg(target_os = "macos")]
+pub fn spelling(text: &str, language: &str) -> impl std::future::Future<Output = Vec<onyx_core::check::Issue>> + use<> {
+    use objc2::runtime::AnyObject;
+    use objc2_app_kit::{NSSpellChecker, NSTextCheckingOrthographyKey};
+    use objc2_foundation::{NSDictionary, NSOrthography, NSRange, NSString, NSTextCheckingResult, NSTextCheckingType};
+    use onyx_core::check::{Issue, Kind};
+    const MOST: usize = 200;
+    let (tx, rx) = futures::channel::oneshot::channel::<Vec<(usize, usize)>>();
+    let tx = std::sync::Mutex::new(Some(tx));
+    let handler = block2::RcBlock::new(move |_: isize, found: std::ptr::NonNull<objc2_foundation::NSArray<NSTextCheckingResult>>, _: std::ptr::NonNull<NSOrthography>, _: isize| {
+        // SAFETY: the checker hands the results it found, alive for the call.
+        let found = unsafe { found.as_ref() };
+        let ranges = found.iter().filter(|r| r.resultType() == NSTextCheckingType::Spelling).map(|r| r.range()).map(|r| (r.location, r.length)).take(MOST).collect();
+        if let Some(tx) = tx.lock().ok().and_then(|mut t| t.take()) {
+            let _ = tx.send(ranges);
+        }
+    });
+    let string = NSString::from_str(text);
+    let orthography = NSOrthography::defaultOrthographyForLanguage(&NSString::from_str(language));
+    // SAFETY: the key is AppKit's, and an orthography is what it takes.
+    let options: objc2::rc::Retained<NSDictionary<NSString, AnyObject>> = NSDictionary::from_slices(&[unsafe { NSTextCheckingOrthographyKey }], &[orthography.as_ref() as &AnyObject]);
+    let length = text.encode_utf16().count();
+    let checker = NSSpellChecker::sharedSpellChecker();
+    // The language asked for and no other: left to tell the language
+    // itself, the checker lets a word pass that is one in another of the
+    // person's languages.
+    checker.setAutomaticallyIdentifiesLanguages(false);
+    checker.setLanguage(&NSString::from_str(language));
+    // SAFETY: the options are the documented key with its type, and the
+    // handler is called once, from any thread, which it is fit for.
+    unsafe {
+        checker.requestCheckingOfString_range_types_options_inSpellDocumentWithTag_completionHandler(&string, NSRange::new(0, length), NSTextCheckingType::Spelling.0, Some(&options), 0, Some(&handler));
+    }
+    // The checker counts UTF-16 units; the window counts bytes.
+    let mut bytes = Vec::with_capacity(text.len() + 1);
+    for (i, c) in text.char_indices() {
+        bytes.extend(std::iter::repeat_n(i, c.len_utf16()));
+    }
+    bytes.push(text.len());
+    async move {
+        let ranges = rx.await.unwrap_or_default();
+        ranges
+            .into_iter()
+            .filter_map(|(at, len)| Some((*bytes.get(at)?, *bytes.get(at + len)?)))
+            .filter(|(start, end)| start < end)
+            .map(|(start, end)| Issue { range: start..end, kind: Kind::Spelling, message: String::new(), fixes: Vec::new(), rule: String::new() })
+            .collect()
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn spelling(_text: &str, _language: &str) -> impl std::future::Future<Output = Vec<onyx_core::check::Issue>> + use<> {
+    std::future::ready(Vec::new())
+}
+
+/// What the system's checker would put in place of `word`, in
+/// `language`: the five it likes best. One word, as its menu opens.
+#[cfg(target_os = "macos")]
+pub fn spelling_fixes(word: &str, language: &str) -> Vec<String> {
+    use objc2_app_kit::NSSpellChecker;
+    use objc2_foundation::{NSRange, NSString};
+    let checker = NSSpellChecker::sharedSpellChecker();
+    let string = NSString::from_str(word);
+    let range = NSRange::new(0, word.encode_utf16().count());
+    checker.guessesForWordRange_inString_language_inSpellDocumentWithTag(range, &string, Some(&NSString::from_str(language)), 0).map(|guesses| guesses.iter().take(5).map(|g| g.to_string()).collect()).unwrap_or_default()
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn spelling_fixes(_word: &str, _language: &str) -> Vec<String> {
+    Vec::new()
+}
+
+/// A PDF put through the system's printing, with its panel over the
+/// window: the person's printers, pages and copies, and Save as PDF. The
+/// paper starts as the page's. False when it could not be done.
+#[cfg(target_os = "macos")]
+pub fn print_pdf(window: &gpui::Window, bytes: &[u8], title: &str, page: (f32, f32)) -> bool {
+    use objc2::rc::{Allocated, Retained};
+    use objc2::runtime::{AnyClass, AnyObject};
+    use objc2::msg_send;
+    use objc2_app_kit::{NSPrintInfo, NSPrintOperation, NSPrintPanelOptions};
+    use objc2_foundation::{NSData, NSSize, NSString};
+
+    #[link(name = "PDFKit", kind = "framework")]
+    unsafe extern "C" {}
+    /// PDFKit's `kPDFPrintPageScaleToFit`.
+    const SCALE_TO_FIT: isize = 1;
+
+    let Some(class) = AnyClass::get(c"PDFDocument") else { return false };
+    let data = NSData::with_bytes(bytes);
+    // SAFETY: `PDFDocument`'s documented initializer, handed the bytes it
+    // reads; it answers nil for what it cannot read.
+    let document: Option<Retained<AnyObject>> = unsafe {
+        let made: Allocated<AnyObject> = msg_send![class, alloc];
+        msg_send![made, initWithData: &*data]
+    };
+    let Some(document) = document else { return false };
+    let info = NSPrintInfo::sharedPrintInfo();
+    // SAFETY: a copy of the shared info, so the person's other printing
+    // keeps its own paper.
+    let info: Retained<NSPrintInfo> = unsafe { msg_send![&*info, copy] };
+    info.setPaperSize(NSSize::new(page.0 as f64, page.1 as f64));
+    info.setTopMargin(0.);
+    info.setBottomMargin(0.);
+    info.setLeftMargin(0.);
+    info.setRightMargin(0.);
+    info.setHorizontallyCentered(true);
+    info.setVerticallyCentered(true);
+    // SAFETY: PDFKit's documented call, with its documented arguments.
+    let operation: Option<Retained<NSPrintOperation>> = unsafe { msg_send![&*document, printOperationForPrintInfo: &*info, scalingMode: SCALE_TO_FIT, autoRotate: true] };
+    let Some(operation) = operation else { return false };
+    operation.setJobTitle(Some(&NSString::from_str(title)));
+    operation.setShowsPrintPanel(true);
+    operation.setShowsProgressPanel(true);
+    let panel = operation.printPanel();
+    panel.setOptions(NSPrintPanelOptions::ShowsCopies | NSPrintPanelOptions::ShowsPageRange | NSPrintPanelOptions::ShowsPaperSize | NSPrintPanelOptions::ShowsOrientation | NSPrintPanelOptions::ShowsScaling | NSPrintPanelOptions::ShowsPreview);
+    match ns_view(window).and_then(|v| v.window()) {
+        // SAFETY: no delegate and no selector: the sheet runs and closes
+        // by itself, and AppKit holds the operation while it does.
+        Some(native) => unsafe { operation.runOperationModalForWindow_delegate_didRunSelector_contextInfo(&native, None, None, std::ptr::null_mut()) },
+        None => {
+            operation.runOperation();
+        }
+    }
+    true
+}
+
+/// Elsewhere the PDF opens in the system's viewer, which prints it.
+#[cfg(not(target_os = "macos"))]
+pub fn print_pdf(_window: &gpui::Window, bytes: &[u8], title: &str, _page: (f32, f32)) -> bool {
+    let file = std::env::temp_dir().join(format!("{}.pdf", title.replace(['/', '\\'], "-")));
+    if onyx_core::paths::write_atomic(&file, bytes).is_err() {
+        return false;
+    }
+    open(&file.to_string_lossy());
+    true
+}
+
 #[cfg(target_os = "macos")]
 fn ns_view(window: &gpui::Window) -> Option<&objc2_app_kit::NSView> {
     use raw_window_handle::{HasWindowHandle, RawWindowHandle};
