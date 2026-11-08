@@ -17,6 +17,7 @@ use std::time::{Duration, Instant};
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
+use gpui_component::tooltip::ManagedTooltipExt as _;
 use gpui_component::{h_flex, v_flex, ActiveTheme as _, Icon, Sizable as _};
 
 use crate::i18n::t;
@@ -29,13 +30,38 @@ pub enum Entry {
     /// its icon is a picture in its own colors (a flag) rather than an
     /// icon in the ink.
     Choice { id: SharedString, icon: &'static str, label: SharedString, picture: bool, chosen: bool },
+    /// A choice that takes something away, last and in the danger's ink.
+    Danger { id: SharedString, icon: &'static str, label: SharedString },
+    /// Choices of one kind in one row, as icons after the kind's name:
+    /// how a link shows, a size, a place. Each icon's words come with
+    /// the pointer, and the one chosen stands lit.
+    Icons { label: SharedString, items: Vec<Tool> },
     /// The line between two groups.
     Rule,
+}
+
+/// One icon of a row of `Entry::Icons`.
+#[derive(Clone)]
+pub struct Tool {
+    pub id: SharedString,
+    pub icon: &'static str,
+    pub label: SharedString,
+    pub chosen: bool,
+}
+
+impl Tool {
+    pub fn new(id: impl Into<SharedString>, icon: &'static str, label: impl Into<SharedString>, chosen: bool) -> Self {
+        Tool { id: id.into(), icon, label: label.into(), chosen }
+    }
 }
 
 impl Entry {
     pub fn choice(id: impl Into<SharedString>, icon: &'static str, label: impl Into<SharedString>) -> Self {
         Entry::Choice { id: id.into(), icon, label: label.into(), picture: false, chosen: false }
+    }
+
+    pub fn danger(id: impl Into<SharedString>, icon: &'static str, label: impl Into<SharedString>) -> Self {
+        Entry::Danger { id: id.into(), icon, label: label.into() }
     }
 }
 
@@ -131,7 +157,51 @@ fn card<V: 'static>(m: &Menu, going: Option<Duration>, pick: std::rc::Rc<dyn Fn(
         // The dark palette's border is a shade off the card and cannot be
         // seen on it: a line of the ink, as a hover is.
         Entry::Rule => div().h(px(9.)).flex().items_center().child(div().h(px(1.)).w_full().mx(px(6.)).bg(if theme.mode.is_dark() { theme.foreground.opacity(0.14) } else { theme.border })).into_any_element(),
-        Entry::Choice { id, icon, label, picture, chosen } => {
+        Entry::Icons { label, items } => {
+            let hover = if dark { theme.foreground.opacity(0.11) } else { theme.sidebar_accent };
+            let lit = theme.primary.opacity(if dark { 0.24 } else { 0.14 });
+            let tools = items.into_iter().map(|tool| {
+                let pick = pick.clone();
+                let id = tool.id.clone();
+                let words = tool.label.clone();
+                div()
+                    .id(ElementId::Name(format!("menu-{what}-{}", tool.id).into()))
+                    .size(px(26.))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(6.))
+                    .cursor_pointer()
+                    .when(tool.chosen, |d| d.bg(lit))
+                    .when(!tool.chosen, |d| d.hover(|s| s.bg(hover)))
+                    .child(Icon::default().path(tool.icon).with_size(px(15.)).text_color(if tool.chosen { theme.primary } else { theme.muted_foreground }))
+                    .managed_tooltip(move |window, cx| crate::widgets::tip(words.clone(), window, cx))
+                    .when(going.is_none(), |d| {
+                        d.on_click(cx.listener(move |this, _, window, cx| {
+                            swallow_click(window, cx);
+                            pick(this, what, id.clone(), window, cx)
+                        }))
+                    })
+            });
+            h_flex()
+                .h(px(32.))
+                .pl(px(10.))
+                .pr(px(3.))
+                .gap(px(16.))
+                .items_center()
+                .text_size(px(13.))
+                .whitespace_nowrap()
+                .text_color(theme.popover_foreground)
+                .child(div().flex_1().child(label))
+                .child(h_flex().gap(px(2.)).children(tools))
+                .into_any_element()
+        }
+        entry => {
+            let (id, icon, label, picture, chosen, danger) = match entry {
+                Entry::Choice { id, icon, label, picture, chosen } => (id, icon, label, picture, chosen, false),
+                Entry::Danger { id, icon, label } => (id, icon, label, false, false, true),
+                Entry::Rule | Entry::Icons { .. } => unreachable!(),
+            };
             let pick = pick.clone();
             let id2 = id.clone();
             h_flex()
@@ -148,12 +218,12 @@ fn card<V: 'static>(m: &Menu, going: Option<Duration>, pick: std::rc::Rc<dyn Fn(
                 .rounded(px(6.))
                 .text_size(px(13.))
                 .whitespace_nowrap()
-                .text_color(theme.popover_foreground)
+                .text_color(if danger { theme.danger } else { theme.popover_foreground })
                 .cursor_pointer()
                 // In the dark appearance the palette's hover is a shade off
                 // the card and cannot be seen: a wash of the ink is.
                 .hover(|s| s.bg(if dark { theme.foreground.opacity(0.11) } else { theme.sidebar_accent }))
-                .map(|d| if picture { d.child(img(icon).w(px(17.)).h(px(12.)).flex_shrink_0()) } else { d.child(Icon::default().path(icon).with_size(px(15.)).text_color(theme.muted_foreground)) })
+                .map(|d| if picture { d.child(img(icon).w(px(17.)).h(px(12.)).flex_shrink_0()) } else { d.child(Icon::default().path(icon).with_size(px(15.)).text_color(if danger { theme.danger } else { theme.muted_foreground })) })
                 .child(div().flex_1().child(label))
                 .when(chosen, |d| d.child(Icon::default().path("icons/check.svg").with_size(px(14.)).text_color(theme.primary)))
                 .when(going.is_none(), |d| {

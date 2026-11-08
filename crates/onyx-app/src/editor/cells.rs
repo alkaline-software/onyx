@@ -176,6 +176,7 @@ impl Editor {
     /// Where a selection from `anchor` may end: inside the cell it began
     /// in, or, begun outside a table, past the whole of one.
     pub(super) fn held_to(&self, anchor: Pos, p: Pos) -> Pos {
+        let p = self.held_by_object(anchor, p);
         if !self.gridded() {
             return p;
         }

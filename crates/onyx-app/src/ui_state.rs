@@ -52,6 +52,9 @@ pub struct UiState {
     /// The folder the last PDF went to, where the next save panel opens.
     /// One since moved or gone is passed over for the note's own.
     pub export_folder: Option<PathBuf>,
+    /// Which card the sidebar has open: `notes` or `assets`.
+    #[serde(default)]
+    pub side_view: Option<String>,
 }
 
 fn file() -> std::path::PathBuf {

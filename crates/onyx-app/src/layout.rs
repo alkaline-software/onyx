@@ -20,6 +20,7 @@ use std::sync::Arc;
 
 use gpui::*;
 use onyx_core::check::{Issue, Kind};
+use onyx_core::html::CardSize;
 use onyx_core::html::{self, Across, Rgb};
 use onyx_core::rhythm;
 
@@ -288,15 +289,65 @@ impl TableRow {
     }
 }
 
-/// A picture on a line of its own.
+/// A picture on a line of its own, or a file shown in a frame of its
+/// own (`embed.rs`): a PDF, a note, a document, code.
 pub(crate) struct PictureRow {
     pub path: PathBuf,
+    /// The control: its left, its width and its height.
     pub x: f32,
     pub w: f32,
     pub h: f32,
-    /// Its line as written, over it, while the caret is on the line.
+    /// A bar comes over its top while the pointer is on it, a view of its
+    /// own (`embed.rs`): every picture's and frame's, but a picture's in a
+    /// note shown in a frame.
+    pub bar: bool,
+    /// Its line as written, under it, centered, small, as a caption,
+    /// while the caret is in the line (in Live, put there by the bar's
+    /// pencil); `top_pad` stands it under the control.
     pub source: Option<TextRow>,
+    /// Where it stands across the page, which its bar shows.
+    pub across: Across,
+    /// The room it can grow to: the words' width less the line's inset.
+    pub room: f32,
+    /// Its own width and height, in pixels: 100%.
+    pub natural: (f32, f32),
+    /// A file in a frame rather than a picture: the frame is a view of
+    /// its own, drawn over the row (`embed.rs`), and none of a picture's
+    /// controls are on it. A card is one too.
+    pub embed: bool,
+    /// A link shown as a card (`card.rs`), and how large; `path` is the
+    /// file it leads to, or for a page of the web its address.
+    pub card: Option<CardSize>,
+    pub web: bool,
+    /// A card's link as its line writes it.
+    pub href: String,
+    /// The room over the control and under it (`PIECE_PAD`).
+    pub pad: f32,
 }
+
+/// What a line holding one picture says of it.
+pub(crate) struct PictureOn {
+    pub src: String,
+    pub asked: Option<html::Width>,
+    /// Where it stands, when the line says so (`<p align>`).
+    pub across: Option<Across>,
+    /// Its words, in the line's bytes: a width written after them
+    /// (`![words|300](src)`) is not among them.
+    pub words: Range<usize>,
+    /// Written as HTML (`html::picture_line`), not `![words](src)`.
+    pub html: bool,
+    /// A link written as a card (`html::card_line`), not a picture.
+    pub card: Option<CardSize>,
+}
+
+/// The room over a picture, a frame or a card and under it, so one needs
+/// no blank line around it to stand apart from the words: the same for
+/// every piece, as a row's height goes by its kind.
+pub(crate) const PIECE_PAD: f32 = 10.;
+
+/// Between a picture and the caption under it, and under the caption.
+const CAPTION_GAP: f32 = 8.;
+const CAPTION_FOOT: f32 = 6.;
 
 /// A block of HTML as it reads: its rows, each from the block's top.
 pub(crate) struct NestedRow {
@@ -336,7 +387,7 @@ impl Row {
             Row::Rule { line_h, .. } => *line_h,
             Row::Table(t) => t.height,
             Row::Nested(n) => n.height,
-            Row::Picture(p) => p.h + p.source.as_ref().map_or(0., |s| s.top_pad + s.flow.height),
+            Row::Picture(p) => p.source.as_ref().map_or(p.h + p.pad * 2., |s| s.top_pad + s.flow.height + CAPTION_FOOT + p.pad),
         }
     }
 }
@@ -369,11 +420,29 @@ pub(crate) struct Pictures {
     pub note: PathBuf,
     pub vault: Option<PathBuf>,
     pub found: HashMap<String, Option<PathBuf>>,
+    /// What a card's link names, any file of the vault.
+    pub found_any: HashMap<String, Option<PathBuf>>,
     pub sizes: HashMap<PathBuf, Option<(u32, u32)>>,
     pub drawn: HashMap<PathBuf, Arc<RenderImage>>,
     /// Those a layout met and nothing has read yet, and those being read.
     pub wanted: Vec<PathBuf>,
     pub reading: std::collections::HashSet<PathBuf>,
+    pub pdfs: HashMap<PathBuf, PdfFile>,
+    /// How tall each framed document's words stand at the frame's width,
+    /// once its frame has laid them out (`embed.rs`).
+    pub embed_heights: HashMap<PathBuf, f32>,
+    /// The note is itself in a frame: a file it embeds stays its words,
+    /// so frames never stand inside frames.
+    pub framed: bool,
+}
+
+/// RGBA pixels as the window draws them, blue first.
+pub(crate) fn bgra(w: u32, h: u32, rgba: Vec<u8>) -> Option<Arc<RenderImage>> {
+    let mut buffer = image::RgbaImage::from_raw(w, h, rgba)?;
+    for pixel in buffer.pixels_mut() {
+        pixel.0.swap(0, 2);
+    }
+    Some(Arc::new(RenderImage::new(vec![image::Frame::new(buffer)])))
 }
 
 /// A picture's pixels, no larger than a page can use.
@@ -389,25 +458,80 @@ pub(crate) fn read_picture(path: &Path) -> Option<Arc<RenderImage>> {
 }
 
 impl Pictures {
+    /// The file a picture's source names, a framed file among them.
+    pub fn find_path(&mut self, src: &str) -> Option<PathBuf> {
+        self.find(src)
+    }
+
+    /// The file an embed names, when the note can show it: a picture
+    /// (not SVG), or a file a frame shows (`embeddable`). A bare note's
+    /// name is found as a wikilink's is. A note never frames itself, and
+    /// a note in a frame frames nothing.
     fn find(&mut self, src: &str) -> Option<PathBuf> {
         if let Some(found) = self.found.get(src) {
             return found.clone();
         }
-        let note = onyx_core::pdf::Note { text: "", title: "", path: &self.note, vault: self.vault.as_deref() };
-        let found = onyx_core::pdf::find_picture(src, &note).filter(|p| p.extension().is_none_or(|e| !e.eq_ignore_ascii_case("svg")));
+        let vault = self.vault.as_deref();
+        let found = onyx_core::vault::find_file(vault, &self.note, src)
+            .or_else(|| vault.and_then(|v| onyx_core::vault::resolve_link(v, &self.note, src)))
+            .filter(|p| match is_framed(p) {
+                true => !self.framed && *p != self.note,
+                false => onyx_core::vault::is_picture(p) && p.extension().is_none_or(|e| !e.eq_ignore_ascii_case("svg")),
+            });
         self.found.insert(src.to_string(), found.clone());
         found
     }
 
+    /// Any file of the vault a link names, as a card shows it.
+    pub fn find_any(&mut self, src: &str) -> Option<PathBuf> {
+        if let Some(found) = self.found_any.get(src) {
+            return found.clone();
+        }
+        let vault = self.vault.as_deref();
+        let found = onyx_core::vault::find_file(vault, &self.note, src).or_else(|| vault.and_then(|v| onyx_core::vault::resolve_link(v, &self.note, src))).filter(|p| p.is_file());
+        self.found_any.insert(src.to_string(), found.clone());
+        found
+    }
+
     /// A picture's size in pixels, from the top of its file.
-    fn size_of(&mut self, path: &Path) -> Option<(u32, u32)> {
+    pub(crate) fn size_of(&mut self, path: &Path) -> Option<(u32, u32)> {
         if let Some(s) = self.sizes.get(path) {
             return *s;
         }
-        let size = image::image_dimensions(path).ok();
+        // A PDF's first page, by its size in points; the box every page
+        // of it is shown in.
+        let size = if onyx_core::vault::is_pdf(path) {
+            let sizes = onyx_core::preview::pdf_sizes(path).unwrap_or_default();
+            let first = sizes.first().copied().map(|(w, h)| (w.round().max(1.) as u32, h.round().max(1.) as u32));
+            if first.is_some() {
+                self.pdfs.entry(path.to_path_buf()).or_default().sizes = sizes;
+            }
+            first
+        } else {
+            image::image_dimensions(path).ok()
+        };
         self.sizes.insert(path.to_path_buf(), size);
         size
     }
+}
+
+/// Whether a file stands in a frame of its own when a line embeds it,
+/// rather than as a picture: a PDF, a note, and what reads as a document
+/// (`preview::Kind::Document`: text, code, a table of values, Office).
+pub(crate) fn is_framed(path: &Path) -> bool {
+    onyx_core::vault::is_pdf(path) || onyx_core::vault::is_note(path) || onyx_core::preview::kind(path) == onyx_core::preview::Kind::Document
+}
+
+/// What the window holds of a PDF of the note: each page's size in
+/// points, its text once read, for the find and for a selection, and
+/// its outline once a frame's sidebar has asked for it.
+#[derive(Default)]
+pub(crate) struct PdfFile {
+    pub sizes: Vec<(f32, f32)>,
+    pub text: Option<Arc<Vec<onyx_core::preview::PdfText>>>,
+    pub text_asked: bool,
+    pub outline: Option<Arc<Vec<onyx_core::preview::PdfMark>>>,
+    pub outline_asked: bool,
 }
 
 /// A style a byte of the source.
@@ -449,6 +573,11 @@ pub(crate) struct Reader<'a> {
     pub across: Across,
     /// Inside a block of HTML, which holds no other.
     pub nested: bool,
+    /// A picture's width as a drag of its handle has it: its line, and the width.
+    pub resize: Option<(usize, f32)>,
+    /// The line of a picture or a frame whose words the bar's pencil
+    /// opened: its line shows under it, the caret in it.
+    pub editing: Option<usize>,
 }
 
 impl<'a> Reader<'a> {
@@ -594,10 +723,13 @@ impl<'a> Reader<'a> {
             if let Some(b) = self.block_of_html(line).filter(|_| !revealed) {
                 (b.first..=b.last).for_each(|l| self.doc.line(l).hash(&mut h));
             }
-            if let Some((src, _)) = self.picture_on(line) {
+            if let Some(on) = self.picture_on(line) {
+                self.resize.filter(|(l, _)| *l == line).map(|(_, w)| w.to_bits()).hash(&mut h);
                 let mut pictures = self.pictures.borrow_mut();
-                let path = pictures.find(&src);
+                let path = pictures.find(&on.src);
                 path.as_ref().is_some_and(|p| pictures.drawn.contains_key(p)).hash(&mut h);
+                path.as_ref().and_then(|p| pictures.embed_heights.get(p)).map(|x| x.to_bits()).hash(&mut h);
+                (self.editing == Some(line)).hash(&mut h);
             }
             let key = h.finish();
             let fresh = cache.entries.get(line).is_none_or(|e| e.key != key);
@@ -901,6 +1033,11 @@ impl<'a> Reader<'a> {
                 _ => {}
             }
         }
+        // A picture on a line of its own, in markdown or in HTML, stands as
+        // a picture whether the caret is on its line or not.
+        if let Some(row) = self.picture_row(line, revealed, width, theme, window) {
+            return row;
+        }
         if !revealed {
             if let Some(b) = self.block_of_html(line) {
                 return if line == b.first { self.nested(b, width, theme, window) } else { Row::Hidden };
@@ -913,7 +1050,7 @@ impl<'a> Reader<'a> {
                         let mark = crate::langs::of(lang);
                         let font = Font { family: theme.font_family.clone(), features: FontFeatures::default(), fallbacks: None, weight: FontWeight::NORMAL, style: FontStyle::Normal };
                         let run = TextRun { len: mark.name.len(), font, color: muted, background_color: None, underline: None, strikethrough: None };
-                        let line = window.text_system().shape_line(SharedString::from(mark.name.clone()), px(11.5), &[run], None);
+                        let line = window.text_system().shape_line(SharedString::from(mark.name.clone()), px(crate::editor::MARK_PX), &[run], None);
                         (line, mark.icon, gpui::rgb(mark.rgb).into())
                     });
                     return Row::Pad { lang, h: rhythm.code_line };
@@ -924,10 +1061,6 @@ impl<'a> Reader<'a> {
                 _ => {}
             }
         }
-        if let Some(row) = self.picture_row(line, revealed, hidden, width, theme, window) {
-            return row;
-        }
-
         // The size, weight and line of the words.
         let (font_px, base_weight, line_h, top_pad) = match &info.kind {
             LineKind::Heading(level) => {
@@ -1154,13 +1287,21 @@ impl<'a> Reader<'a> {
         Row::Nested(NestedRow { rows, height: y, plates: Plates { code, tables } })
     }
 
-    /// The picture a line holds and nothing else, by its source, and the
-    /// width it asks for.
-    fn picture_on(&self, line: usize) -> Option<(String, Option<u32>)> {
-        if self.analysis.lines[line].kind != LineKind::Text {
+    /// The picture a line holds and nothing else: `![words](src)`, or an
+    /// `<img>` or an `<embed>` alone or in a block that places it.
+    pub(crate) fn picture_on(&self, line: usize) -> Option<PictureOn> {
+        let kind = &self.analysis.lines[line].kind;
+        let text = self.doc.line(line);
+        if *kind == LineKind::Html || (*kind == LineKind::Text && text.trim_start().starts_with('<')) {
+            if let Some(c) = html::card_line(text) {
+                return Some(PictureOn { src: c.href, asked: None, across: c.across, words: c.words, html: true, card: Some(c.size) });
+            }
+            let p = html::picture_line(text)?;
+            return Some(PictureOn { src: p.src, asked: p.width, across: p.across, words: p.alt, html: true, card: None });
+        }
+        if *kind != LineKind::Text {
             return None;
         }
-        let text = self.doc.line(line);
         let start = self.analysis.line_starts[line];
         let lead = text.len() - text.trim_start().len();
         let words = text.trim();
@@ -1172,39 +1313,105 @@ impl<'a> Reader<'a> {
             if s.range.start != start + lead || s.range.len() != words.len() {
                 return None;
             }
-            Some((src.clone(), picture_width(words, self.analysis, s, text, start)))
+            let inner = s.inner();
+            let asked = picture_width(words, self.analysis, s, text, start);
+            let mut words = inner.start - start..inner.end - start;
+            if asked.is_some() {
+                if let Some(bar) = text.get(words.clone()).and_then(|w| w.rfind('|')) {
+                    words.end = words.start + bar;
+                }
+            }
+            Some(PictureOn { src: src.clone(), asked, across: None, words, html: false, card: None })
         })
     }
 
-    fn picture_row(&self, line: usize, revealed: bool, hidden: &[Range<usize>], width: f32, theme: &gpui_component::Theme, window: &mut Window) -> Option<Row> {
-        let (src, asked) = self.picture_on(line)?;
-        let mut pictures = self.pictures.borrow_mut();
-        let path = pictures.find(&src)?;
-        let (w, h) = pictures.size_of(&path)?;
-        if !pictures.drawn.contains_key(&path) && !pictures.wanted.contains(&path) {
-            pictures.wanted.push(path.clone());
-        }
-        drop(pictures);
+    fn picture_row(&self, line: usize, revealed: bool, width: f32, theme: &gpui_component::Theme, window: &mut Window) -> Option<Row> {
+        let on = self.picture_on(line)?;
         let info = &self.analysis.lines[line];
         let inset = self.inset_of(info);
         let room = (width - inset).max(40.);
-        let (natural, tall) = (w as f32, h as f32);
-        let wide = asked.map_or(natural, |a| a as f32);
-        let k = (wide.min(room) / natural).min(room * MOST_PICTURE / tall.max(1.)).max(0.01);
-        let (pw, ph) = ((natural * k).round(), (tall * k).round());
+        if let Some(size) = on.card {
+            return self.card_row(line, &on, size, inset, room);
+        }
+        let mut pictures = self.pictures.borrow_mut();
+        let path = pictures.find(&on.src)?;
+        let embed = is_framed(&path);
+        // A PDF's frame is sized as a picture is, by its first page: its
+        // own width in points (100%) or the width the line asks, never past
+        // the words, and as tall as that page there, so one page shows
+        // whole. A document's is as wide as the words and as tall as its
+        // words up to a height (`embed.rs`).
+        let held = self.resize.filter(|(l, _)| *l == line).map(|(_, w)| w);
+        let (natural, tall, pw, ph) = if embed && onyx_core::vault::is_pdf(&path) {
+            let (w, h) = pictures.size_of(&path).unwrap_or((612, 792));
+            let (natural, tall) = (w as f32, h as f32);
+            let wide = held.unwrap_or(on.asked.map_or(natural, |a| a.in_room(room))).min(room).max(crate::embed::CONTROL_LEAST.min(room)).round();
+            (natural, tall, wide, ((wide - 2.) * tall / natural.max(1.)).round() + 2.)
+        } else if embed {
+            let body = pictures.embed_heights.get(&path).map_or(crate::embed::WORDS_MOST, |h| h.clamp(crate::embed::WORDS_LEAST, crate::embed::WORDS_MOST)).round();
+            (room, body + 2., room, body + 2.)
+        } else {
+            let (w, h) = pictures.size_of(&path)?;
+            if !pictures.drawn.contains_key(&path) && !pictures.wanted.contains(&path) {
+                pictures.wanted.push(path.clone());
+            }
+            let (natural, tall) = (w as f32, h as f32);
+            let wide = held.unwrap_or(on.asked.map_or(natural, |a| a.in_room(room)));
+            // A width asked for is kept, up to the room; one not asked for
+            // keeps the picture within the view's height too.
+            let k = if held.is_some() || on.asked.is_some() { wide.min(room) / natural } else { own_width((natural, tall), room) / natural }.max(0.01);
+            (natural, tall, (natural * k).round(), (tall * k).round())
+        };
+        let bar = embed || !pictures.framed;
+        drop(pictures);
+        let cw = pw;
+        // A document's frame runs the words' width: placing it moves nothing.
+        let across = on.across.unwrap_or(self.across);
         let x = inset
-            + match self.across {
-                Across::Center => (room - pw) / 2.,
-                Across::End => room - pw,
+            + match across {
+                Across::Center => (room - cw) / 2.,
+                Across::End => room - cw,
                 Across::Start => 0.,
             };
-        let source = revealed.then(|| {
-            let (styles, links) = self.styled(line, FontWeight::NORMAL, false, false, &[], theme);
+        // The caption: small and quiet, centered under the control, no
+        // narrower than a short line of words: the line whole, as written,
+        // in Source while the caret is on it, else once the bar's pencil
+        // put the caret there (`editor/picture.rs`).
+        let source = (revealed && (self.mode == Mode::Source || self.editing == Some(line))).then(|| {
             let len = self.doc.line(line).len();
-            let flow = self.flow(line, 0..len, &styles, &links, hidden, self.look.text_px, self.rhythm.line, room, TextAlign::Left, theme.foreground, window);
-            TextRow { flow, inset, top_pad: 0., widgets: Vec::new() }
+            let (styles, links) = self.styled(line, FontWeight::NORMAL, false, false, &[], theme);
+            let styles: Vec<St> = styles.into_iter().map(|st| St { color: theme.muted_foreground, ..st }).collect();
+            let wide = cw.max(room.min(360.)).min(room);
+            let left = (x + cw / 2. - wide / 2.).clamp(inset, inset + room - wide);
+            let small = (self.look.text_px * 0.8).round();
+            let flow = self.flow(line, 0..len, &styles, &links, &[], small, (small * 1.5).round(), wide, TextAlign::Center, theme.muted_foreground, window);
+            TextRow { flow, inset: left, top_pad: PIECE_PAD + ph + CAPTION_GAP, widgets: Vec::new() }
         });
-        Some(Row::Picture(PictureRow { path, x, w: pw, h: ph, source }))
+        Some(Row::Picture(PictureRow { path, x, w: cw, h: ph, bar, source, across, room, natural: (natural, tall), embed, card: None, web: false, href: String::new(), pad: PIECE_PAD }))
+    }
+
+    /// A link shown as a card: a file it leads to, or a page of the web.
+    /// Its height goes by its size alone, and a large one's by its width,
+    /// so nothing moves as what it shows arrives (`card.rs`). One that
+    /// leads nowhere stands as the words it is, and so does one in Source
+    /// or with the caret in its line.
+    fn card_row(&self, line: usize, on: &PictureOn, size: CardSize, inset: f32, room: f32) -> Option<Row> {
+        // In Source, and while the caret is in its line, it is its words.
+        if self.mode == Mode::Source || self.editing == Some(line) {
+            return None;
+        }
+        let web = onyx_core::link_card::is_web(&on.src);
+        let path = if web { PathBuf::from(&on.src) } else { self.pictures.borrow_mut().find_any(&on.src)? };
+        let (w, h) = crate::card::card_size(size, room);
+        // Only a large card is narrower than the words, and so placed.
+        let across = on.across.filter(|_| size == CardSize::Large).unwrap_or(Across::Start);
+        let x = inset
+            + match across {
+                Across::Center => ((room - w) / 2.).round(),
+                Across::End => room - w,
+                Across::Start => 0.,
+            };
+        Some(Row::Picture(PictureRow { path, x, w, h, bar: false, source: None, across, room, natural: (w, h), embed: true, card: Some(size), web, href: on.src.clone(), pad: PIECE_PAD }))
     }
 }
 
@@ -1237,7 +1444,7 @@ fn raised(c: char, up: bool) -> Option<char> {
 
 /// The width a picture's span asks for: `<img width>`, or Obsidian's
 /// `![alt|300](src)` and `![[a.png|300]]`.
-fn picture_width(written: &str, analysis: &Analysis, span: &markdown::Span, text: &str, start: usize) -> Option<u32> {
+fn picture_width(written: &str, analysis: &Analysis, span: &markdown::Span, text: &str, start: usize) -> Option<html::Width> {
     let _ = analysis;
     if written.starts_with('<') {
         return match html::read_tag(written) {
@@ -1247,7 +1454,14 @@ fn picture_width(written: &str, analysis: &Analysis, span: &markdown::Span, text
     }
     let inner = span.inner();
     let words = text.get(inner.start.checked_sub(start)?..inner.end.checked_sub(start)?)?;
-    onyx_core::pdf::asked_width(words)
+    onyx_core::pdf::asked(words)
+}
+
+/// How wide a picture of `natural` size stands when no width is asked:
+/// its own, as far as the room goes, and no taller than most of it.
+pub(crate) fn own_width(natural: (f32, f32), room: f32) -> f32 {
+    let (w, h) = (natural.0.max(1.), natural.1.max(1.));
+    w * (room / w).min(room * MOST_PICTURE / h).min(1.)
 }
 
 /// The widths of columns that want `most` and hold at `least`, in `room`.

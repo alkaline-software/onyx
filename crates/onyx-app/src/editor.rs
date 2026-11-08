@@ -14,6 +14,7 @@
 //! composes in place; keys that move or change arrive as actions.
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::ops::Range;
 use std::path::PathBuf;
 use std::rc::Rc;
@@ -22,14 +23,19 @@ use std::time::{Duration, Instant};
 use gpui::*;
 use gpui_component::{input, ActiveTheme as _};
 
-use crate::layout::{Cache, Pictures, Reader, Rhythm, Row, Target, TextRow, Widget, PLATE_X};
+use crate::layout::{Cache, Pictures, Reader, Rhythm, Row, Target, TextRow, Widget};
 use crate::lines::{list_line, next_marker, quote_line, Doc, ListKind, Pos, Sel};
 use crate::markdown::{self, Analysis, LineKind, SpanKind};
 
+mod cards;
 mod cells;
+mod pages;
+mod picture;
 mod writing;
 
+pub use cards::{Layout, LayoutAt};
 pub use cells::{CellAt, Scope, TableFacts};
+pub use picture::{Seen, Viewing};
 pub use writing::{MenuIssue, Words};
 
 actions!(
@@ -142,7 +148,55 @@ pub struct MenuAt {
     pub table: Option<(CellAt, Scope, TableFacts)>,
     /// On a line with nothing on it, where a table can stand.
     pub blank: bool,
+    /// A file of the vault other than a note: a picture drawn there, or
+    /// what a link leads to.
+    pub file: Option<PathBuf>,
+    /// A picture drawn there: its line, where it stands, and the width it
+    /// asks for, for the menu's place and size.
+    pub picture: Option<(usize, onyx_core::html::Across, Option<onyx_core::html::Width>)>,
+    /// In a file's frame (`embed.rs`): the menu acts on what the frame
+    /// holds, not the note.
+    pub frame: Option<FrameMenu>,
+    /// A picture's or a frame's line, which Delete takes out of the note.
+    pub remove: Option<usize>,
+    /// A link that can show another way: among words, as a card, whole.
+    pub layout: Option<cards::LayoutAt>,
 }
+
+/// A right click in a frame: where its keyboard goes, which takes the
+/// menu's choice, and whether something is selected there.
+#[derive(Clone, Debug)]
+pub struct FrameMenu {
+    pub focus: FocusHandle,
+    pub selection: bool,
+}
+
+/// A file of the vault's assets on its way from the sidebar: dropped on
+/// the page, the note links to it there.
+#[derive(Clone)]
+pub struct AssetDrag(pub PathBuf, pub SharedString);
+
+impl Render for AssetDrag {
+    fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        let theme = cx.theme();
+        div()
+            .px(px(10.))
+            .h(px(28.))
+            .flex()
+            .items_center()
+            .rounded(px(8.))
+            .bg(theme.popover)
+            .border_1()
+            .border_color(theme.border)
+            .shadow_md()
+            .text_size(px(12.5))
+            .text_color(theme.foreground)
+            .child(self.1.clone())
+    }
+}
+
+/// A picture's corners on the canvas, as round as Craft's, and a frame's.
+pub const PICTURE_ROUND: f32 = crate::embed::CONTROL_ROUND;
 
 /// What the editor tells the view around it.
 pub enum EditorEvent {
@@ -155,6 +209,12 @@ pub enum EditorEvent {
     /// A right click: where, and what it was on. The window makes the
     /// menu, as it does every menu.
     Menu(Point<Pixels>, MenuAt),
+    /// A picture opened in the viewer, over the window.
+    View(picture::Viewing),
+    /// The find's places changed with nothing typed: a PDF's words read.
+    Found,
+    /// A file a bar renamed in place: the file, and its new name.
+    Rename(PathBuf, String),
 }
 
 /// The faces and size a note is set in, from the settings.
@@ -241,6 +301,13 @@ pub struct Editor {
     find_query: String,
     find: Rc<Vec<(Pos, Pos)>>,
     find_at: usize,
+    /// The places on the note's PDFs (`pages.rs`), and every place of
+    /// both in the note's order: a place in the text, or one on a page.
+    find_pages: Rc<Vec<pages::PageHit>>,
+    find_order: Vec<(bool, usize)>,
+    /// A place on a line to bring into view in place of the caret: its
+    /// line, and its top and height in the line's row.
+    want_spot: Option<(usize, f32, f32)>,
     /// The pictures a note holds, and where the note is, to find them.
     pictures: Rc<RefCell<Pictures>>,
     writing: writing::Writing,
@@ -249,6 +316,21 @@ pub struct Editor {
     table_drag: Option<cells::TableDrag>,
     /// A table's columns as a drag has them: its first line, and each width.
     hold: Option<(usize, Vec<f32>)>,
+    /// The picture the pointer is over, a drag of its side, and its width
+    /// as the drag has it (`picture.rs`).
+    pic_hover: Option<picture::PicHover>,
+    pic_drag: Option<picture::PicDrag>,
+    pic_hold: Option<(usize, f32)>,
+    /// The line of a picture or a frame the bar's pencil opened, the
+    /// caret in it rather than on the whole (`picture.rs`).
+    editing: Option<usize>,
+    /// The frames of the files the note embeds, by file and which of its
+    /// frames (`pages.rs`, `embed.rs`).
+    embeds: HashMap<(PathBuf, usize), Entity<crate::embed::Embed>>,
+    /// The note's cards (`card.rs`), by their link and which of its they are.
+    cards: HashMap<(String, usize), Entity<crate::card::Card>>,
+    /// A large card's bar, by its card.
+    card_bars: HashMap<(String, usize), Entity<crate::embed::Embed>>,
 }
 
 #[derive(Clone, Copy, PartialEq)]
@@ -311,12 +393,22 @@ impl Editor {
             read_only: false,
             find_query: String::new(),
             find: Rc::new(Vec::new()),
+            find_pages: Rc::new(Vec::new()),
+            find_order: Vec::new(),
+            want_spot: None,
             find_at: 0,
             pictures: Rc::default(),
             writing: writing::Writing::default(),
             hover: None,
             table_drag: None,
             hold: None,
+            pic_hover: None,
+            pic_drag: None,
+            pic_hold: None,
+            editing: None,
+            embeds: HashMap::new(),
+            cards: HashMap::new(),
+            card_bars: HashMap::new(),
         }
     }
 
@@ -327,6 +419,7 @@ impl Editor {
             pictures.note = note;
             pictures.vault = vault;
             pictures.found.clear();
+            pictures.found_any.clear();
             cx.notify();
         }
     }
@@ -347,6 +440,8 @@ impl Editor {
             hold: self.hold.as_ref(),
             across: Default::default(),
             nested: false,
+            resize: self.pic_hold,
+            editing: self.editing,
         }
     }
 
@@ -391,6 +486,9 @@ impl Editor {
             let was_reading = self.mode == Mode::Reading;
             self.mode = mode;
             self.marked = None;
+            // A caret left on a picture's line in Source takes it whole.
+            self.editing = None;
+            self.hold_objects();
             self.want_scroll = true;
             if was_reading && self.focused {
                 self.kick_blink(cx);
@@ -407,38 +505,63 @@ impl Editor {
         self.find_query = query.trim().to_string();
         let was = self.sel.range().0;
         self.refind();
-        self.find_at = self.find.iter().position(|(a, _)| *a >= was).unwrap_or(0);
-        if self.find.is_empty() {
+        self.find_at = (0..self.find_order.len()).position(|i| self.found_at(i) >= was).unwrap_or(0);
+        if self.find_order.is_empty() {
             cx.notify();
         } else {
             self.find_go(cx);
         }
-        self.find.len()
+        self.find_order.len()
+    }
+
+    /// Where the find's `i`th place stands in the note: a place on a
+    /// PDF's page after any in its line's words.
+    fn found_at(&self, i: usize) -> Pos {
+        match self.find_order.get(i) {
+            Some(&(false, k)) => self.find[k].0,
+            Some(&(true, k)) => Pos::new(self.find_pages[k].line, usize::MAX),
+            None => Pos::new(usize::MAX, 0),
+        }
     }
 
     pub fn clear_find(&mut self, cx: &mut Context<Self>) {
         self.find_query.clear();
         self.find = Rc::new(Vec::new());
+        self.find_pages = Rc::new(Vec::new());
+        self.find_order.clear();
         self.find_at = 0;
         cx.notify();
     }
 
     /// The matches found again, as the text is now.
-    fn refind(&mut self) {
+    pub(super) fn refind(&mut self) {
         let found: Vec<(Pos, Pos)> = if self.find_query.is_empty() {
             Vec::new()
         } else {
             let text = self.doc.text();
             onyx_core::search::find_all(&text, &self.find_query).into_iter().map(|r| (self.doc.pos_of(r.start), self.doc.pos_of(r.end))).collect()
         };
+        let pages = if self.find_query.is_empty() { Vec::new() } else { self.find_on_pages(&self.find_query) };
+        // Both in the note's order: a page's places after its line's words.
+        let mut order: Vec<(bool, usize)> = (0..found.len()).map(|k| (false, k)).chain((0..pages.len()).map(|k| (true, k))).collect();
+        let key = |&(page, k): &(bool, usize)| if page { (pages[k].line, usize::MAX, pages[k].page, pages[k].from) } else { (found[k].0.line, found[k].0.col, 0, 0) };
+        order.sort_by_key(key);
         self.find = Rc::new(found);
-        if self.find_at >= self.find.len() {
+        self.find_pages = Rc::new(pages);
+        self.find_order = order;
+        if self.find_at >= self.find_order.len() {
             self.find_at = 0;
         }
     }
 
-    fn find_go(&mut self, cx: &mut Context<Self>) {
-        let Some(&(a, b)) = self.find.get(self.find_at) else { return };
+    pub(super) fn find_go(&mut self, cx: &mut Context<Self>) {
+        let Some(&(page, k)) = self.find_order.get(self.find_at) else { return };
+        if page {
+            let hit = self.find_pages[k].clone();
+            self.find_go_page(&hit, cx);
+            return;
+        }
+        let (a, b) = self.find[k];
         self.sel = Sel { anchor: a, head: b };
         self.preferred_x = None;
         self.want_scroll = true;
@@ -448,7 +571,7 @@ impl Editor {
 
     /// The next match, or the one before, round the ends.
     pub fn find_step(&mut self, delta: i64, cx: &mut Context<Self>) {
-        let n = self.find.len() as i64;
+        let n = self.find_order.len() as i64;
         if n == 0 {
             return;
         }
@@ -457,7 +580,7 @@ impl Editor {
     }
 
     pub fn find_count(&self) -> usize {
-        self.find.len()
+        self.find_order.len()
     }
 
     pub fn find_at(&self) -> usize {
@@ -470,6 +593,11 @@ impl Editor {
     /// the text, each change checking it, and never on the pointer or
     /// the keyboard. A task's box is the one thing ticked through it
     /// (`toggle_task_on`).
+    /// The note is read, not written: a press on a card opens it.
+    pub(crate) fn reads(&self) -> bool {
+        self.mode == Mode::Reading
+    }
+
     pub(crate) fn locked(&self) -> bool {
         self.read_only || self.mode == Mode::Reading
     }
@@ -483,6 +611,9 @@ impl Editor {
 
     pub fn set_look(&mut self, look: Look, cx: &mut Context<Self>) {
         if self.look != look {
+            for frame in self.embeds.values() {
+                frame.update(cx, |m, cx| m.set_look(look.clone(), cx));
+            }
             self.look = look;
             cx.notify();
         }
@@ -557,6 +688,11 @@ impl Editor {
         self.move_to(Pos { line, col: 0 }, false, cx);
     }
 
+    /// For a probe: the selection's anchor and head, line and byte.
+    pub fn selection_ends(&self) -> ((usize, usize), (usize, usize)) {
+        ((self.sel.anchor.line, self.sel.anchor.col), (self.sel.head.line, self.sel.head.col))
+    }
+
     pub fn selection_text(&self) -> String {
         let (a, b) = self.sel.range();
         self.doc.slice(a, b)
@@ -617,6 +753,14 @@ impl Editor {
             self.refind();
         }
         self.text_changed(cx);
+        // A caret a change leaves on a picture's line (a picture just
+        // written, an undo) stays in the line, which shows as written.
+        if self.editing.is_some_and(|l| l != self.sel.head.line) {
+            self.editing = None;
+        }
+        if self.sel.is_caret() && self.mode != Mode::Source && self.object_line(self.sel.head.line) {
+            self.editing = Some(self.sel.head.line);
+        }
         self.want_scroll = true;
         self.preferred_x = None;
         self.kick_blink(cx);
@@ -625,6 +769,7 @@ impl Editor {
     }
 
     fn after_move(&mut self, cx: &mut Context<Self>) {
+        self.hold_objects();
         self.want_scroll = true;
         self.kick_blink(cx);
         cx.notify();
@@ -721,6 +866,9 @@ impl Editor {
         }
         if self.in_cell() {
             self.cell_down(cx);
+            return;
+        }
+        if self.object_enter(cx) {
             return;
         }
         if !self.sel.is_caret() {
@@ -834,6 +982,9 @@ impl Editor {
         if self.locked() {
             return;
         }
+        if self.object_back(cx) {
+            return;
+        }
         if !self.sel.is_caret() {
             self.insert("", cx);
             return;
@@ -863,6 +1014,9 @@ impl Editor {
 
     fn delete(&mut self, _: &Delete, _: &mut Window, cx: &mut Context<Self>) {
         if self.locked() {
+            return;
+        }
+        if self.object_forward(cx) {
             return;
         }
         if !self.sel.is_caret() {
@@ -919,6 +1073,21 @@ impl Editor {
     fn copy(&mut self, _: &input::Copy, _: &mut Window, cx: &mut Context<Self>) {
         let text = self.copied_text();
         if !text.is_empty() {
+            self.to_clipboard(text, cx);
+        }
+    }
+
+    /// What is copied, on the clipboard: a picture selected whole goes as
+    /// its line, which a paste here takes as the same picture, and as the
+    /// picture itself for any other app.
+    fn to_clipboard(&self, text: String, cx: &mut Context<Self>) {
+        let picture = self.object_selected().and_then(|line| self.picture_at_line(line));
+        // A probe's copy leaves the clipboard alone and says it.
+        if let Some(path) = picture.as_ref().filter(|_| std::env::var_os("ONYX_GO").is_some()) {
+            eprintln!("copy {text:?} with {}", path.display());
+            return;
+        }
+        if !picture.is_some_and(|path| crate::sys::copy_with_picture(&text, &path)) {
             crate::widgets::to_clipboard(text, cx);
         }
     }
@@ -926,7 +1095,7 @@ impl Editor {
     fn cut(&mut self, _: &input::Cut, _: &mut Window, cx: &mut Context<Self>) {
         let text = self.copied_text();
         if !text.is_empty() {
-            crate::widgets::to_clipboard(text, cx);
+            self.to_clipboard(text, cx);
             if !self.locked() {
                 self.insert("", cx);
                 self.doc.end_step();
@@ -938,11 +1107,115 @@ impl Editor {
         if self.locked() {
             return;
         }
-        if let Some(text) = cx.read_from_clipboard().and_then(|item| item.text()) {
+        let Some(item) = cx.read_from_clipboard() else { return };
+        // Files copied in the Finder, or a picture copied alone, come in
+        // as assets; anything else as its text.
+        match item.entries().first() {
+            Some(ClipboardEntry::ExternalPaths(paths)) => return self.attach(paths.paths().to_vec(), None, cx),
+            Some(ClipboardEntry::Image(picture)) => return self.attach(Vec::new(), Some(picture.clone()), cx),
+            _ => {}
+        }
+        if let Some(text) = item.text() {
             let text = text.replace("\r\n", "\n").replace('\r', "\n");
             self.insert(&text, cx);
             self.doc.end_step();
         }
+    }
+
+    /// Changes made from outside, at byte ranges of the text (a file's
+    /// links following its rename, `vault::relink`): one step of undo,
+    /// the caret kept where it was, the view not moved.
+    pub fn apply_edits(&mut self, edits: Vec<(std::ops::Range<usize>, String)>, cx: &mut Context<Self>) {
+        if edits.is_empty() {
+            return;
+        }
+        let changes = edits.into_iter().map(|(r, t)| (self.doc.pos_of(r.start), self.doc.pos_of(r.end), t)).collect();
+        let before = self.sel;
+        self.doc.replace_many(changes, before, before);
+        self.doc.end_step();
+        self.sel = Sel { anchor: self.doc.clamp(before.anchor), head: self.doc.clamp(before.head) };
+        self.reanalyze();
+        self.text_changed(cx);
+        cx.emit(EditorEvent::Changed);
+        cx.notify();
+    }
+
+    /// For a probe: files brought in as a paste of them would.
+    pub fn attach_files(&mut self, files: Vec<PathBuf>, cx: &mut Context<Self>) {
+        self.attach(files, None, cx);
+    }
+
+    /// Files dropped on the page: the caret goes where they fell, and they
+    /// come in there as assets.
+    fn dropped(&mut self, paths: &ExternalPaths, window: &mut Window, cx: &mut Context<Self>) {
+        self.drop_files(paths.paths().to_vec(), window, cx);
+    }
+
+    /// An asset dragged from the sidebar: its link where it fell.
+    fn dropped_asset(&mut self, asset: &AssetDrag, window: &mut Window, cx: &mut Context<Self>) {
+        self.drop_files(vec![asset.0.clone()], window, cx);
+    }
+
+    fn drop_files(&mut self, files: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
+        if self.locked() {
+            return;
+        }
+        let at = window.mouse_position() - self.origin;
+        if let Some(p) = self.pos_at(f32::from(at.x), f32::from(at.y), &self.cache.borrow()) {
+            self.sel = Sel::caret(p);
+        }
+        window.focus(&self.focus, cx);
+        self.attach(files, None, cx);
+    }
+
+    /// Files and a picture brought into the note: each kept in the vault's
+    /// assets folder, off the window's thread (a file is copied, one
+    /// already in the vault stays where it is), then referred to at the
+    /// caret in standard markdown, each a block of its own between blank
+    /// lines, so a picture is drawn here and in any other app.
+    fn attach(&mut self, files: Vec<PathBuf>, picture: Option<Image>, cx: &mut Context<Self>) {
+        if self.locked() {
+            return;
+        }
+        let (note, vault) = {
+            let p = self.pictures.borrow();
+            (p.note.clone(), p.vault.clone())
+        };
+        let Some(root) = vault.or_else(|| note.parent().map(std::path::Path::to_path_buf)) else { return };
+                let kept = cx.background_spawn(async move {
+            let mut kept: Vec<PathBuf> = files.iter().filter(|f| f.is_file()).filter_map(|f| onyx_core::vault::copy_asset(&root, f).ok()).collect();
+            if let Some(picture) = picture {
+                let name = format!("Pasted image {}.{}", chrono::Local::now().format("%Y%m%d%H%M%S"), picture.format.extension());
+                kept.extend(onyx_core::vault::add_asset(&root, &name, &picture.bytes).ok());
+            }
+            kept
+        });
+        cx.spawn(async move |this, cx| {
+            let kept = kept.await;
+            let _ = this.update(cx, |e, cx| {
+                if kept.is_empty() || e.pictures.borrow().note != note || e.locked() {
+                    return;
+                }
+                let mut text = kept.iter().map(|f| onyx_core::vault::reference(&note, f)).collect::<Vec<_>>().join("\n\n");
+                // A blank line between it and the words on either side,
+                // whether they share its line or stand on the next.
+                let (a, b) = e.sel.range();
+                let filled = |line: usize| !e.doc.line(line).trim().is_empty();
+                if !e.doc.line(a.line).get(..a.col).unwrap_or("").trim().is_empty() {
+                    text.insert_str(0, "\n\n");
+                } else if a.line > 0 && filled(a.line - 1) {
+                    text.insert(0, '\n');
+                }
+                if !e.doc.line(b.line).get(b.col..).unwrap_or("").trim().is_empty() {
+                    text.push_str("\n\n");
+                } else if b.line + 1 < e.doc.line_count() && filled(b.line + 1) {
+                    text.push('\n');
+                }
+                e.insert(&text, cx);
+                e.doc.end_step();
+            });
+        })
+        .detach();
     }
 
     fn undo(&mut self, _: &input::Undo, _: &mut Window, cx: &mut Context<Self>) {
@@ -1125,25 +1398,27 @@ impl Editor {
 
     fn left(&mut self, select: bool, cx: &mut Context<Self>) {
         stamp("key left");
-        let p = if !select && !self.sel.is_caret() { self.sel.start() } else { self.step_back(self.sel.head) };
+        let leave = if select { None } else { self.leave_object(true) };
+        let p = if let Some(p) = leave { p } else if !select && !self.sel.is_caret() { self.sel.start() } else { self.step_back(self.sel.head) };
         self.preferred_x = None;
         self.move_to(p, select, cx);
     }
 
     fn right(&mut self, select: bool, cx: &mut Context<Self>) {
-        let p = if !select && !self.sel.is_caret() { self.sel.end() } else { self.step_on(self.sel.head) };
+        let leave = if select { None } else { self.leave_object(false) };
+        let p = if let Some(p) = leave { p } else if !select && !self.sel.is_caret() { self.sel.end() } else { self.step_on(self.sel.head) };
         self.preferred_x = None;
         self.move_to(p, select, cx);
     }
 
     fn word_left(&mut self, select: bool, cx: &mut Context<Self>) {
-        let p = self.doc.word_left(self.sel.head);
+        let p = self.leave_object(true).filter(|_| !select).unwrap_or_else(|| self.doc.word_left(self.sel.head));
         self.preferred_x = None;
         self.move_to(p, select, cx);
     }
 
     fn word_right(&mut self, select: bool, cx: &mut Context<Self>) {
-        let p = self.doc.word_right(self.sel.head);
+        let p = self.leave_object(false).filter(|_| !select).unwrap_or_else(|| self.doc.word_right(self.sel.head));
         self.preferred_x = None;
         self.move_to(p, select, cx);
     }
@@ -1231,7 +1506,7 @@ impl Editor {
     }
 
     /// The whole note laid out at `width`.
-    fn relayout(&mut self, width: f32, window: &mut Window, cx: &mut App) {
+    pub(crate) fn relayout(&mut self, width: f32, window: &mut Window, cx: &mut App) {
         let theme = cx.theme().clone();
         let mut cache = self.cache.borrow_mut();
         self.reader().lay_out_note(&mut cache, width, &theme, window);
@@ -1275,6 +1550,11 @@ impl Editor {
                 let flow = t.cells.get(t.column_of(p.col))?;
                 (top + t.cell_y, top + t.cell_y + flow.height)
             }
+            // A caption's rows, so ↑ from its first leaves the line.
+            Row::Picture(pic) => match &pic.source {
+                Some(r) => (top + r.top_pad, top + r.top_pad + r.flow.height),
+                None => (top, top + entry.height),
+            },
             _ => (top, top + entry.height),
         })
     }
@@ -1315,7 +1595,12 @@ impl Editor {
         };
         Some(match &*entry.row {
             Row::Text(r) => on_text(r),
-            Row::Picture(pic) if pic.source.is_some() => on_text(pic.source.as_ref()?),
+            // On the picture itself, the end of its line; on the line shown under it,
+            // the place in it.
+            Row::Picture(pic) => match &pic.source {
+                Some(r) if y >= top + r.top_pad => on_text(r),
+                _ => Pos::new(line, text_len),
+            },
             Row::Table(t) => {
                 let c = t.column_at(x - t.inset);
                 let flow = t.cells.get(c)?;
@@ -1357,10 +1642,11 @@ impl Editor {
     /// Whether the scroller was moved.
     fn scroll_to_caret(&mut self, bounds: Bounds<Pixels>, window: &Window) -> bool {
         self.want_scroll = false;
-        let Some(at) = self.caret_at(self.sel.head) else { return false };
+        let spot = self.want_spot.take().and_then(|(line, y, h)| self.cache.borrow().tops.get(line).map(|top| (top + y, h)));
+        let Some((y, h)) = spot.or_else(|| self.caret_at(self.sel.head).map(|at| (at.y, at.h))) else { return false };
         let view = window.content_mask().bounds;
-        let caret_top = f32::from(bounds.top()) + at.y;
-        let caret_bottom = caret_top + at.h;
+        let caret_top = f32::from(bounds.top()) + y;
+        let caret_bottom = caret_top + h;
         let (vt, vb) = (f32::from(view.top()), f32::from(view.bottom()));
         let offset = self.scroll.offset();
         let mut dy = 0.;
@@ -1530,6 +1816,8 @@ impl Render for Editor {
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::paste))
+            .on_drop(cx.listener(Self::dropped))
+            .on_drop(cx.listener(Self::dropped_asset))
             .on_action(cx.listener(Self::undo))
             .on_action(cx.listener(Self::redo))
             .child(EditorElement { editor: cx.entity().clone() })
@@ -1550,6 +1838,9 @@ struct Prepainted {
     /// The hitbox with room each side for a table's handles, which stand
     /// out in the page's margin.
     wide: Hitbox,
+    /// The frames of the files the note embeds that show, laid out over
+    /// their rows (`embed.rs`).
+    frames: Vec<AnyElement>,
 }
 
 /// How much of a table's handles to paint, and where.
@@ -1580,6 +1871,8 @@ struct PaintInfo {
     /// The cell the caret is in, from the element's top left.
     cell: Option<Bounds<Pixels>>,
     controls: Option<Controls>,
+    /// The bar and the handles of the picture the pointer is over.
+    picture: Option<picture::PicPaint>,
     /// Where a dragged row or column would go: a line, from the element's top left.
     drop_line: Option<Bounds<Pixels>>,
 }
@@ -1645,6 +1938,16 @@ fn paint_flow(flow: &crate::layout::Flow, origin: Point<Pixels>, line: Option<us
     }
 }
 
+/// A code block's language mark: how far in from the plate's top and
+/// right it sits, its icon's size, and its name's (`layout.rs` shapes the
+/// name at `MARK_PX`).
+const MARK_IN: f32 = 9.;
+const MARK_ICON: f32 = 13.;
+/// The room the icons leave inside their box, and a letter after its ink.
+const MARK_ICON_PAD: f32 = 1.5;
+const MARK_BEARING: f32 = 0.5;
+pub(crate) const MARK_PX: f32 = 11.5;
+
 /// The ground and the outline of a table, the head's tint inside it. The
 /// lines between its cells are each row's.
 fn paint_plate(left: f32, top: f32, width: f32, height: f32, head: f32, theme: &gpui_component::Theme, window: &mut Window) {
@@ -1660,15 +1963,20 @@ fn paint_plate(left: f32, top: f32, width: f32, height: f32, head: f32, theme: &
 fn paint_row(row: &Row, ox: f32, oy: f32, height: f32, full_w: Pixels, line: Option<usize>, info: &PaintInfo, theme: &gpui_component::Theme, window: &mut Window, cx: &mut App) {
     match row {
         Row::Text(r) => paint_text(r, ox, oy, height, line, info, theme, window, cx),
-        Row::Pad { lang, h } => {
+        Row::Pad { lang, .. } => {
             if let Some((l, icon, color)) = lang {
+                // The mark sits in the plate's corner as far from its top as
+                // from its right, measured to what shows: the icon's top and
+                // the name's last letter. The name's capitals are centered on
+                // the icon, and its descenders stay in the fence's row.
                 let name_w = f32::from(l.width());
-                let icon_px = 13.;
-                // The mark stands in the row's middle, `PLATE_X` in from the right.
-                let x = f32::from(full_w) - name_w - PLATE_X;
-                let y = oy + (*h - 16.) / 2.;
-                let _ = l.paint(point(px(ox + x), px(y)), px(16.), TextAlign::Left, None, window, cx);
-                let ib = Bounds::new(point(px(ox + x - icon_px - 5.), px(y + (16. - icon_px) / 2.)), size(px(icon_px), px(icon_px)));
+                let x = f32::from(full_w) - name_w - (MARK_IN - MARK_BEARING);
+                let icon_top = oy + MARK_IN - MARK_ICON_PAD;
+                let cap = 0.727 * MARK_PX;
+                let baseline = icon_top + MARK_ICON / 2. + cap / 2.;
+                let tall = l.ascent + l.descent;
+                let _ = l.paint(point(px(ox + x), px(baseline) - l.ascent), tall, TextAlign::Left, None, window, cx);
+                let ib = Bounds::new(point(px(ox + x - MARK_ICON - 5.), px(icon_top)), size(px(MARK_ICON), px(MARK_ICON)));
                 let _ = window.paint_svg(ib, SharedString::from(*icon), None, TransformationMatrix::unit(), *color, cx);
             }
         }
@@ -1713,23 +2021,35 @@ fn paint_row(row: &Row, ox: f32, oy: f32, height: f32, full_w: Pixels, line: Opt
             }
         }
         Row::Picture(p) => {
-            let mut y = oy;
-            if let Some(source) = &p.source {
-                paint_text(source, ox, y, source.flow.height, line, info, theme, window, cx);
-                y += source.top_pad + source.flow.height;
-            }
-            let b = Bounds::new(point(px(ox + p.x), px(y)), size(px(p.w), px(p.h)));
-            let drawn = info.pictures.borrow().drawn.get(&p.path).cloned();
-            match drawn {
-                Some(image) => {
-                    let _ = window.paint_image(b, b, Corners::all(px(6.)), image, 0, false);
+            let control = Bounds::new(point(px(ox + p.x), px(oy + p.pad)), size(px(p.w), px(p.h)));
+            let round = PICTURE_ROUND;
+            // A frame is a view of its own, laid over the row (`embed.rs`);
+            // so is a picture's bar, which comes over it on the pointer.
+            if !p.embed {
+                let drawn = info.pictures.borrow().drawn.get(&p.path).cloned();
+                match drawn {
+                    Some(image) => {
+                        let _ = window.paint_image(control, control, Corners::all(px(round)), image, 0, false);
+                    }
+                    None => window.paint_quad(quad(control, px(round), theme.muted, px(0.), theme.transparent, BorderStyle::default())),
                 }
-                None => window.paint_quad(quad(b, px(6.), theme.muted, px(0.), theme.transparent, BorderStyle::default())),
             }
+            // The caption under it, on a quiet plate as wide as its words.
+            if let Some(source) = &p.source {
+                let len = source.flow.paras.last().map_or(0, |pa| pa.to);
+                let words = source.flow.boxes(0, len, point(px(ox + source.inset), px(oy + source.top_pad)));
+                let wide = words.iter().fold(None::<Bounds<Pixels>>, |all, b| Some(all.map_or(*b, |a| a.union(b))));
+                if let Some(w) = wide.filter(|w| w.size.width > px(0.5)) {
+                    let plate = Bounds::new(point(w.origin.x - px(9.), w.origin.y - px(2.)), size(w.size.width + px(18.), w.size.height + px(4.)));
+                    window.paint_quad(quad(plate, px(8.), theme.muted.opacity(0.7), px(0.), theme.transparent, BorderStyle::default()));
+                }
+                paint_text(source, ox, oy, source.flow.height, line, info, theme, window, cx);
+            }
+            // Selected, whole or with what is around it: ringed in the
+            // accent, out from its edge, so a frame over it shows it too.
             if let Some(line) = line {
-                let (sa, sb) = info.sel.range();
-                if sa != sb && sa.line <= line && line <= sb.line {
-                    window.paint_quad(quad(b, px(6.), theme.selection, px(0.), theme.transparent, BorderStyle::default()));
+                if !p.embed && p.source.is_none() && covers(&info.sel, line) {
+                    window.with_content_mask(None, |window| picture::paint_ring(control, theme.primary, window));
                 }
             }
         }
@@ -1868,13 +2188,25 @@ impl Element for EditorElement {
         self.editor.update(cx, |e, cx| {
             e.origin = bounds.origin;
             e.read_pictures(cx);
+            e.read_pdfs(cx);
             // The scroller reads its offset before its child is laid out,
             // so a move made here shows at the next frame, which is asked for.
             if e.want_scroll && e.scroll_to_caret(bounds, window) {
                 cx.notify();
             }
         });
-        Prepainted { hitbox, wide }
+        // Each frame that shows, over its row: after the editor's own
+        // hitboxes, so a press on a frame is the frame's.
+        let shown = self.editor.update(cx, |e, cx| e.frames_in_view(bounds, window, cx));
+        let cards = self.editor.update(cx, |e, cx| e.cards_in_view(bounds, window, cx));
+        let mut frames = Vec::with_capacity(shown.len() + cards.len());
+        let views = shown.into_iter().map(|(f, b)| (f.into_any_element(), b)).chain(cards.into_iter().map(|(c, b)| (c.into_any_element(), b)));
+        for (mut el, b) in views {
+            el.layout_as_root(b.size.map(AvailableSpace::Definite), window, cx);
+            el.prepaint_at(b.origin, window, cx);
+            frames.push(el);
+        }
+        Prepainted { hitbox, wide, frames }
     }
 
     fn paint(&mut self, _: Option<&GlobalElementId>, _: Option<&InspectorElementId>, bounds: Bounds<Pixels>, _: &mut (), prepaint: &mut Prepainted, window: &mut Window, cx: &mut App) {
@@ -1888,7 +2220,7 @@ impl Element for EditorElement {
             e.paint_info(point(px(ox), px(oy)), window, cx)
         });
         window.handle_input(&info.focus, ElementInputHandler::new(bounds, editor.clone()), cx);
-        window.set_cursor_style(info.pointer, if info.controls.is_some() { &prepaint.wide } else { &prepaint.hitbox });
+        window.set_cursor_style(info.pointer, if info.controls.is_some() || info.picture.is_some() { &prepaint.wide } else { &prepaint.hitbox });
 
         let cache = info.cache.borrow();
         let view = window.content_mask().bounds;
@@ -1913,6 +2245,7 @@ impl Element for EditorElement {
             }
         }
 
+        let mut rings: Vec<Bounds<Pixels>> = Vec::new();
         for line in first..cache.entries.len() {
             let entry = &cache.entries[line];
             let top = cache.tops[line];
@@ -1923,6 +2256,13 @@ impl Element for EditorElement {
                 continue;
             }
             paint_row(&entry.row, ox, oy + top, entry.height, bounds.size.width, Some(line), &info, &theme, window, cx);
+            // A frame's ring goes on after the frame, which covers what
+            // is past its round corners in the sheet's color.
+            if let Row::Picture(p) = &*entry.row {
+                if p.embed && p.source.is_none() && covers(&info.sel, line) {
+                    rings.push(Bounds::new(point(px(ox + p.x), px(oy + top + p.pad)), size(px(p.w), px(p.h))));
+                }
+            }
         }
         drop(cache);
         if let Some(b) = info.cell {
@@ -1951,7 +2291,7 @@ impl Element for EditorElement {
                 return;
             }
             let (x, y) = (f32::from(ev.position.x - bounds.origin.x), f32::from(ev.position.y - bounds.origin.y));
-            let taken = ed.update(cx, |e, cx| e.press_control(x, y, ev.position, cx));
+            let taken = ed.update(cx, |e, cx| e.press_control(x, y, ev.position, cx) || e.press_picture(x, y, ev.click_count, ev.modifiers.shift, window, cx));
             if taken {
                 cx.stop_propagation();
                 crate::widgets::swallow_click(window, cx);
@@ -1972,6 +2312,14 @@ impl Element for EditorElement {
                 if !e.focus.is_focused(window) {
                     window.focus(&e.focus, cx);
                 }
+                // A picture opens in the viewer at a double click, or at a
+                // click while it cannot change.
+                if let Some((_, line)) = e.picture_at(x, y) {
+                    if ev.click_count == 2 || (ev.click_count == 1 && !e.pictures_change()) {
+                        e.view_picture(line, bounds.origin, cx);
+                        return;
+                    }
+                }
                 match e.hit(x, y) {
                     Some(Hit::Task(line)) if !e.read_only => {
                         e.toggle_task_on(line, cx);
@@ -1983,9 +2331,15 @@ impl Element for EditorElement {
                             Some(Hit::Link(target)) if reading && (ev.modifiers.secondary() || ev.click_count == 1) => Some(target),
                             _ => None,
                         };
-                        let p = match e.pos_at(x, y, &e.cache.borrow()) {
-                            Some(p) => p,
-                            None => return,
+                        // Beside a picture is not on it: the line nearest.
+                        let beside = e.beside_picture(x, y);
+                        let p = match beside {
+                            Some(Some(p)) => p,
+                            Some(None) => return,
+                            None => match e.pos_at(x, y, &e.cache.borrow()) {
+                                Some(p) => p,
+                                None => return,
+                            },
                         };
                         let grain = match ev.click_count {
                             1 => Grain::Char,
@@ -2031,7 +2385,7 @@ impl Element for EditorElement {
             }
             let (x, y) = (f32::from(ev.position.x - bounds.origin.x), f32::from(ev.position.y - bounds.origin.y));
             ed.update(cx, |e, cx| {
-                if ev.pressed_button == Some(MouseButton::Left) && e.drag_control(x, y, cx) {
+                if ev.pressed_button == Some(MouseButton::Left) && (e.drag_control(x, y, cx) || e.drag_picture(x, y, cx)) {
                     return;
                 }
                 if let (Some((grain, a, b)), Some(MouseButton::Left)) = (e.drag, ev.pressed_button) {
@@ -2051,11 +2405,14 @@ impl Element for EditorElement {
                 } else {
                     e.pointer_at = (x, y);
                     e.point_at_table(x, y, cx);
+                    e.point_at_picture(x, y, cx);
                     let inside = window.mouse_position().x >= bounds.origin.x;
-                    let pointer = match e.control_at(x, y) {
-                        Some(cells::Control::Edge(_)) => CursorStyle::ResizeColumn,
-                        Some(_) => CursorStyle::PointingHand,
-                        None => match e.hit(x, y) {
+                    let pointer = match (e.control_at(x, y), e.picture_edge_at(x, y)) {
+                        (Some(cells::Control::Edge(_)), _) => CursorStyle::ResizeColumn,
+                        (_, Some(edge)) => edge.cursor(),
+                        (Some(_), _) => CursorStyle::PointingHand,
+                        (None, None) if e.pictures_change() && e.picture_at(x, y).is_some_and(|(_, l)| e.object_line(l)) => CursorStyle::Arrow,
+                        (None, None) => match e.hit(x, y) {
                             Some(Hit::Link(_)) if inside => CursorStyle::PointingHand,
                             Some(Hit::Task(_)) if inside && !e.read_only => CursorStyle::PointingHand,
                             _ => CursorStyle::IBeam,
@@ -2072,7 +2429,7 @@ impl Element for EditorElement {
         window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
             if phase == DispatchPhase::Bubble {
                 ed.update(cx, |e, cx| {
-                    if e.drop_control(cx) {
+                    if e.drop_control(cx) || e.drop_picture(cx) {
                         return;
                     }
                     if let Some(target) = e.pressed_link.take() {
@@ -2089,7 +2446,28 @@ impl Element for EditorElement {
                 });
             }
         });
+        for frame in &mut prepaint.frames {
+            frame.paint(window, cx);
+        }
+        // The rings around pieces, over the frames they stand around.
+        window.with_content_mask(None, |window| {
+            for b in rings {
+                picture::paint_ring(b, theme.primary, window);
+            }
+            if let Some(c) = &info.picture {
+                picture::paint_picture_edge(c, ox, oy, &theme, window);
+            }
+        });
+        if info.picture.as_ref().is_some_and(|c| c.opacity < 1.) {
+            window.request_animation_frame();
+        }
     }
+}
+
+/// The selection takes something of `line` and is not a caret.
+fn covers(sel: &Sel, line: usize) -> bool {
+    let (a, b) = sel.range();
+    a != b && a.line <= line && line <= b.line
 }
 
 impl Editor {
@@ -2158,6 +2536,7 @@ impl Editor {
             pictures: self.pictures.clone(),
             cell,
             controls,
+            picture: self.picture_paint(),
             drop_line,
         }
     }
@@ -2181,7 +2560,17 @@ impl Editor {
         // marks on the caret's line.
         let link = self.link_at(x, y);
         if link.is_some() {
-            return MenuAt { link, ..Default::default() };
+            let file = link.as_ref().and_then(|l| l.url.as_deref()).and_then(|url| self.file_of(url));
+            let layout = self.pos_at(x, y, &self.cache.borrow()).and_then(|p| self.layout_at(p.line, p.col));
+            return MenuAt { link, file, layout, ..Default::default() };
+        }
+        // On a picture the picture is selected whole, and the menu is its
+        // own and its file's, as its bar's is.
+        if let Some((file, line)) = self.picture_at(x, y) {
+            if self.object_line(line) {
+                self.select_object(line, window, cx);
+            }
+            return self.piece_menu(line, Some(file).filter(|_| !self.is_web_card(line)));
         }
         if !self.focus.is_focused(window) {
             window.focus(&self.focus, cx);
@@ -2198,7 +2587,31 @@ impl Editor {
         }
         let table = place.and_then(|p| self.cell_of(p)).and_then(|c| Some((c, Scope::Cell, self.table_facts(c)?)));
         let blank = !self.locked() && self.doc.line(self.sel.head.line).trim().is_empty() && table.is_none();
-        MenuAt { link: None, issue, table, blank }
+        MenuAt { link: None, issue, table, blank, ..Default::default() }
+    }
+
+    /// A card of a page of the web stands on `line`: it has no file.
+    fn is_web_card(&self, line: usize) -> bool {
+        matches!(self.cache.borrow().entries.get(line).map(|e| &*e.row), Some(Row::Picture(p)) if p.web)
+    }
+
+    /// The file a link leads to, when it is one of the vault's and not a note.
+    fn file_of(&self, url: &str) -> Option<PathBuf> {
+        let pictures = self.pictures.borrow();
+        onyx_core::vault::find_file(pictures.vault.as_deref(), &pictures.note, url).filter(|p| !onyx_core::vault::is_note(p))
+    }
+
+    /// The picture drawn under a point, when one is, and its line.
+    pub(super) fn picture_at(&self, x: f32, y: f32) -> Option<(PathBuf, usize)> {
+        let cache = self.cache.borrow();
+        if cache.entries.is_empty() {
+            return None;
+        }
+        let line = self.line_at(y, &cache);
+        let (entry, top) = (cache.entries.get(line)?, cache.tops[line]);
+        let Row::Picture(p) = &*entry.row else { return None };
+        let top = top + p.pad;
+        (x >= p.x && x <= p.x + p.w && y >= top && y <= top + p.h).then(|| (p.path.clone(), line))
     }
 
     /// The pictures a layout met, read off the window's thread.
@@ -2224,8 +2637,13 @@ impl Editor {
 
     /// Lets the pictures go, as a note is closed.
     pub fn let_pictures_go(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        for (_, image) in self.pictures.borrow_mut().drawn.drain() {
+        let mut store = self.pictures.borrow_mut();
+        for (_, image) in store.drawn.drain() {
             cx.drop_image(image, Some(window));
+        }
+        drop(store);
+        for (_, frame) in self.embeds.drain() {
+            frame.update(cx, |m, cx| m.let_go(window, cx));
         }
     }
 }

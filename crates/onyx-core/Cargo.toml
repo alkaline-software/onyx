@@ -13,10 +13,15 @@ serde_json.workspace = true
 dirs.workspace = true
 # The update check and download: plain HTTPS, no GitHub API.
 ureq = { version = "2", default-features = false, features = ["tls"] }
+# A web link's card: the page's address joined with what its head names.
+url = "2"
 # A note deleted goes to the system's trash, never straight off the disk.
 trash = "5"
 # The vault's folder watched, so the tree and an open note follow the disk.
 notify = "7"
+# A note changed on the disk while the window had changes of its own,
+# joined line by line (`merge.rs`).
+similar = "2"
 # A note set as a PDF (`pdf.rs`): Typst's compiler, its PDF writer and its
 # drawing of a page for the preview, and MiTeX, which writes LaTeX math as
 # Typst's. pulldown-cmark reads the note as the editor does; fontdb finds
@@ -31,6 +36,18 @@ fontdb = "0.23"
 comemo = "0.5"
 # Spelling and grammar in English, in the process, nothing sent anywhere.
 harper-core = { version = "2.11", default-features = false, features = ["concurrent"] }
+# A file of a vault's `.assets` shown (`preview.rs`). A workbook is
+# calamine's; a Word document and a deck are zips of XML read with zip and
+# quick-xml, the versions calamine builds on. A PDF's pages are drawn by
+# hayro, the version typst-render already brings.
+calamine = "0.36"
+zip = { version = "8", default-features = false, features = ["deflate"] }
+quick-xml = "0.41"
+hayro = "0.7"
+# A picture's size for Word and the web, read from its file's header, and
+# a WebP written as a PNG for Word, which reads no WebP. The version
+# Typst already brings.
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 
 [target.'cfg(windows)'.dependencies]
 # The installer and updater on Windows; pinned to the version release.yml's vpk uses.

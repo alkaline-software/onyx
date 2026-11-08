@@ -130,6 +130,9 @@ impl TextSizes {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct PdfConfig {
+    /// What the sheet makes: `pdf`, `image` (the note as one long PNG),
+    /// `word` (.docx) or `html`.
+    pub format: String,
     /// `a3`, `a4`, `a5`, `letter`, `legal` or `tabloid`; empty, what the
     /// person's region prints on (`pdf::paper_of_locale`).
     pub paper: String,
@@ -152,16 +155,25 @@ pub struct PdfConfig {
     pub color: bool,
     /// Each top heading starts a page.
     pub breaks: bool,
+    /// The files the note embeds or links to, after its words, each with
+    /// a way there and back (`attach`).
+    pub attached: bool,
 }
 
 impl PdfConfig {
     pub const LEAST_SIZE: f32 = 8.;
     pub const MOST_SIZE: f32 = 16.;
+
+    /// Whether the note is set on one page as long as it is, with no
+    /// paper's height: an image, and the web's page.
+    pub fn long(&self) -> bool {
+        matches!(self.format.as_str(), "image" | "html")
+    }
 }
 
 impl Default for PdfConfig {
     fn default() -> Self {
-        Self { paper: String::new(), landscape: false, margins: "normal".into(), face: String::new(), mono: String::new(), size: 10.5, spacing: "normal".into(), name: true, numbers: true, contents: false, color: true, breaks: false }
+        Self { format: "pdf".into(), paper: String::new(), landscape: false, margins: "normal".into(), face: String::new(), mono: String::new(), size: 10.5, spacing: "normal".into(), name: true, numbers: true, contents: false, color: true, breaks: false, attached: true }
     }
 }
 

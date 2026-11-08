@@ -26,6 +26,15 @@
     "de": "Akzentfarbe",
     "es": "Color de acentuación"
   },
+  "Align": {
+    "zh-Hans": "对齐",
+    "zh-Hant": "對齊",
+    "ja": "配置",
+    "ko": "정렬",
+    "fr": "Aligner",
+    "de": "Ausrichten",
+    "es": "Alinear"
+  },
   "Align Center": {
     "zh-Hans": "居中",
     "zh-Hant": "置中",
@@ -79,6 +88,15 @@
     "fr": "Comme la note",
     "de": "Wie in der Notiz",
     "es": "Como en la nota"
+  },
+  "Assets": {
+    "zh-Hans": "资源",
+    "zh-Hant": "資源",
+    "ja": "アセット",
+    "ko": "에셋",
+    "fr": "Ressources",
+    "de": "Assets",
+    "es": "Recursos"
   },
   "Auto": {
     "zh-Hans": "自动",
@@ -305,6 +323,15 @@
     "de": "Pfad kopieren",
     "es": "Copiar la ruta"
   },
+  "Copy Paths": {
+    "zh-Hans": "拷贝路径",
+    "zh-Hant": "拷貝路徑",
+    "ja": "パスをコピー",
+    "ko": "경로 복사",
+    "fr": "Copier les chemins",
+    "de": "Pfade kopieren",
+    "es": "Copiar rutas"
+  },
   "Copy Relative Path": {
     "zh-Hans": "拷贝相对路径",
     "zh-Hant": "拷貝相對路徑",
@@ -359,6 +386,15 @@
     "de": "Dunkel",
     "es": "Oscuro"
   },
+  "Delete": {
+    "zh-Hans": "删除",
+    "zh-Hant": "刪除",
+    "ja": "削除",
+    "ko": "삭제",
+    "fr": "Supprimer",
+    "de": "Löschen",
+    "es": "Eliminar"
+  },
   "Delete Column": {
     "zh-Hans": "删除列",
     "zh-Hant": "刪除欄",
@@ -385,6 +421,15 @@
     "fr": "Supprimer le tableau",
     "de": "Tabelle löschen",
     "es": "Eliminar tabla"
+  },
+  "Documents": {
+    "zh-Hans": "文稿",
+    "zh-Hant": "文件",
+    "ja": "書類",
+    "ko": "문서",
+    "fr": "Documents",
+    "de": "Dokumente",
+    "es": "Documentos"
   },
   "Downloading… {percent}%": {
     "zh-Hans": "正在下载… {percent}%",
@@ -422,6 +467,15 @@
     "de": "Bearbeiten (⌃1)",
     "es": "Edición (⌃1)"
   },
+  "Edit Link": {
+    "zh-Hans": "编辑链接",
+    "zh-Hant": "編輯連結",
+    "ja": "リンクを編集",
+    "ko": "링크 편집",
+    "fr": "Modifier le lien",
+    "de": "Link bearbeiten",
+    "es": "Editar enlace"
+  },
   "English (UK)": {
     "zh-Hans": "英语（英国）",
     "zh-Hant": "英文（英國）",
@@ -440,32 +494,23 @@
     "de": "Englisch (USA)",
     "es": "Inglés (EE. UU.)"
   },
-  "Export to PDF": {
-    "zh-Hans": "导出为 PDF",
-    "zh-Hant": "匯出為 PDF",
-    "ja": "PDF として書き出す",
-    "ko": "PDF로 내보내기",
-    "fr": "Exporter en PDF",
-    "de": "Als PDF exportieren",
-    "es": "Exportar a PDF"
+  "Export": {
+    "zh-Hans": "导出",
+    "zh-Hant": "匯出",
+    "ja": "書き出す",
+    "ko": "내보내기",
+    "fr": "Exporter",
+    "de": "Exportieren",
+    "es": "Exportar"
   },
-  "Export to PDF (⇧⌘E)": {
-    "zh-Hans": "导出为 PDF (⇧⌘E)",
-    "zh-Hant": "輸出為 PDF (⇧⌘E)",
-    "ja": "PDF に書き出す (⇧⌘E)",
-    "ko": "PDF로 내보내기 (⇧⌘E)",
-    "fr": "Exporter en PDF (⇧⌘E)",
-    "de": "Als PDF exportieren (⇧⌘E)",
-    "es": "Exportar a PDF (⇧⌘E)"
-  },
-  "Export to PDF…": {
-    "zh-Hans": "导出为 PDF…",
-    "zh-Hant": "匯出為 PDF…",
-    "ja": "PDF として書き出す…",
-    "ko": "PDF로 내보내기…",
-    "fr": "Exporter en PDF…",
-    "de": "Als PDF exportieren …",
-    "es": "Exportar a PDF…"
+  "Export (⇧⌘E)": {
+    "zh-Hans": "导出 (⇧⌘E)",
+    "zh-Hant": "匯出 (⇧⌘E)",
+    "ja": "書き出す (⇧⌘E)",
+    "ko": "내보내기 (⇧⌘E)",
+    "fr": "Exporter (⇧⌘E)",
+    "de": "Exportieren (⇧⌘E)",
+    "es": "Exportar (⇧⌘E)"
   },
   "Exported {name}": {
     "zh-Hans": "已导出 {name}",
@@ -575,6 +620,15 @@
     "de": "Französisch",
     "es": "Francés"
   },
+  "Full Width": {
+    "zh-Hans": "全宽",
+    "zh-Hant": "全寬",
+    "ja": "全幅",
+    "ko": "전체 너비",
+    "fr": "Pleine largeur",
+    "de": "Volle Breite",
+    "es": "Ancho completo"
+  },
   "German": {
     "zh-Hans": "德语",
     "zh-Hant": "德文",
@@ -629,15 +683,6 @@
     "de": "Andere ausblenden",
     "es": "Ocultar otros"
   },
-  "Home": {
-    "zh-Hans": "主页",
-    "zh-Hant": "首頁",
-    "ja": "ホーム",
-    "ko": "홈",
-    "fr": "Accueil",
-    "de": "Start",
-    "es": "Inicio"
-  },
   "How the vault's page greets you and the sidebar shows you.": {
     "zh-Hans": "仓库页面如何问候你，侧边栏如何显示你。",
     "zh-Hant": "儲存庫頁面如何問候你，側邊欄如何顯示你。",
@@ -655,6 +700,24 @@
     "fr": "Ignorer",
     "de": "Ignorieren",
     "es": "Ignorar"
+  },
+  "Image": {
+    "zh-Hans": "图片",
+    "zh-Hant": "圖片",
+    "ja": "画像",
+    "ko": "이미지",
+    "fr": "Image",
+    "de": "Bild",
+    "es": "Imagen"
+  },
+  "Include": {
+    "zh-Hans": "包含",
+    "zh-Hant": "包含",
+    "ja": "含める",
+    "ko": "포함",
+    "fr": "Inclure",
+    "de": "Einschließen",
+    "es": "Incluir"
   },
   "Insert Column Left": {
     "zh-Hans": "在左侧插入列",
@@ -764,6 +827,15 @@
     "de": "Groß",
     "es": "Grande"
   },
+  "Large Card": {
+    "zh-Hans": "大卡片",
+    "zh-Hant": "大卡片",
+    "ja": "大きいカード",
+    "ko": "큰 카드",
+    "fr": "Grande carte",
+    "de": "Große Karte",
+    "es": "Tarjeta grande"
+  },
   "Learn Spelling": {
     "zh-Hans": "学习拼写",
     "zh-Hant": "學習拼字",
@@ -809,6 +881,24 @@
     "de": "Zeilenabstand",
     "es": "Interlineado"
   },
+  "Link": {
+    "zh-Hans": "链接",
+    "zh-Hant": "連結",
+    "ja": "リンク",
+    "ko": "링크",
+    "fr": "Lien",
+    "de": "Link",
+    "es": "Enlace"
+  },
+  "Linked files": {
+    "zh-Hans": "链接的文件",
+    "zh-Hant": "連結的檔案",
+    "ja": "リンクしたファイル",
+    "ko": "링크한 파일",
+    "fr": "Fichiers liés",
+    "de": "Verlinkte Dateien",
+    "es": "Archivos enlazados"
+  },
   "Loose": {
     "zh-Hans": "宽松",
     "zh-Hant": "寬鬆",
@@ -827,6 +917,15 @@
     "de": "Ränder",
     "es": "Márgenes"
   },
+  "Media": {
+    "zh-Hans": "音视频",
+    "zh-Hant": "影音",
+    "ja": "メディア",
+    "ko": "미디어",
+    "fr": "Médias",
+    "de": "Medien",
+    "es": "Multimedia"
+  },
   "Medium": {
     "zh-Hans": "中",
     "zh-Hant": "中",
@@ -835,6 +934,15 @@
     "fr": "Moyen",
     "de": "Mittel",
     "es": "Mediano"
+  },
+  "Medium Card": {
+    "zh-Hans": "中卡片",
+    "zh-Hant": "中卡片",
+    "ja": "中くらいのカード",
+    "ko": "중간 카드",
+    "fr": "Carte moyenne",
+    "de": "Mittlere Karte",
+    "es": "Tarjeta mediana"
   },
   "Middle": {
     "zh-Hans": "中",
@@ -871,6 +979,15 @@
     "fr": "Police à chasse fixe",
     "de": "Festbreitenschrift",
     "es": "Fuente monoespaciada"
+  },
+  "More": {
+    "zh-Hans": "更多",
+    "zh-Hant": "更多",
+    "ja": "その他",
+    "ko": "더 보기",
+    "fr": "Plus",
+    "de": "Mehr",
+    "es": "Más"
   },
   "Moss": {
     "zh-Hans": "苔绿",
@@ -925,6 +1042,24 @@
     "fr": "Placer dans la corbeille",
     "de": "In den Papierkorb legen",
     "es": "Mover a la papelera"
+  },
+  "Move {n} Item to Trash": {
+    "zh-Hans": "将 {n} 项移到废纸篓",
+    "zh-Hant": "將 {n} 個項目丟到垃圾桶",
+    "ja": "{n} 項目をゴミ箱に入れる",
+    "ko": "{n}개 항목을 휴지통으로 이동",
+    "fr": "Placer {n} élément dans la corbeille",
+    "de": "{n} Objekt in den Papierkorb legen",
+    "es": "Trasladar {n} ítem a la papelera"
+  },
+  "Move {n} Items to Trash": {
+    "zh-Hans": "将 {n} 项移到废纸篓",
+    "zh-Hant": "將 {n} 個項目丟到垃圾桶",
+    "ja": "{n} 項目をゴミ箱に入れる",
+    "ko": "{n}개 항목을 휴지통으로 이동",
+    "fr": "Placer {n} éléments dans la corbeille",
+    "de": "{n} Objekte in den Papierkorb legen",
+    "es": "Trasladar {n} ítems a la papelera"
   },
   "Narrow": {
     "zh-Hans": "窄",
@@ -1016,6 +1151,15 @@
     "de": "Nächster (↩)",
     "es": "Siguiente (↩)"
   },
+  "No assets yet. Paste or drop a file into a note.": {
+    "zh-Hans": "还没有资源。把文件粘贴或拖进笔记即可。",
+    "zh-Hant": "還沒有資源。把檔案貼上或拖進筆記即可。",
+    "ja": "アセットはまだありません。ファイルをノートにペーストかドロップしてください。",
+    "ko": "아직 에셋이 없습니다. 파일을 노트에 붙여넣거나 끌어다 놓으세요.",
+    "fr": "Aucune ressource. Collez ou déposez un fichier dans une note.",
+    "de": "Noch keine Assets. Füge eine Datei in eine Notiz ein oder zieh sie hinein.",
+    "es": "Aún no hay recursos. Pega o suelta un archivo en una nota."
+  },
   "No matches.": {
     "zh-Hans": "没有匹配。",
     "zh-Hant": "沒有符合。",
@@ -1106,6 +1250,15 @@
     "de": "Notizen liegen in einem eigenen Ordner, einem Tresor, als einfache Markdown-Dateien.",
     "es": "Las notas viven en una carpeta tuya, una bóveda, como simples archivos Markdown."
   },
+  "Nothing was moved: {why}": {
+    "zh-Hans": "没有移动任何内容：{why}",
+    "zh-Hant": "沒有移動任何內容：{why}",
+    "ja": "何も移動されませんでした：{why}",
+    "ko": "아무것도 이동되지 않았습니다: {why}",
+    "fr": "Rien n’a été déplacé : {why}",
+    "de": "Nichts wurde bewegt: {why}",
+    "es": "No se movió nada: {why}"
+  },
   "On the page": {
     "zh-Hans": "页面内容",
     "zh-Hant": "頁面內容",
@@ -1123,6 +1276,24 @@
     "fr": "Sur cet ordinateur",
     "de": "Auf diesem Computer",
     "es": "En este equipo"
+  },
+  "Only the start of the file is shown.": {
+    "zh-Hans": "只显示了文件的开头。",
+    "zh-Hant": "只顯示了檔案的開頭。",
+    "ja": "ファイルの最初の部分だけを表示しています。",
+    "ko": "파일의 앞부분만 표시됩니다.",
+    "fr": "Seul le début du fichier est affiché.",
+    "de": "Nur der Anfang der Datei wird gezeigt.",
+    "es": "Solo se muestra el principio del archivo."
+  },
+  "Onyx cannot show this kind of file.": {
+    "zh-Hans": "Onyx 无法显示这类文件。",
+    "zh-Hant": "Onyx 無法顯示這類檔案。",
+    "ja": "Onyx はこの種類のファイルを表示できません。",
+    "ko": "Onyx는 이 종류의 파일을 표시할 수 없습니다.",
+    "fr": "Onyx ne peut pas afficher ce type de fichier.",
+    "de": "Onyx kann diese Art von Datei nicht zeigen.",
+    "es": "Onyx no puede mostrar este tipo de archivo."
   },
   "Open": {
     "zh-Hans": "打开",
@@ -1187,6 +1358,15 @@
     "de": "Im Finder öffnen",
     "es": "Abrir en el Finder"
   },
+  "Open with Default App": {
+    "zh-Hans": "用默认应用打开",
+    "zh-Hant": "用預設 App 打開",
+    "ja": "デフォルトのアプリで開く",
+    "ko": "기본 앱으로 열기",
+    "fr": "Ouvrir avec l’app par défaut",
+    "de": "Mit Standard-App öffnen",
+    "es": "Abrir con la app predeterminada"
+  },
   "Orchid": {
     "zh-Hans": "兰花紫",
     "zh-Hant": "蘭花紫",
@@ -1204,6 +1384,33 @@
     "fr": "Orientation",
     "de": "Ausrichtung",
     "es": "Orientación"
+  },
+  "Original Size": {
+    "zh-Hans": "原始大小",
+    "zh-Hant": "原始大小",
+    "ja": "元のサイズ",
+    "ko": "원래 크기",
+    "fr": "Taille originale",
+    "de": "Originalgröße",
+    "es": "Tamaño original"
+  },
+  "Other": {
+    "zh-Hans": "其他",
+    "zh-Hant": "其他",
+    "ja": "その他",
+    "ko": "기타",
+    "fr": "Autres",
+    "de": "Andere",
+    "es": "Otros"
+  },
+  "Outline": {
+    "zh-Hans": "目录",
+    "zh-Hant": "目錄",
+    "ja": "アウトライン",
+    "ko": "개요",
+    "fr": "Signets",
+    "de": "Gliederung",
+    "es": "Esquema"
   },
   "Page": {
     "zh-Hans": "页面",
@@ -1259,6 +1466,15 @@
     "de": "Immergrün",
     "es": "Pervinca"
   },
+  "Pictures": {
+    "zh-Hans": "图片",
+    "zh-Hant": "圖片",
+    "ja": "画像",
+    "ko": "사진",
+    "fr": "Images",
+    "de": "Bilder",
+    "es": "Imágenes"
+  },
   "Portrait": {
     "zh-Hans": "纵向",
     "zh-Hant": "直向",
@@ -1268,6 +1484,15 @@
     "de": "Hochformat",
     "es": "Vertical"
   },
+  "Preview": {
+    "zh-Hans": "预览",
+    "zh-Hant": "預覽",
+    "ja": "プレビュー",
+    "ko": "미리보기",
+    "fr": "Aperçu",
+    "de": "Vorschau",
+    "es": "Vista previa"
+  },
   "Previous (⇧↩)": {
     "zh-Hans": "上一个 (⇧↩)",
     "zh-Hant": "上一個 (⇧↩)",
@@ -1276,15 +1501,6 @@
     "fr": "Précédent (⇧↩)",
     "de": "Vorheriger (⇧↩)",
     "es": "Anterior (⇧↩)"
-  },
-  "Print (⌘P)": {
-    "zh-Hans": "打印 (⌘P)",
-    "zh-Hant": "列印 (⌘P)",
-    "ja": "プリント (⌘P)",
-    "ko": "인쇄 (⌘P)",
-    "fr": "Imprimer (⌘P)",
-    "de": "Drucken (⌘P)",
-    "es": "Imprimir (⌘P)"
   },
   "Print…": {
     "zh-Hans": "打印…",
@@ -1367,6 +1583,15 @@
     "de": "Umbenennen",
     "es": "Renombrar"
   },
+  "Rename File": {
+    "zh-Hans": "重命名文件",
+    "zh-Hant": "重新命名檔案",
+    "ja": "ファイル名を変更",
+    "ko": "파일 이름 변경",
+    "fr": "Renommer le fichier",
+    "de": "Datei umbenennen",
+    "es": "Renombrar archivo"
+  },
   "Rename Folder": {
     "zh-Hans": "重命名文件夹",
     "zh-Hant": "重新命名檔案夾",
@@ -1393,6 +1618,24 @@
     "fr": "Rouvrir l'onglet fermé",
     "de": "Geschlossenen Tab wieder öffnen",
     "es": "Reabrir pestaña cerrada"
+  },
+  "Reset Zoom": {
+    "zh-Hans": "复原缩放",
+    "zh-Hant": "重設縮放",
+    "ja": "ズームをリセット",
+    "ko": "확대/축소 재설정",
+    "fr": "Réinitialiser le zoom",
+    "de": "Zoom zurücksetzen",
+    "es": "Restablecer zoom"
+  },
+  "Reset Zoom (⌘0)": {
+    "zh-Hans": "复原缩放 (⌘0)",
+    "zh-Hant": "重設縮放 (⌘0)",
+    "ja": "ズームをリセット (⌘0)",
+    "ko": "확대/축소 재설정 (⌘0)",
+    "fr": "Réinitialiser le zoom (⌘0)",
+    "de": "Zoom zurücksetzen (⌘0)",
+    "es": "Restablecer zoom (⌘0)"
   },
   "Reset to {size} pt": {
     "zh-Hans": "重设为 {size} 磅",
@@ -1429,15 +1672,6 @@
     "fr": "Sans serif",
     "de": "Sans serif",
     "es": "Sans serif"
-  },
-  "Save": {
-    "zh-Hans": "存储",
-    "zh-Hant": "儲存",
-    "ja": "保存",
-    "ko": "저장",
-    "fr": "Enregistrer",
-    "de": "Sichern",
-    "es": "Guardar"
   },
   "Search (⌘K)": {
     "zh-Hans": "搜索 (⌘K)",
@@ -1520,6 +1754,15 @@
     "de": "Alle einblenden",
     "es": "Mostrar todo"
   },
+  "Show As": {
+    "zh-Hans": "显示为",
+    "zh-Hant": "顯示為",
+    "ja": "表示",
+    "ko": "표시",
+    "fr": "Afficher",
+    "de": "Anzeigen als",
+    "es": "Mostrar como"
+  },
   "Show in Explorer": {
     "zh-Hans": "在资源管理器中显示",
     "zh-Hant": "在檔案總管中顯示",
@@ -1564,6 +1807,15 @@
     "fr": "Petit",
     "de": "Klein",
     "es": "Pequeño"
+  },
+  "Small Card": {
+    "zh-Hans": "小卡片",
+    "zh-Hant": "小卡片",
+    "ja": "小さいカード",
+    "ko": "작은 카드",
+    "fr": "Petite carte",
+    "de": "Kleine Karte",
+    "es": "Tarjeta pequeña"
   },
   "Sort A to Z": {
     "zh-Hans": "按 A 到 Z 排序",
@@ -1673,6 +1925,24 @@
     "de": "Die Prüfung ist fehlgeschlagen: {why}",
     "es": "La comprobación no se completó: {why}"
   },
+  "The file was not made: {why}": {
+    "zh-Hans": "未能生成文件：{why}",
+    "zh-Hant": "未能產生檔案：{why}",
+    "ja": "ファイルを作成できませんでした：{why}",
+    "ko": "파일을 만들지 못했습니다: {why}",
+    "fr": "Le fichier n’a pas été créé : {why}",
+    "de": "Die Datei wurde nicht erstellt: {why}",
+    "es": "No se creó el archivo: {why}"
+  },
+  "The first {n} of {total} pages.": {
+    "zh-Hans": "共 {total} 页中的前 {n} 页。",
+    "zh-Hant": "共 {total} 頁中的前 {n} 頁。",
+    "ja": "全 {total} ページのうち最初の {n} ページ。",
+    "ko": "전체 {total}쪽 중 처음 {n}쪽.",
+    "fr": "Les {n} premières pages sur {total}.",
+    "de": "Die ersten {n} von {total} Seiten.",
+    "es": "Las primeras {n} de {total} páginas."
+  },
   "The folder could not be made: {why}": {
     "zh-Hans": "无法新建文件夹：{why}",
     "zh-Hant": "無法新增檔案夾：{why}",
@@ -1727,15 +1997,6 @@
     "de": "Die Notiz konnte nicht geschrieben werden: {why}",
     "es": "No se pudo escribir la nota: {why}"
   },
-  "The PDF was not made: {why}": {
-    "zh-Hans": "未能生成 PDF：{why}",
-    "zh-Hant": "未能產生 PDF：{why}",
-    "ja": "PDF を作成できませんでした：{why}",
-    "ko": "PDF를 만들지 못했습니다: {why}",
-    "fr": "Le PDF n’a pas été créé : {why}",
-    "de": "Das PDF wurde nicht erstellt: {why}",
-    "es": "No se creó el PDF: {why}"
-  },
   "The picture could not be used: {why}": {
     "zh-Hans": "无法使用这张图片：{why}",
     "zh-Hant": "無法使用這張圖片：{why}",
@@ -1771,6 +2032,87 @@
     "fr": "Le coffre n'a pas été créé : {why}",
     "de": "Der Tresor wurde nicht erstellt: {why}",
     "es": "La bóveda no se creó: {why}"
+  },
+  "There is no text in this file to show.": {
+    "zh-Hans": "这个文件里没有可显示的文字。",
+    "zh-Hant": "這個檔案裡沒有可顯示的文字。",
+    "ja": "このファイルには表示できるテキストがありません。",
+    "ko": "이 파일에는 표시할 텍스트가 없습니다.",
+    "fr": "Ce fichier ne contient aucun texte à afficher.",
+    "de": "Diese Datei enthält keinen Text zum Zeigen.",
+    "es": "Este archivo no tiene texto que mostrar."
+  },
+  "This PDF could not be read.": {
+    "zh-Hans": "这个 PDF 无法读取。",
+    "zh-Hant": "這個 PDF 無法讀取。",
+    "ja": "この PDF を読み込めませんでした。",
+    "ko": "이 PDF를 읽을 수 없습니다.",
+    "fr": "Ce PDF n’a pas pu être lu.",
+    "de": "Dieses PDF konnte nicht gelesen werden.",
+    "es": "No se pudo leer este PDF."
+  },
+  "This PDF has no such page.": {
+    "zh-Hans": "这个 PDF 没有这一页。",
+    "zh-Hant": "這個 PDF 沒有這一頁。",
+    "ja": "この PDF にはそのページがありません。",
+    "ko": "이 PDF에는 해당 페이지가 없습니다.",
+    "fr": "Ce PDF n’a pas cette page.",
+    "de": "Dieses PDF hat diese Seite nicht.",
+    "es": "Este PDF no tiene esa página."
+  },
+  "This file could not be read.": {
+    "zh-Hans": "这个文件无法读取。",
+    "zh-Hant": "這個檔案無法讀取。",
+    "ja": "このファイルを読み込めませんでした。",
+    "ko": "이 파일을 읽을 수 없습니다.",
+    "fr": "Ce fichier n’a pas pu être lu.",
+    "de": "Diese Datei konnte nicht gelesen werden.",
+    "es": "No se pudo leer este archivo."
+  },
+  "This file is empty.": {
+    "zh-Hans": "这个文件是空的。",
+    "zh-Hant": "這個檔案是空的。",
+    "ja": "このファイルは空です。",
+    "ko": "이 파일은 비어 있습니다.",
+    "fr": "Ce fichier est vide.",
+    "de": "Diese Datei ist leer.",
+    "es": "Este archivo está vacío."
+  },
+  "This file is protected by a password.": {
+    "zh-Hans": "这个文件受密码保护。",
+    "zh-Hant": "這個檔案受密碼保護。",
+    "ja": "このファイルはパスワードで保護されています。",
+    "ko": "이 파일은 암호로 보호되어 있습니다.",
+    "fr": "Ce fichier est protégé par un mot de passe.",
+    "de": "Diese Datei ist durch ein Passwort geschützt.",
+    "es": "Este archivo está protegido con contraseña."
+  },
+  "This file is too large to show here.": {
+    "zh-Hans": "这个文件太大，无法在这里显示。",
+    "zh-Hant": "這個檔案太大，無法在這裡顯示。",
+    "ja": "このファイルは大きすぎてここでは表示できません。",
+    "ko": "이 파일은 너무 커서 여기에 표시할 수 없습니다.",
+    "fr": "Ce fichier est trop volumineux pour être affiché ici.",
+    "de": "Diese Datei ist zu groß, um sie hier zu zeigen.",
+    "es": "Este archivo es demasiado grande para mostrarlo aquí."
+  },
+  "This page could not be drawn.": {
+    "zh-Hans": "这一页无法绘制。",
+    "zh-Hant": "這一頁無法繪製。",
+    "ja": "このページを描画できませんでした。",
+    "ko": "이 페이지를 그릴 수 없습니다.",
+    "fr": "Cette page n’a pas pu être dessinée.",
+    "de": "Diese Seite konnte nicht gezeichnet werden.",
+    "es": "No se pudo dibujar esta página."
+  },
+  "Thumbnails": {
+    "zh-Hans": "缩略图",
+    "zh-Hant": "縮圖",
+    "ja": "サムネール",
+    "ko": "썸네일",
+    "fr": "Vignettes",
+    "de": "Miniaturen",
+    "es": "Miniaturas"
   },
   "Tight": {
     "zh-Hans": "紧凑",
@@ -1871,6 +2213,15 @@
     "de": "Version {version}",
     "es": "Versión {version}"
   },
+  "Video and sound play in their own app.": {
+    "zh-Hans": "视频和音频在它们自己的应用里播放。",
+    "zh-Hant": "影片和音訊在它們自己的 App 裡播放。",
+    "ja": "動画とサウンドは専用のアプリで再生されます。",
+    "ko": "동영상과 소리는 해당 앱에서 재생됩니다.",
+    "fr": "Les vidéos et les sons s’ouvrent dans leur app.",
+    "de": "Videos und Töne spielen in ihrer eigenen App.",
+    "es": "El vídeo y el sonido se reproducen en su propia app."
+  },
   "View": {
     "zh-Hans": "显示",
     "zh-Hant": "顯示方式",
@@ -1934,6 +2285,42 @@
     "de": "Zoomen",
     "es": "Zoom"
   },
+  "Zoom In": {
+    "zh-Hans": "放大",
+    "zh-Hant": "放大",
+    "ja": "拡大",
+    "ko": "확대",
+    "fr": "Zoom avant",
+    "de": "Vergrößern",
+    "es": "Ampliar"
+  },
+  "Zoom In (⌘+)": {
+    "zh-Hans": "放大 (⌘+)",
+    "zh-Hant": "放大 (⌘+)",
+    "ja": "拡大 (⌘+)",
+    "ko": "확대 (⌘+)",
+    "fr": "Zoom avant (⌘+)",
+    "de": "Vergrößern (⌘+)",
+    "es": "Ampliar (⌘+)"
+  },
+  "Zoom Out": {
+    "zh-Hans": "缩小",
+    "zh-Hant": "縮小",
+    "ja": "縮小",
+    "ko": "축소",
+    "fr": "Zoom arrière",
+    "de": "Verkleinern",
+    "es": "Reducir"
+  },
+  "Zoom Out (⌘-)": {
+    "zh-Hans": "缩小 (⌘-)",
+    "zh-Hant": "縮小 (⌘-)",
+    "ja": "縮小 (⌘-)",
+    "ko": "축소 (⌘-)",
+    "fr": "Zoom arrière (⌘-)",
+    "de": "Verkleinern (⌘-)",
+    "es": "Reducir (⌘-)"
+  },
   "iCloud Drive": {
     "zh-Hans": "iCloud 云盘",
     "zh-Hant": "iCloud 雲碟",
@@ -1952,6 +2339,15 @@
     "de": "keine Treffer",
     "es": "sin coincidencias"
   },
+  "{name} changed outside Onyx; the changes are joined with yours.": {
+    "zh-Hans": "{name} 在 Onyx 之外被修改；这些修改已与你的修改合并。",
+    "zh-Hant": "{name} 在 Onyx 之外被修改；這些修改已與你的修改合併。",
+    "ja": "{name} が Onyx の外で変更されました。その変更はあなたの変更と結合されました。",
+    "ko": "{name}이(가) Onyx 밖에서 변경되었습니다. 그 변경 사항을 내 변경 사항과 합쳤습니다.",
+    "fr": "{name} a changé hors d’Onyx ; ces changements sont joints aux vôtres.",
+    "de": "{name} wurde außerhalb von Onyx geändert; die Änderungen sind mit Ihren zusammengeführt.",
+    "es": "{name} cambió fuera de Onyx; esos cambios se unieron a los tuyos."
+  },
   "{n} hit": {
     "zh-Hans": "{n} 处",
     "zh-Hant": "{n} 處",
@@ -1969,6 +2365,24 @@
     "fr": "{n} occurrences",
     "de": "{n} Treffer",
     "es": "{n} coincidencias"
+  },
+  "{n} item": {
+    "zh-Hans": "{n} 项",
+    "zh-Hant": "{n} 個項目",
+    "ja": "{n} 項目",
+    "ko": "{n}개 항목",
+    "fr": "{n} élément",
+    "de": "{n} Objekt",
+    "es": "{n} ítem"
+  },
+  "{n} items": {
+    "zh-Hans": "{n} 项",
+    "zh-Hant": "{n} 個項目",
+    "ja": "{n} 項目",
+    "ko": "{n}개 항목",
+    "fr": "{n} éléments",
+    "de": "{n} Objekte",
+    "es": "{n} ítems"
   },
   "{n} of {total}": {
     "zh-Hans": "{n} / {total}",

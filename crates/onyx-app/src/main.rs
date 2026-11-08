@@ -3,8 +3,10 @@
 
 mod ambient;
 mod assets;
+mod card;
 mod csd;
 mod editor;
+mod embed;
 mod export;
 #[allow(dead_code)]
 mod file_icons;
@@ -15,6 +17,7 @@ mod layout;
 mod lines;
 mod look;
 mod markdown;
+mod media;
 mod menu;
 mod scroll;
 mod settings;
@@ -23,6 +26,7 @@ mod tabs;
 mod sys;
 mod tables;
 mod ui_state;
+mod viewer;
 mod widgets;
 
 use gpui::*;
@@ -30,7 +34,7 @@ use gpui_component::Root;
 
 use i18n::t;
 use onyx_core::config::Config;
-use shell::{CloseTab, CloseVault, Escape, ExportPdf, PrintNote, FindInNote, FindNext, FindPrev, NewFolder, NewNote, NewVault, ReopenTab, Tab1, Tab2, Tab3, Tab4, Tab5, Tab6, Tab7, Tab8, Tab9, OpenSettings, OpenVault, Save, Shell, ShowLive, ShowNarrow, ShowMiddle, ShowReading, ShowSource, ShowWide, ToggleReading, ToggleSearch, ToggleSidebar, KEY_CONTEXT, MIN_W};
+use shell::{ZoomIn, ZoomOut, ZoomReset, CloseTab, CloseVault, Escape, ExportPdf, PrintNote, FindInNote, FindNext, FindPrev, NewFolder, NewNote, NewVault, ReopenTab, Tab1, Tab2, Tab3, Tab4, Tab5, Tab6, Tab7, Tab8, Tab9, OpenSettings, OpenVault, Shell, ShowLive, ShowNarrow, ShowMiddle, ShowReading, ShowSource, ShowWide, ToggleReading, ToggleSearch, ToggleSidebar, KEY_CONTEXT, MIN_W};
 
 actions!(onyx_app, [Quit, CloseWindow, Hide, HideOthers, ShowAll, Minimize, Zoom, ToggleFullScreen]);
 
@@ -43,13 +47,20 @@ fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("secondary-n", NewNote, None),
         KeyBinding::new("secondary-shift-n", NewFolder, None),
         KeyBinding::new("secondary-shift-o", OpenVault, None),
-        KeyBinding::new("secondary-s", Save, None),
         KeyBinding::new("secondary-shift-e", ExportPdf, None),
         KeyBinding::new("secondary-p", PrintNote, None),
+        KeyBinding::new("secondary-=", ZoomIn, None),
+        KeyBinding::new("secondary-+", ZoomIn, None),
+        KeyBinding::new("secondary--", ZoomOut, None),
+        KeyBinding::new("secondary-0", ZoomReset, None),
         KeyBinding::new("enter", export::ExportNow, Some(shell::EXPORT_CONTEXT)),
         KeyBinding::new("left", export::PagePrev, Some(shell::EXPORT_CONTEXT)),
         KeyBinding::new("right", export::PageNext, Some(shell::EXPORT_CONTEXT)),
         KeyBinding::new("escape", Escape, Some(shell::EXPORT_CONTEXT)),
+        KeyBinding::new("escape", viewer::ViewerClose, Some(viewer::VIEWER_CONTEXT)),
+        KeyBinding::new("space", viewer::ViewerClose, Some(viewer::VIEWER_CONTEXT)),
+        KeyBinding::new("left", viewer::ViewerPrev, Some(viewer::VIEWER_CONTEXT)),
+        KeyBinding::new("right", viewer::ViewerNext, Some(viewer::VIEWER_CONTEXT)),
         KeyBinding::new("secondary-e", ToggleReading, None),
         KeyBinding::new("secondary-k", ToggleSearch, None),
         KeyBinding::new("secondary-f", FindInNote, None),
@@ -86,6 +97,8 @@ fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("secondary-q", Quit, None),
     ];
     keys.extend(editor::key_bindings());
+    keys.extend(embed::key_bindings());
+    keys.extend(shell::tree_keys());
     if cfg!(target_os = "macos") {
         keys.extend([KeyBinding::new("secondary-h", Hide, None), KeyBinding::new("secondary-alt-h", HideOthers, None), KeyBinding::new("secondary-m", Minimize, None), KeyBinding::new("ctrl-secondary-f", ToggleFullScreen, None)]);
     }
@@ -113,8 +126,7 @@ pub(crate) fn app_menus() -> Vec<Menu> {
                 MenuItem::action(t("Open Vault…"), OpenVault),
                 MenuItem::action(t("Close Vault"), CloseVault),
                 MenuItem::separator(),
-                MenuItem::action(t("Save"), Save),
-                MenuItem::action(t("Export to PDF…"), ExportPdf),
+                MenuItem::action(t("Export…"), ExportPdf),
                 MenuItem::action(t("Print…"), PrintNote),
                 MenuItem::separator(),
                 MenuItem::action(t("Close Tab"), CloseTab),
@@ -149,7 +161,7 @@ pub(crate) fn app_menus() -> Vec<Menu> {
     menus.push(Menu {
         name: t("View").into(),
         disabled: false,
-        items: vec![MenuItem::action(t("Edit"), ShowLive), MenuItem::action(t("Source"), ShowSource), MenuItem::action(t("Read"), ShowReading), MenuItem::separator(), MenuItem::action(t("Narrow"), ShowNarrow), MenuItem::action(t("Middle"), ShowMiddle), MenuItem::action(t("Wide"), ShowWide), MenuItem::separator(), MenuItem::action(t("Search…"), ToggleSearch), MenuItem::separator(), MenuItem::action(t("Toggle Sidebar"), ToggleSidebar)],
+        items: vec![MenuItem::action(t("Edit"), ShowLive), MenuItem::action(t("Source"), ShowSource), MenuItem::action(t("Read"), ShowReading), MenuItem::separator(), MenuItem::action(t("Narrow"), ShowNarrow), MenuItem::action(t("Middle"), ShowMiddle), MenuItem::action(t("Wide"), ShowWide), MenuItem::separator(), MenuItem::action(t("Zoom In"), ZoomIn), MenuItem::action(t("Zoom Out"), ZoomOut), MenuItem::action(t("Reset Zoom"), ZoomReset), MenuItem::separator(), MenuItem::action(t("Search…"), ToggleSearch), MenuItem::separator(), MenuItem::action(t("Toggle Sidebar"), ToggleSidebar)],
     });
     menus.push(Menu { name: t("Window").into(), disabled: false, items: vec![MenuItem::action(t("Minimize"), Minimize), MenuItem::action(t("Zoom"), Zoom), MenuItem::action(t("Toggle Full Screen"), ToggleFullScreen)] });
     menus

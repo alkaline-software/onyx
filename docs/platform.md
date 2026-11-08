@@ -23,3 +23,7 @@ A vault made in iCloud goes in Onyx's own iCloud container when the bundle has o
 ## Windows and Linux
 
 As the template has them: Velopack's installer and the Store's `.msix` on Windows, a `.deb`, an AppImage and a snap on Linux, the window's own buttons where the system draws none (`csd.rs`). Neither has been tried on a machine yet for Onyx, and no release carries them; the release's step 6 tries them in VMs once one does.
+
+## The assets' player
+
+A video or a sound in an asset's tab plays in the system's web view through `wry` (`media.rs`): WKWebView on a Mac, WebView2 on Windows, a child of the window drawn over gpui. Linux has no web view that can be set in a gpui window, so there `Player::open` gives none and the tab says the file plays in its own app. `wry` is a dependency on the Mac and Windows only.

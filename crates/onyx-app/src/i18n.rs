@@ -292,11 +292,13 @@ mod tests {
     #[test]
     fn every_phrase_asked_for_is_in_the_table() {
         let table = table();
-        let sources = [include_str!("main.rs"), include_str!("shell.rs"), include_str!("export.rs"), include_str!("settings.rs"), include_str!("widgets.rs"), include_str!("menu.rs"), include_str!("look.rs"), include_str!("sys.rs"), include_str!("editor.rs"), include_str!("fonts.rs"), include_str!("tabs.rs")];
+        let sources = [include_str!("main.rs"), include_str!("shell.rs"), include_str!("export.rs"), include_str!("settings.rs"), include_str!("widgets.rs"), include_str!("menu.rs"), include_str!("look.rs"), include_str!("sys.rs"), include_str!("editor.rs"), include_str!("fonts.rs"), include_str!("tabs.rs"), include_str!("shell/library.rs"), include_str!("shell/tree.rs"), include_str!("embed.rs")];
         let mut asked: Vec<String> = Vec::new();
         for src in sources {
             asked_in(src, &mut asked);
         }
+        // Why a file is not shown, which the core hands the preview.
+        asked.extend(onyx_core::preview::REASONS.iter().map(|r| r.to_string()));
         let missing: Vec<&String> = asked.iter().filter(|p| !p.is_empty() && !table.contains_key(p.as_str())).collect();
         assert!(missing.is_empty(), "not in locales/words.json: {missing:#?}");
         let unused: Vec<&&str> = table.keys().filter(|k| !asked.iter().any(|a| a == *k)).collect();

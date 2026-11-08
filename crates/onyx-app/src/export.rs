@@ -1,8 +1,11 @@
-//! Export to PDF: a sheet with the page as it will print on one side and
-//! how it is set on the other. A change lays the note out again off the
-//! window's thread and the page fades to the new one, resizing over a
-//! moment when the paper changes. The file is written from the document
-//! the preview drew, so what shows is what is made, and the note itself
+//! Export: a sheet with the note as it will come out on one side and how
+//! it is set on the other, as a PDF, an image, a Word document or a web
+//! page, the formats Craft offers less those that are the note itself. A
+//! change lays the note out again off the window's thread and the page
+//! fades to the new one, resizing over a moment when the paper changes. A
+//! PDF and an image are written from the document the preview drew, so
+//! what shows is what is made; Word and the web page are written from the
+//! note, and the preview shows them as the PDF sets them. The note itself
 //! is never written. `docs/export.md`.
 
 use std::path::{Path, PathBuf};
@@ -38,6 +41,16 @@ const PAGER_H: f32 = 44.;
 /// A run of presses is one layout.
 const SETTLE: Duration = Duration::from_millis(40);
 
+/// The formats, in the order they are offered: key, name, extension.
+const FORMATS: &[(&str, &str, &str)] = &[("pdf", "PDF", "pdf"), ("image", phrase("Image"), "png"), ("word", "Word", "docx"), ("html", "HTML", "html")];
+
+/// An image's pixels to a point of the page: as a Retina screen shows it.
+const IMAGE_PIXELS: f32 = 2.;
+
+fn extension_of(format: &str) -> &'static str {
+    FORMATS.iter().find(|f| f.0 == format).map_or("pdf", |f| f.2)
+}
+
 /// The papers, in the order they are offered, each by its name.
 const PAPERS: &[(&str, &str)] = &[("a4", "A4"), ("letter", phrase("Letter")), ("legal", phrase("Legal")), ("a5", "A5"), ("a3", "A3"), ("tabloid", phrase("Tabloid"))];
 
@@ -69,6 +82,8 @@ pub(crate) struct ExportSheet {
     room: (f32, f32),
     scale: f32,
     scroll: ScrollHandle,
+    /// The long page's own scroller.
+    page_scroll: ScrollHandle,
 }
 
 /// The sheet's size in this window, and the room in it for the page.
@@ -82,8 +97,14 @@ fn page_room(window: &Window) -> (f32, f32) {
     ((w - SIDE_W - PAGE_PAD * 2.).max(80.), (h - PAGE_PAD - PAGER_H).max(80.))
 }
 
-fn fit(size: (f32, f32), room: (f32, f32)) -> f32 {
-    (room.0 / size.0).min(room.1 / size.1)
+/// How large the page stands in the room: whole, or for a page as long
+/// as the note, as wide as the room, the rest a scroll away.
+fn fit(size: (f32, f32), room: (f32, f32), long: bool) -> f32 {
+    if long {
+        room.0 / size.0
+    } else {
+        (room.0 / size.0).min(room.1 / size.1)
+    }
 }
 
 /// The paper the sheet's options name.
@@ -116,6 +137,10 @@ impl Shell {
     /// The sheet over the note: a note open in a tab is set as it stands,
     /// changes and all, and any other as the disk has it.
     pub(crate) fn open_export(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        // A note only: an asset has its own app for paper.
+        if !onyx_core::vault::is_note(&path) {
+            return;
+        }
         if let Some(text) = self.text_of_tab(&path, cx) {
             self.show_export(path, text, window, cx);
             return;
@@ -148,6 +173,7 @@ impl Shell {
             room: page_room(window),
             scale: window.scale_factor(),
             scroll: ScrollHandle::new(),
+            page_scroll: ScrollHandle::new(),
         });
         window.focus(&self.export_focus, cx);
         self.lay_out_export(cx);
@@ -216,7 +242,7 @@ impl Shell {
         let Some(size) = laid.size(page) else { return };
         sheet.drawing += 1;
         let drawing = sheet.drawing;
-        let pixels = fit(size, sheet.room) * sheet.scale;
+        let pixels = fit(size, sheet.room, self.cfg.pdf.long()) * sheet.scale;
         cx.spawn(async move |this, cx| {
             let image = cx
                 .background_spawn(async move {
@@ -279,7 +305,8 @@ impl Shell {
             return;
         }
         let folder = UiState::load().export_folder.filter(|f| f.is_dir()).or_else(|| sheet.path.parent().map(Path::to_path_buf)).unwrap_or_default();
-        let chosen = cx.prompt_for_new_path(&folder, Some(&format!("{}.pdf", sheet.title)));
+        let ext = extension_of(&self.cfg.pdf.format);
+        let chosen = cx.prompt_for_new_path(&folder, Some(&format!("{}.{ext}", sheet.title)));
         cx.spawn_in(window, async move |this, cx| {
             if let Ok(Ok(Some(path))) = chosen.await {
                 let _ = this.update_in(cx, |s, window, cx| s.export_to(&path, window, cx));
@@ -290,14 +317,26 @@ impl Shell {
 
     pub(crate) fn export_to(&mut self, chosen: &Path, window: &mut Window, cx: &mut Context<Self>) {
         let Some(laid) = self.export_ready() else { return };
-        let out = pdf::output_path(chosen);
+        let Some(sheet) = self.export.as_ref() else { return };
+        let mut options = self.cfg.pdf.clone();
+        // Word's page is the paper the preview shows, the region's when none is chosen.
+        options.paper = paper_of(&options);
+        let look = crate::fonts::pdf_look(&self.cfg);
+        let out = pdf::finished(chosen, extension_of(&options.format));
+        let (text, title, path, root) = (sheet.text.clone(), sheet.title.clone(), sheet.path.clone(), sheet.vault.clone());
         let mut ui = UiState::load();
         ui.export_folder = out.parent().map(Path::to_path_buf);
         ui.save_later();
         self.close_export(window, cx);
         let to = out.clone();
         let wrote = cx.background_spawn(async move {
-            let bytes = laid.pdf()?;
+            let note = pdf::Note { text: &text, title: &title, path: &path, vault: root.as_deref() };
+            let bytes = match options.format.as_str() {
+                "image" => laid.png(IMAGE_PIXELS)?,
+                "word" => onyx_core::docx::write(&note, &look, &options)?,
+                "html" => onyx_core::web::write(&note, &look, &options)?.into_bytes(),
+                _ => laid.pdf()?,
+            };
             paths::write_atomic(&to, &bytes).map_err(|e| e.to_string())
         });
         cx.spawn(async move |this, cx| {
@@ -307,7 +346,7 @@ impl Shell {
                     let name = out.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
                     s.say_done(tf("Exported {name}", &[("name", &name)]), out, cx);
                 }
-                Err(e) => s.say(tf("The PDF was not made: {why}", &[("why", &e)]), cx),
+                Err(e) => s.say(tf("The file was not made: {why}", &[("why", &e)]), cx),
             });
         })
         .detach();
@@ -317,6 +356,10 @@ impl Shell {
     /// printing. A note open in a tab prints as it stands, changes and
     /// all; the note itself is not written.
     pub(crate) fn print_note(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        // A note only: an asset has its own app for paper.
+        if !onyx_core::vault::is_note(&path) {
+            return;
+        }
         if let Some(sheet) = self.export.as_ref().filter(|s| s.path == path) {
             if let Some(laid) = self.export_ready() {
                 let title = sheet.title.clone();
@@ -336,7 +379,11 @@ impl Shell {
                 Some(text) => text,
                 None => vault::read(&path).map_err(|e| e.to_string())?,
             };
-            pdf::lay_out(&pdf::Note { text: &text, title: &name, path: &path, vault: root.as_deref() }, &look, &options, &paper)
+            let laid = pdf::lay_out(&pdf::Note { text: &text, title: &name, path: &path, vault: root.as_deref() }, &look, &options, &paper);
+            // The PDFs set after it are kept for the sheet's next layout;
+            // a print has none.
+            onyx_core::attach::forget();
+            laid
         });
         cx.spawn_in(window, async move |this, cx| {
             let laid = laid.await;
@@ -374,6 +421,7 @@ impl Shell {
             "pdf-paper" => self.set_export(|o| o.paper = id, cx),
             "pdf-face" => self.set_export(|o| o.face = id, cx),
             "pdf-mono" => self.set_export(|o| o.mono = id, cx),
+            "pdf-format" => self.set_export(|o| o.format = id, cx),
             _ => {}
         }
         window.focus(&self.export_focus, cx);
@@ -385,6 +433,7 @@ impl Shell {
         let on = value == "on";
         let value = value.to_string();
         match key {
+            "format" => self.set_export(|o| o.format = value, cx),
             "paper" => self.set_export(|o| o.paper = value, cx),
             "landscape" => self.set_export(|o| o.landscape = on, cx),
             "margins" => self.set_export(|o| o.margins = value, cx),
@@ -397,6 +446,7 @@ impl Shell {
             "contents" => self.set_export(|o| o.contents = on, cx),
             "color" => self.set_export(|o| o.color = on, cx),
             "breaks" => self.set_export(|o| o.breaks = on, cx),
+            "attached" => self.set_export(|o| o.attached = on, cx),
             _ => {}
         }
     }
@@ -472,14 +522,33 @@ impl Shell {
             row(t("Font size").into(), size),
             row(t("Line spacing").into(), self.export_choice("pdf-spacing", vec![("tight", "", t("Tight").into()), ("normal", "", t("Normal").into()), ("loose", "", t("Loose").into())], &o.spacing, |o, k| o.spacing = k.into(), cx)),
         ];
-        let include = vec![
-            row(t("Note's name").into(), self.export_switch("pdf-name", o.name, |o, on| o.name = on, cx)),
-            row(t("Page numbers").into(), self.export_switch("pdf-numbers", o.numbers, |o, on| o.numbers = on, cx)),
-            row(t("Contents").into(), self.export_switch("pdf-contents", o.contents, |o, on| o.contents = on, cx)),
-            row(t("Color").into(), self.export_switch("pdf-color", o.color, |o, on| o.color = on, cx)),
-            row(t("New page for each top heading").into(), self.export_switch("pdf-breaks", o.breaks, |o, on| o.breaks = on, cx)),
-        ];
-        vec![group(Some(t("Page").into()), None, page, &theme), group(Some(t("Text").into()), None, kind, &theme), group(Some(t("On the page").into()), None, include, &theme)]
+        let format = o.format.as_str();
+        let mut include = vec![row(t("Note's name").into(), self.export_switch("pdf-name", o.name, |o, on| o.name = on, cx))];
+        if matches!(format, "pdf" | "word") {
+            include.push(row(t("Page numbers").into(), self.export_switch("pdf-numbers", o.numbers, |o, on| o.numbers = on, cx)));
+        }
+        include.push(row(t("Contents").into(), self.export_switch("pdf-contents", o.contents, |o, on| o.contents = on, cx)));
+        include.push(row(t("Color").into(), self.export_switch("pdf-color", o.color, |o, on| o.color = on, cx)));
+        if format == "pdf" {
+            include.push(row(t("New page for each top heading").into(), self.export_switch("pdf-breaks", o.breaks, |o, on| o.breaks = on, cx)));
+        }
+        include.push(row(t("Linked files").into(), self.export_switch("pdf-attached", o.attached, |o, on| o.attached = on, cx)));
+        // A web page has no paper: the reader's window is its width.
+        let mut groups = Vec::new();
+        if format != "html" {
+            groups.push(group(Some(t("Page").into()), None, page, &theme));
+        }
+        groups.push(group(Some(t("Text").into()), None, kind, &theme));
+        let include_title = if format == "pdf" || format == "word" { t("On the page") } else { t("Include") };
+        groups.push(group(Some(include_title.into()), None, include, &theme));
+        groups
+    }
+
+    /// What the sheet makes, across the side's width.
+    fn export_formats(&self, cx: &mut Context<Self>) -> AnyElement {
+        let now = FORMATS.iter().find(|f| f.0 == self.cfg.pdf.format).map_or("pdf", |f| f.0);
+        let choices = FORMATS.iter().map(|(key, name, _)| (*key, "", SharedString::from(t(name)))).collect();
+        div().px(px(16.)).pb(px(6.)).child(self.motion.segmented("pdf-format", choices, now, true, false, Rc::new(|this: &mut Self, key, _, cx| this.set_export(|o| o.format = key.into(), cx)), cx)).into_any_element()
     }
 
     /// The page, or the blank paper it will be while it is first laid
@@ -488,11 +557,13 @@ impl Shell {
     fn export_page(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
         let Some(sheet) = self.export.as_ref() else { return div().into_any_element() };
+        let long = self.cfg.pdf.long();
+        // While a long page is first laid out, the blank paper is as tall as a sheet.
         let to = sheet.shown.as_ref().map_or_else(|| paper_size(&self.cfg.pdf), |d| d.size);
         let from = sheet.under.as_ref().map_or(to, |d| d.size);
         let room = sheet.room;
-        let (w0, h0) = (from.0 * fit(from, room), from.1 * fit(from, room));
-        let (w1, h1) = (to.0 * fit(to, room), to.1 * fit(to, room));
+        let (w0, h0) = (from.0 * fit(from, room, long), from.1 * fit(from, room, long));
+        let (w1, h1) = (to.0 * fit(to, room, long), to.1 * fit(to, room, long));
         let paper = div().relative().w(px(w1)).h(px(h1)).bg(white()).overflow_hidden().rounded(px(2.)).border_1().border_color(theme.border).shadow(float_shadow(&theme));
         let picture = |d: &Drawn| img(d.image.clone()).absolute().top_0().left_0().size_full().object_fit(ObjectFit::Fill);
         let Some(top) = sheet.shown.as_ref() else { return paper.into_any_element() };
@@ -510,7 +581,11 @@ impl Shell {
         let theme = cx.theme().clone();
         let Some(sheet) = self.export.as_ref() else { return div().into_any_element() };
         if let Some(error) = &sheet.error {
-            return div().h(px(PAGER_H)).flex().items_center().px(px(16.)).text_size(px(12.5)).text_color(theme.danger).truncate().child(tf("The PDF was not made: {why}", &[("why", error)])).into_any_element();
+            return div().h(px(PAGER_H)).flex().items_center().px(px(16.)).text_size(px(12.5)).text_color(theme.danger).truncate().child(tf("The file was not made: {why}", &[("why", error)])).into_any_element();
+        }
+        // A long page has one page and is scrolled, not turned.
+        if self.cfg.pdf.long() {
+            return div().h(px(PAGE_PAD)).flex_shrink_0().into_any_element();
         }
         let pages = sheet.laid.as_ref().map_or(1, |(_, l)| l.pages());
         let turn = |id: &'static str, icon: &'static str, by: isize, able: bool, cx: &mut Context<Self>| {
@@ -559,17 +634,19 @@ impl Shell {
         let sheet = self.export.as_ref()?;
         let title = sheet.title.clone();
         let scroll = sheet.scroll.clone();
-        self.scrollers.name(&scroll);
+        self.scrollers.name_over(&scroll);
         let ready = self.export_ready().is_some();
         let ground = theme.popover;
         let options = v_flex().id("pdf-options").size_full().overflow_y_scroll().track_scroll(&scroll).child(v_flex().px(px(16.)).pt(px(4.)).pb(px(16.)).gap(px(14.)).children(self.export_rows(cx)));
+        let formats = self.export_formats(cx);
         let side = v_flex()
             .w(px(SIDE_W))
             .flex_shrink_0()
             .h_full()
             .border_l_1()
             .border_color(theme.border)
-            .child(v_flex().flex_shrink_0().px(px(30.)).pt(px(18.)).pb(px(10.)).gap(px(2.)).child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).child(t("Export to PDF"))).child(div().truncate().text_size(px(12.)).text_color(theme.muted_foreground).child(title)))
+            .child(v_flex().flex_shrink_0().px(px(30.)).pt(px(18.)).pb(px(10.)).gap(px(2.)).child(div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).child(t("Export"))).child(div().truncate().text_size(px(12.)).text_color(theme.muted_foreground).child(title)))
+            .child(formats)
             .child(div().relative().flex_1().min_h_0().child(options).child(crate::shell::edge_fade(&scroll, ground, true, px(0.))).child(crate::shell::edge_fade(&scroll, ground, false, px(0.))))
             .child(
                 h_flex()
@@ -599,7 +676,15 @@ impl Shell {
                     }))),
             );
         let tint = crate::shell::page_ground(&theme);
-        let stage = v_flex().flex_1().min_w_0().h_full().rounded_l(px(17.)).bg(tint).child(div().flex_1().min_h_0().pt(px(PAGE_PAD)).px(px(PAGE_PAD)).flex().items_center().justify_center().child(self.export_page(cx))).child(self.export_pager(cx));
+        let page = self.export_page(cx);
+        let holder = if self.cfg.pdf.long() {
+            let page_scroll = sheet.page_scroll.clone();
+            self.scrollers.name_over(&page_scroll);
+            div().id("pdf-long").flex_1().min_h_0().overflow_y_scroll().track_scroll(&page_scroll).pt(px(PAGE_PAD)).px(px(PAGE_PAD)).child(div().flex().justify_center().child(page)).into_any_element()
+        } else {
+            div().flex_1().min_h_0().pt(px(PAGE_PAD)).px(px(PAGE_PAD)).flex().items_center().justify_center().child(page).into_any_element()
+        };
+        let stage = v_flex().flex_1().min_w_0().h_full().rounded_l(px(17.)).bg(tint).child(holder).child(self.export_pager(cx));
         Some(
             crate::widgets::fade_in(
                 "export-sheet",

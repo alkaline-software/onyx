@@ -6,7 +6,7 @@
 
 ## The one idea
 
-**The file is the note.** Onyx keeps nothing of its own about a note: no database, no index, no copy. The sidebar is the folder as the disk has it, the editor holds the file's text exactly, and a note is written whole when it is left, never while it is typed. Another app may write the same folder, and Onyx follows (`docs/window.md`, The vault). This is why a vault made elsewhere opens as it is, and why nothing is lost when Onyx is not running.
+**The file is the note.** Onyx keeps nothing of its own about a note: no database, no index, no copy. The sidebar is the folder as the disk has it, the editor holds the file's text exactly, and a note is written whole two seconds after its first change, and when it is left. Another app may write the same folder, and Onyx follows (`docs/window.md`, The vault). This is why a vault made elsewhere opens as it is, and why nothing is lost when Onyx is not running.
 
 ## The standard
 
@@ -20,8 +20,8 @@ Onyx is held to the bar of the work that wins Awwwards, the Webbys and the FWA (
 
 Each is here because breaking it loses data or brings back a fixed bug. The doc named has the story.
 
-- **A note is written whole, through `onyx_core::vault::write`**, a temp file and a rename, never in place and never in part, and only when it is left or at ⌘S, never on a keystroke or a timer. (`docs/window.md`)
-- **A note that has changes is never replaced by what the disk holds.** The disk's text goes in only while nothing is unsaved. (`docs/window.md`)
+- **A note is written whole, through `onyx_core::vault::write`**, a temp file and a rename, never in place and never in part: two seconds after its first unsaved change (a timer later keys do not reset), and when it is left; never on each keystroke, and never when its text is what the disk has. (`docs/window.md`)
+- **A note that has changes is never replaced by what the disk holds.** The disk's text is joined with what was typed (`merge::merge`), every change of both kept. (`docs/window.md`)
 - **Nothing goes straight off the disk.** A note or a folder deleted goes to the system's trash (`vault::trash`). (`docs/window.md`)
 - **A row's height goes by its kind, never by what stands in it or beside it**, in all three modes, from `Rhythm`: a word typed on a blank line moves nothing. (`docs/editor.md`)
 - **The editor never slices a line at a byte that is not a character's boundary**, and the caret steps by grapheme (`lines::Doc`). (`docs/editor.md`)
@@ -40,11 +40,11 @@ Each is here because breaking it loses data or brings back a fixed bug. The doc 
 
 | You are about to touch | Read first |
 |---|---|
-| `editor.rs`, `editor/`, `layout.rs`, `lines.rs`, `markdown.rs`, `tables.rs`; `onyx-core/src/rhythm.rs`, `html.rs`, `check.rs`: the live preview, spacing, the caret, the keys, the modes, tables, HTML, pictures, spelling | `docs/editor.md` |
-| `shell.rs`, `tabs.rs`, `ui_state.rs`, `main.rs`: the sidebar, the vault, a note's life, the tabs, the strip, the landing page, the menus; `onyx-core/src/vault.rs` | `docs/window.md` |
+| `editor.rs`, `editor/`, `embed.rs`, `viewer.rs`, `layout.rs`, `lines.rs`, `markdown.rs`, `tables.rs`; `onyx-core/src/rhythm.rs`, `html.rs`, `check.rs`: the live preview, spacing, the caret, the keys, the modes, tables, HTML, pictures, spelling | `docs/editor.md` |
+| `shell.rs`, `shell/library.rs`, `tabs.rs`, `ui_state.rs`, `main.rs`: the sidebar, the vault, a note's life, the tabs, the strip, the landing page, the menus; `onyx-core/src/vault.rs` | `docs/window.md` |
 | `settings.rs`, `look.rs`, `fonts.rs`, `assets.rs`, `themes/onyx.json`, `scripts/icon/`; anything a person sees, new or changed | `docs/design.md`, then the doc of the part it is in |
 | `sys.rs`, `csd.rs`, `update.rs`, `process.rs`, `vendor/`, `Cargo.toml`, `.github/workflows/`, any `cfg` for an OS | `docs/platform.md` |
-| `export.rs`, `onyx-core/src/pdf.rs`, `pdf/template.typ`: Export to PDF, printing, its sheet, how a note looks on paper | `docs/export.md` |
+| `export.rs`, `onyx-core/src/pdf.rs`, `docx.rs`, `web.rs`, `reading.rs`, `pdf/template.typ`: Export (PDF, image, Word, web page), printing, its sheet, how a note looks on paper | `docs/export.md` |
 | Checking a change in the window from a script | `docs/probing.md` |
 | Bumping the version and cutting a release | `docs/release.md` |
 
@@ -57,20 +57,30 @@ crates/onyx-core/          everything without a window
   src/config.rs              the settings file
   src/paths.rs               ~/.onyx, overridden by ONYX_HOME; atomic writes
   src/update.rs              the newest release and its installer
+  src/link_card.rs           a web link's card: the page's head read, its pictures kept in the cache
   src/process.rs             every child process, with no console window on Windows
-  src/pdf.rs                 a note set as a PDF by Typst; pdf/ holds its template, code theme and math
+  src/pdf.rs                 a note set as a PDF or an image by Typst; pdf/ holds its template, code theme and math
+  src/docx.rs, src/web.rs    a note as a Word document and as a web page, from reading.rs's tree of its blocks
   src/rhythm.rs              the note's vertical measures, for the canvas and the page
   src/html.rs                the HTML a note may hold, read one way for both
+  src/merge.rs               a note changed on the disk and in the window at once, joined
   src/check.rs               spelling and grammar
+  src/preview.rs             any file read for the preview: as markdown where it can be (code, CSV, notebooks, HTML, Office), else its kind; a PDF's pages
   src/bin/onyx-core.rs       paths | config | update | vault <folder> [new <name>] | pdf <note> <out> <fonts>
   tests/core.rs
 crates/onyx-app/           the window
   src/main.rs                menus, key bindings, the main window, the probe's variables
   src/shell.rs               the frame, the sidebar (the vault's tree), the strip, the landing page, a note's life, the tabs
+  src/shell/library.rs       the vault's assets: the sidebar's stack of cards, the Assets card, an asset's tab, a rename that follows its links
   src/tabs.rs                the tabs' drawing and motion: a folder's on one pill, the plate, the widths
-  src/export.rs              Export to PDF: the sheet, its preview, the file; printing
+  src/export.rs              Export: the sheet, its formats, its preview, the file; printing
+  src/media.rs               a video or a sound in the preview, played by the system's web view
+  src/viewer.rs              a note's picture over the window, grown from where it stands
+  src/embed.rs               a file a note embeds, in a frame: a PDF's pages, a note, a document; the bar every embedded file has, a picture's too; zoom, selection, sidebar
   src/editor.rs              the live-preview editor: paint, the caret, the keys, the input method
   src/editor/cells.rs        a table on the canvas: the caret in its cells, its handles and edges
+  src/card.rs                a link alone on its line as a card, small, medium or large: a file's, a web page's
+  src/editor/cards.rs        a link shown as a link, a card or the whole file: its line written again
   src/editor/writing.rs      a note's spelling and grammar, off the window's thread
   src/layout.rs              a note laid out: Rhythm, Reader, Flow, the rows, the grid
   src/tables.rs              a table's lines changed as a whole, as text
@@ -103,7 +113,7 @@ cargo test -p onyx-core -p onyx-app
 cargo build -p onyx-app && scripts/dev-app.sh
 ```
 
-One dev build at a time: two copies share `~/.onyx` and both write what the window remembers. After a change to the app, build it and run `scripts/relaunch.sh` as the last command, without being asked; a change to documents alone needs no relaunch. Probe a change with a copy of its own first (`docs/probing.md`), never the copy the person is writing in.
+One dev build at a time: two copies share `~/.onyx` and both write what the window remembers. After a change to the app, build it and run `scripts/relaunch.sh` as the last command, without being asked; a change to documents alone needs no relaunch. Probe a change with a copy of its own first (`docs/probing.md`), never the copy the person is writing in. On the maintainer's Mac the vaults in Onyx's iCloud folder (`~/Library/Mobile Documents/iCloud~com~alkalinesoftware~onyx/Documents/`) are copies kept for testing: a probe may use and change them.
 
 ## Writing things down
 

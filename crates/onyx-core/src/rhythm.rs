@@ -17,8 +17,9 @@ pub const CELL_LINE: f32 = 1.5;
 /// words' own height, without the room between lines. It goes by the size
 /// alone, so it is one height on a blank line, in Latin and in Chinese.
 pub const CARET: f32 = 1.2;
-/// The note's name, as a share of the words' size, and its line.
-pub const TITLE: f32 = 1.8;
+/// The note's name, as a share of the words' size, and its line: a step
+/// over the top heading, so the name leads a note that opens with one.
+pub const TITLE: f32 = 1.5;
 pub const TITLE_LINE: f32 = 1.25;
 
 /// A heading's measures.
@@ -32,13 +33,16 @@ pub struct Heading {
     pub above: f32,
 }
 
-/// The six levels, by the golden ratio's steps down to the words' size.
+/// The six levels, in Craft's steps down to the words' size (its title,
+/// subtitle, heading and strong text: 24, 22, 20 and 18 over 17), so a
+/// heading leads its section without shouting over it; the last two are
+/// the words' size, apart by weight.
 pub const HEADINGS: [Heading; 6] = [
-    Heading { scale: 1.618, line: 1.25, above: 0.5 },
-    Heading { scale: 1.462, line: 1.25, above: 0.5 },
-    Heading { scale: 1.318, line: 1.3, above: 0.4 },
-    Heading { scale: 1.188, line: 1.35, above: 0.3 },
-    Heading { scale: 1.076, line: 1.4, above: 0.2 },
+    Heading { scale: 1.412, line: 1.25, above: 0.5 },
+    Heading { scale: 1.294, line: 1.25, above: 0.5 },
+    Heading { scale: 1.176, line: 1.3, above: 0.4 },
+    Heading { scale: 1.059, line: 1.35, above: 0.3 },
+    Heading { scale: 1.0, line: 1.4, above: 0.2 },
     Heading { scale: 1.0, line: 1.5, above: 0.2 },
 ];
 

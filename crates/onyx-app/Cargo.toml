@@ -42,6 +42,11 @@ chrono = { version = "0.4", default-features = false, features = ["clock"] }
 # The account's name, for the greeting.
 whoami = "1"
 
+# A video or a sound in the preview, played by the system's own web view
+# set in the window (`media.rs`), after Emaki's.
+[target.'cfg(any(target_os = "macos", target_os = "windows"))'.dependencies]
+wry = "0.57"
+
 [target.'cfg(windows)'.dependencies]
 # Velopack's installer runs the app with a hook to answer at start (`main`).
 velopack = "=1.2.161"

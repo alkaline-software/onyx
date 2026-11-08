@@ -439,6 +439,47 @@ pub fn spelling_fixes(_word: &str, _language: &str) -> Vec<String> {
     Vec::new()
 }
 
+/// A picture on the clipboard as two things at once: `text`, which a
+/// paste in Onyx reads first and takes as the same picture, and the
+/// picture's own bytes, which another app takes as the picture. False
+/// when its kind has no type the clipboard knows, or it could not be
+/// read; the text alone is copied then.
+#[cfg(target_os = "macos")]
+pub fn copy_with_picture(text: &str, picture: &std::path::Path) -> bool {
+    use objc2::msg_send;
+    use objc2::rc::Retained;
+    use objc2::runtime::{AnyClass, AnyObject};
+    use objc2_foundation::{NSData, NSString};
+    let kind = match picture.extension().map(|e| e.to_string_lossy().to_lowercase()).as_deref() {
+        Some("png") => "public.png",
+        Some("jpg" | "jpeg") => "public.jpeg",
+        Some("gif") => "com.compuserve.gif",
+        Some("tif" | "tiff") => "public.tiff",
+        Some("heic") => "public.heic",
+        Some("webp") => "org.webmproject.webp",
+        _ => return false,
+    };
+    let Ok(bytes) = std::fs::read(picture) else { return false };
+    let Some(class) = AnyClass::get(c"NSPasteboard") else { return false };
+    let data = NSData::with_bytes(&bytes);
+    let (words, plain, typed) = (NSString::from_str(text), NSString::from_str("public.utf8-plain-text"), NSString::from_str(kind));
+    // SAFETY: the general pasteboard's documented calls, cleared first so
+    // the two types are one item.
+    unsafe {
+        let board: Option<Retained<AnyObject>> = msg_send![class, generalPasteboard];
+        let Some(board) = board else { return false };
+        let _: isize = msg_send![&*board, clearContents];
+        let a: bool = msg_send![&*board, setString: &*words, forType: &*plain];
+        let b: bool = msg_send![&*board, setData: &*data, forType: &*typed];
+        a && b
+    }
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn copy_with_picture(_text: &str, _picture: &std::path::Path) -> bool {
+    false
+}
+
 /// A PDF put through the system's printing, with its panel over the
 /// window: the person's printers, pages and copies, and Save as PDF. The
 /// paper starts as the page's. False when it could not be done.
@@ -504,6 +545,32 @@ pub fn print_pdf(_window: &gpui::Window, bytes: &[u8], title: &str, _page: (f32,
     open(&file.to_string_lossy());
     true
 }
+
+/// The keyboard back to the window's own view, from a system view set
+/// in it (the preview's player) that a click gave it to and that is now
+/// gone or out of sight; else no key binding of the window's is heard.
+/// Whether a panel of the system's stands on the window as a sheet, the
+/// printing panel's among them: the window under it neither scrolls nor
+/// follows the pointer while it does.
+#[cfg(target_os = "macos")]
+pub fn sheet_over(window: &gpui::Window) -> bool {
+    ns_view(window).and_then(|v| v.window()).is_some_and(|w| w.attachedSheet().is_some())
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn sheet_over(_window: &gpui::Window) -> bool {
+    false
+}
+
+#[cfg(target_os = "macos")]
+pub fn keys_to_window(window: &gpui::Window) {
+    let Some(view) = ns_view(window) else { return };
+    let Some(native) = view.window() else { return };
+    native.makeFirstResponder(Some(view));
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn keys_to_window(_window: &gpui::Window) {}
 
 #[cfg(target_os = "macos")]
 fn ns_view(window: &gpui::Window) -> Option<&objc2_app_kit::NSView> {

@@ -157,7 +157,6 @@ impl Render for Ghost {
 pub struct Item {
     pub path: PathBuf,
     pub title: String,
-    pub dirty: bool,
 }
 
 #[derive(Default)]
@@ -569,6 +568,7 @@ impl Tabs {
             // vault itself.
             let name: SharedString = match root {
                 Some(root) if folder == root => root.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default().into(),
+                Some(root) if *folder == onyx_core::vault::assets(root) => crate::i18n::t("Assets").into(),
                 Some(root) => folder.strip_prefix(root).unwrap_or(folder).to_string_lossy().to_string().into(),
                 None => folder.to_string_lossy().to_string().into(),
             };
@@ -610,7 +610,6 @@ impl Tabs {
             for ((key, width), shift) in keys.iter().zip(widths.iter().copied()).zip(shifts.iter().copied()) {
                 let item = items.iter().find(|i| i.path == *key);
                 let title: SharedString = item.map(|i| i.title.clone()).unwrap_or_default().into();
-                let dirty = item.is_some_and(|i| i.dirty);
                 let active = shown == Some(key.as_path());
                 let dragged = self.drag_tab.as_deref() == Some(key.as_path());
                 let (open_key, close_key) = (key.clone(), key.clone());
@@ -648,17 +647,14 @@ impl Tabs {
                         this.show_tab(&open_key, window, cx)
                     }))
                     .child(div().flex_1().min_w_0().truncate().text_size(px(TAB_TEXT)).font_weight(if active { FontWeight::MEDIUM } else { FontWeight::NORMAL }).text_color(if active { theme.foreground } else { theme.muted_foreground }).child(title))
-                    // The close button; while the note has changes not
-                    // written, a dot stands in its place until the
-                    // pointer is over it, as an editor's tab has it.
+                    // The close button. A note is written on its own
+                    // (`Shell::note_changed`), so no dot says it is not.
                     .child(
                         div()
                             .id(ElementId::Name(format!("tab-close-{}", key.display()).into()))
-                            .group("tab-close")
                             .size(px(18.))
                             .flex_shrink_0()
                             .rounded(px(4.))
-                            .relative()
                             .flex()
                             .items_center()
                             .justify_center()
@@ -669,8 +665,7 @@ impl Tabs {
                                 swallow_click(window, cx);
                                 this.close_tab(&close_key, window, cx);
                             }))
-                            .when(dirty, |d| d.child(div().size(px(7.)).rounded_full().bg(theme.primary).group_hover("tab-close", |s| s.opacity(0.))))
-                            .child(div().absolute().inset_0().flex().items_center().justify_center().when(dirty, |d| d.opacity(0.).group_hover("tab-close", |s| s.opacity(1.))).child(Icon::new(IconName::Close).xsmall().text_color(theme.muted_foreground))),
+                            .child(Icon::new(IconName::Close).xsmall().text_color(theme.muted_foreground)),
                     );
                 // The number ⌘ goes to this tab with (`go_tab`): the first
                 // nine, in the row's order. The tab clips what it holds,
@@ -705,8 +700,8 @@ impl Tabs {
                 wrap.into_any_element()
             });
         }
-        // The plus after the last tab: raised while the vault's page shows.
-        let home = shown.is_none();
+        // The plus after the last tab: a new note, in the folder of the
+        // note showing, its name asked first.
         let hover_bg = plate_bg.opacity(0.5);
         row = row.child(
             div()
@@ -718,10 +713,10 @@ impl Tabs {
                 .bg(track_bg)
                 .cursor_pointer()
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, _| this.press_taken = true))
-                .managed_tooltip(|window, cx| tip(t("Home"), window, cx))
+                .managed_tooltip(|window, cx| tip(t("New Note (⌘N)"), window, cx))
                 .on_click(cx.listener(|this, _, window, cx| {
                     swallow_click(window, cx);
-                    this.show_home(window, cx)
+                    this.new_note(&crate::shell::NewNote, window, cx)
                 }))
                 .child(
                     div()
@@ -730,9 +725,8 @@ impl Tabs {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .when(home, |d| d.bg(plate_bg).shadow_sm())
-                        .when(!home, |d| d.hover(move |s| s.bg(hover_bg)))
-                        .child(Icon::default().path("icons/plus.svg").with_size(px(14.)).text_color(if home { theme.foreground } else { theme.muted_foreground })),
+                        .hover(move |s| s.bg(hover_bg))
+                        .child(Icon::default().path("icons/plus.svg").with_size(px(14.)).text_color(theme.muted_foreground)),
                 ),
         );
         row.into_any_element()

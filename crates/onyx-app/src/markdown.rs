@@ -241,7 +241,12 @@ pub fn analyze(text: &str) -> Analysis {
 
     let mut opts = Options::empty();
     opts.insert(Options::ENABLE_TABLES | Options::ENABLE_STRIKETHROUGH | Options::ENABLE_TASKLISTS | Options::ENABLE_MATH | Options::ENABLE_WIKILINKS | Options::ENABLE_YAML_STYLE_METADATA_BLOCKS | Options::ENABLE_FOOTNOTES);
-    let parser = Parser::new_ext(text, opts);
+    // Read in parts, so a picture alone on its line ends its block of HTML
+    // (`html::parts`); each part's places are the note's.
+    let events = onyx_core::html::parts(text, opts).into_iter().flat_map(|part| {
+        let at = part.start;
+        Parser::new_ext(&text[part], opts).into_offset_iter().map(move |(ev, r)| (ev, r.start + at..r.end + at))
+    });
 
     // The lists open around the parser's place, as indices into `a.lists`.
     let mut lists: Vec<usize> = Vec::new();
@@ -257,7 +262,7 @@ pub fn analyze(text: &str) -> Analysis {
     // Tags among the words waiting for their closing one.
     let mut tags: Vec<(String, Style, Range<usize>)> = Vec::new();
 
-    for (ev, r) in parser.into_offset_iter() {
+    for (ev, r) in events {
         match ev {
             Event::Start(Tag::Heading { level, .. }) => {
                 let line = line_of(r.start);
@@ -465,7 +470,11 @@ pub fn analyze(text: &str) -> Analysis {
                 };
                 links.push(OpenLink { range: r.clone(), words_end: r.start + open_len, kind, open_len });
             }
-            Event::Start(Tag::Image { dest_url, .. }) => links.push(OpenLink { range: r.clone(), words_end: r.start + 2, kind: SpanKind::Image(dest_url.to_string()), open_len: 2 }),
+            // `![[name]]` opens with three marks, `![words](src)` with two.
+            Event::Start(Tag::Image { link_type, dest_url, .. }) => {
+                let open_len = if matches!(link_type, LinkType::WikiLink { .. }) { 3 } else { 2 };
+                links.push(OpenLink { range: r.clone(), words_end: r.start + open_len, kind: SpanKind::Image(dest_url.to_string()), open_len });
+            }
             Event::End(TagEnd::Link) | Event::End(TagEnd::Image) => {
                 if let Some(l) = links.pop() {
                     let words_end = l.words_end.max(l.range.start + l.open_len).min(l.range.end);

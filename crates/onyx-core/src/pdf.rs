@@ -6,8 +6,9 @@
 //! from the same document (`Laid::pdf`), so what shows is what is made.
 //!
 //! - A note cannot run Typst. Its words go in as strings, its math through
-//!   MiTeX, and the world hands out the template and the pictures the
-//!   note names, nothing else, and has no network.
+//!   MiTeX, and the world hands out the template, the pictures the
+//!   note names and the PDFs set after it (`attach`), nothing else, and
+//!   has no network.
 //! - One bad part does not lose the note. A formula Typst refuses is
 //!   printed as code and a picture it cannot read is its alt text: the
 //!   whole is tried first, and only when that fails is each part tried
@@ -33,6 +34,7 @@ use typst_layout::PagedDocument;
 use crate::config::PdfConfig;
 use crate::html::{self, Across, Rgb, Style};
 use crate::rhythm;
+use crate::attach;
 
 const TEMPLATE: &str = include_str!("pdf/template.typ");
 const THEME: &[u8] = include_bytes!("pdf/onyx.tmTheme");
@@ -133,8 +135,9 @@ fn machine_faces(family: &str) -> Vec<Font> {
 /// The fonts the note needs, and the families to try in order: the
 /// chosen ones, then a system's fallback only if the note holds a
 /// character the chosen faces lack, since one such file can run to
-/// hundreds of megabytes.
-fn gather(text: &str, look: &Look) -> (Vec<Font>, Vec<String>) {
+/// hundreds of megabytes. `texts` is all the page shows: the note's
+/// name as well as its words, since a name often carries an emoji.
+fn gather(texts: &[&str], look: &Look) -> (Vec<Font>, Vec<String>) {
     let same = |f: &Font, family: &str| f.info().family.eq_ignore_ascii_case(family);
     let mut fonts = carried().to_vec();
     for family in look.words.iter().chain(&look.code) {
@@ -145,7 +148,7 @@ fn gather(text: &str, look: &Look) -> (Vec<Font>, Vec<String>) {
     let covered = |fonts: &[Font], families: &[String], c: char| fonts.iter().any(|f| families.iter().any(|n| same(f, n)) && f.info().coverage.contains(c as u32));
     let mut chain: Vec<String> = Vec::new();
     let all: Vec<String> = look.words.iter().chain(&look.code).cloned().collect();
-    let mut lacking: HashSet<char> = text.chars().filter(|c| !c.is_ascii() && !c.is_whitespace() && !c.is_control() && !matches!(*c, '\u{200d}' | '\u{fe0e}' | '\u{fe0f}')).filter(|c| !covered(&fonts, &all, *c)).collect();
+    let mut lacking: HashSet<char> = texts.iter().flat_map(|t| t.chars()).filter(|c| !c.is_ascii() && !c.is_whitespace() && !c.is_control() && !matches!(*c, '\u{200d}' | '\u{fe0e}' | '\u{fe0f}')).filter(|c| !covered(&fonts, &all, *c)).collect();
     for family in &look.fallbacks {
         if lacking.is_empty() {
             break;
@@ -287,56 +290,8 @@ fn tighten(typ: &str) -> String {
 /// A picture's file: beside the note, from the vault's top, or for a bare
 /// name anywhere in the vault, the shortest path first, as a wikilink is.
 pub fn find_picture(src: &str, note: &Note) -> Option<PathBuf> {
-    if src.contains("://") {
-        return None;
-    }
-    let name = decoded(src.split(['#', '?']).next().unwrap_or(src));
-    let ext = Path::new(&name).extension()?.to_string_lossy().to_ascii_lowercase();
-    if !matches!(ext.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp" | "svg") {
-        return None;
-    }
-    let here = note.path.parent().map(|p| p.join(&name));
-    let top = note.vault.map(|v| v.join(&name));
-    if let Some(found) = here.into_iter().chain(top).find(|p| p.is_file()) {
-        return Some(found);
-    }
-    let vault = note.vault?;
-    let bare = Path::new(&name).file_name()?.to_os_string();
-    let mut found = Vec::new();
-    let mut folders = vec![vault.to_path_buf()];
-    while let Some(folder) = folders.pop() {
-        for entry in std::fs::read_dir(folder).into_iter().flatten().flatten() {
-            let path = entry.path();
-            if entry.file_name().to_string_lossy().starts_with('.') {
-                continue;
-            }
-            if path.is_dir() {
-                folders.push(path);
-            } else if entry.file_name() == bare {
-                found.push(path);
-            }
-        }
-    }
-    found.sort_by_key(|p| p.components().count());
-    found.into_iter().next()
-}
-
-/// `%20` and its like, in a link's address.
-fn decoded(s: &str) -> String {
-    let bytes = s.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        let hex = (bytes[i] == b'%').then(|| s.get(i + 1..i + 3)).flatten().and_then(|h| u8::from_str_radix(h, 16).ok());
-        if let Some(b) = hex {
-            out.push(b);
-            i += 3;
-        } else {
-            out.push(bytes[i]);
-            i += 1;
-        }
-    }
-    String::from_utf8(out).unwrap_or_else(|_| s.to_string())
+    let found = crate::vault::find_file(note.vault, note.path, src)?;
+    crate::vault::is_picture(&found).then_some(found)
 }
 
 /// The width a picture's words ask for, as Obsidian writes it: `alt|300`,
@@ -344,6 +299,17 @@ fn decoded(s: &str) -> String {
 pub fn asked_width(words: &str) -> Option<u32> {
     let last = words.rsplit('|').next()?.trim();
     (!last.is_empty() && last.bytes().all(|b| b.is_ascii_digit())).then(|| last.parse().ok()).flatten().filter(|w| *w > 0)
+}
+
+/// The width a picture's words ask for, a share of the words' width
+/// among them: `alt|300`, or `alt|100%` for one written from HTML's
+/// `width="100%"`.
+pub fn asked(words: &str) -> Option<html::Width> {
+    let last = words.rsplit('|').next()?.trim();
+    match last.strip_suffix('%') {
+        Some(n) if !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()) => n.parse().ok().filter(|n| *n > 0).map(|n: u32| html::Width::Share(n.min(100))),
+        _ => asked_width(words).map(html::Width::Px),
+    }
 }
 
 /// An address a PDF's reader can follow: one with a scheme.
@@ -356,6 +322,9 @@ fn live_address(url: &str) -> bool {
 struct Bad {
     formulas: HashSet<String>,
     pictures: HashSet<PathBuf>,
+    /// PDFs set after the note that Typst cannot read: their part is
+    /// their name alone.
+    attached: HashSet<PathBuf>,
 }
 
 enum Frame {
@@ -373,7 +342,9 @@ enum Frame {
     Item { task: Option<bool>, line_end: Option<usize> },
     Table { aligns: Vec<Alignment>, cells: Vec<String>, shares: Option<Vec<f32>>, columns: usize, at: usize, head: usize },
     Cell,
-    Link(Option<String>),
+    /// A link: its address when it leads off the vault, or the file set
+    /// after the note it leads to.
+    Link(Option<String>, Option<usize>),
     Image(String),
     Code(String),
     Skip,
@@ -389,6 +360,9 @@ struct Walked {
     body: String,
     formulas: Vec<String>,
     pictures: Vec<(PathBuf, String, Bytes)>,
+    /// The files set after the note whose first mention in the words
+    /// carries the place their way back returns to.
+    labeled: HashSet<usize>,
 }
 
 struct Walk<'a> {
@@ -406,7 +380,18 @@ struct Walk<'a> {
     /// and whether this is the words of a block of HTML, which has none.
     shares: std::collections::VecDeque<Option<Vec<f32>>>,
     nested: bool,
+    /// The files set after the note, and whether this walk is of the
+    /// note's own words, the only ones whose mentions are returned to.
+    attached: &'a [attach::Attached],
+    main: bool,
+    /// Which part of the document this is, 0 the note's own words, so
+    /// two notes' footnotes of one label are two.
+    part: usize,
 }
+
+/// How wide, in pixels, a card's first page is drawn: twice its width on
+/// paper at the largest words.
+const CARD_PICTURE: u32 = 480;
 
 fn level_of(l: HeadingLevel) -> u8 {
     match l {
@@ -440,9 +425,45 @@ impl<'a> Walk<'a> {
         }
     }
 
+    /// The file set after the note that a reference names, if any.
+    fn target(&self, dest: &str) -> Option<usize> {
+        if self.attached.is_empty() {
+            return None;
+        }
+        let path = attach::resolve(self.note, dest)?;
+        self.attached.iter().position(|a| a.path == path)
+    }
+
+    /// Words that lead to the part set after the note; the first such in
+    /// the note's own words is where that part's way back returns.
+    fn jump(&mut self, n: usize, body: &str) -> String {
+        let from = if self.main && self.out.labeled.insert(n) { format!("#metadata(none)<onyx-from-{n}>") } else { String::new() };
+        format!("{from}#link(<onyx-part-{n}>)[{body}];")
+    }
+
     fn picture(&mut self, src: &str, alt: &str) -> String {
-        // `alt|300`, as Obsidian writes a picture's width.
-        let asked = asked_width(alt);
+        // A file set after the note: a card of it, as the editor's medium
+        // one, leading there.
+        if let Some(n) = self.target(src) {
+            let words_of = alt.rsplit_once('|').map_or(alt, |(w, _)| w).trim();
+            let a = &self.attached[n];
+            let shown = if words_of.is_empty() || crate::vault::decoded(words_of) == crate::vault::decoded(src.trim()) { a.name.clone() } else { words_of.to_string() };
+            let thumb = match &a.body {
+                attach::Body::Pdf { bytes, .. } if !self.bad.attached.contains(&a.path) => {
+                    let place = format!("/pictures/card-{n}.png");
+                    let known = self.out.pictures.iter().any(|(_, p, _)| *p == place);
+                    let made = known || attach::card_picture(bytes, CARD_PICTURE).map(|(png, _)| self.out.pictures.push((a.path.with_extension("card.png"), place.clone(), Bytes::new(png)))).is_some();
+                    if made { quoted(&place) } else { "none".to_string() }
+                }
+                _ => "none".to_string(),
+            };
+            let card_words = a.card_words().map_or("none".to_string(), |w| quoted(&w));
+            let meta = quoted(&attach::card_meta(&a.path));
+            let from = if self.main && self.out.labeled.insert(n) { format!("#metadata(none)<onyx-from-{n}>") } else { String::new() };
+            return format!("\n\n{from}#file-card(<onyx-part-{n}>, {}, {meta}, {card_words}, {thumb});\n\n", quoted(&shown));
+        }
+        // `alt|300`, as Obsidian writes a picture's width, or `alt|100%`.
+        let asked = asked(alt);
         let alt = if asked.is_some() { alt.rsplit_once('|').map_or("", |(words, _)| words) } else { alt };
         let Some(path) = find_picture(src, self.note).filter(|p| !self.bad.pictures.contains(p)) else { return words(alt) };
         let known = self.out.pictures.iter().find(|(p, _, _)| *p == path).map(|(_, v, _)| v.clone());
@@ -456,7 +477,7 @@ impl<'a> Walk<'a> {
                 place
             }
         };
-        let asked = asked.map_or("none".to_string(), |w| w.to_string());
+        let asked = asked.map_or("none".to_string(), |w| w.written());
         format!("#pic({}, {}, {asked});\n\n", quoted(&place), quoted(alt))
     }
 
@@ -487,7 +508,11 @@ impl<'a> Walk<'a> {
             Tag::Emphasis => Frame::Emph,
             Tag::Strong => Frame::Strong,
             Tag::Strikethrough => Frame::Strike,
-            Tag::Link { link_type, dest_url, .. } => Frame::Link((!matches!(link_type, LinkType::WikiLink { .. }) && live_address(dest_url)).then(|| dest_url.to_string())),
+            Tag::Link { link_type, dest_url, .. } => {
+                let url = (!matches!(link_type, LinkType::WikiLink { .. }) && live_address(dest_url)).then(|| dest_url.to_string());
+                let to = if url.is_none() && !self.verbatim() { self.target(dest_url) } else { None };
+                Frame::Link(url, to)
+            }
             Tag::Image { dest_url, .. } => Frame::Image(dest_url.to_string()),
             _ => Frame::Plain,
         };
@@ -530,7 +555,7 @@ impl<'a> Walk<'a> {
             html::Tag::Image { src, width, alt } => {
                 let alt = tag.get(alt).unwrap_or("").to_string();
                 let words = match width {
-                    Some(w) => format!("{alt}|{w}"),
+                    Some(w) => format!("{alt}|{}", w.written()),
                     None => alt,
                 };
                 let markup = self.picture(&html::entities(&src), &words);
@@ -586,7 +611,7 @@ impl<'a> Walk<'a> {
             return;
         }
         let Some((frame, body)) = self.stack.pop() else { return };
-        let block = !matches!(frame, Frame::Emph | Frame::Strong | Frame::Strike | Frame::Link(_) | Frame::Image(_) | Frame::Plain | Frame::Skip | Frame::Cell | Frame::Item { .. } | Frame::Tag(..));
+        let block = !matches!(frame, Frame::Emph | Frame::Strong | Frame::Strike | Frame::Link(..) | Frame::Image(_) | Frame::Plain | Frame::Skip | Frame::Cell | Frame::Item { .. } | Frame::Tag(..));
         let text = match frame {
             Frame::Root | Frame::Skip | Frame::Tag(..) => String::new(),
             Frame::Html => self.html_block(&body),
@@ -601,14 +626,18 @@ impl<'a> Walk<'a> {
             }
             Frame::Heading(level) => {
                 let turn = if level == 1 && self.breaks && !self.first_block { "#pagebreak(weak: true);\n" } else { "" };
-                format!("{turn}#heading(level: {level})[{body}];\n\n")
+                // A file's own headings stay out of the contents, where it
+                // stands under Appendix by its name.
+                let outlined = if self.part == 0 { "" } else { ", outlined: false" };
+                format!("{turn}#heading(level: {level}{outlined})[{body}];\n\n")
             }
             Frame::Emph => format!("#emph[{body}];"),
             Frame::Strong => format!("#strong[{body}];"),
             Frame::Strike => format!("#strike[{body}];"),
             Frame::Quote => format!("#quote(block: true)[{body}];\n\n"),
-            Frame::Link(Some(url)) => format!("#link({})[{body}];", quoted(&url)),
-            Frame::Link(None) => body,
+            Frame::Link(Some(url), _) => format!("#link({})[{body}];", quoted(&url)),
+            Frame::Link(None, Some(n)) => self.jump(n, &body),
+            Frame::Link(None, None) => body,
             Frame::Image(src) => self.picture(&src, &body),
             Frame::Code(lang) => {
                 let lang = if lang.is_empty() { String::new() } else { format!("lang: {}, ", quoted(&lang)) };
@@ -685,7 +714,7 @@ impl<'a> Walk<'a> {
             Event::Html(s) if matches!(self.stack.last(), Some((Frame::Html, _))) => self.buf().push_str(s),
             _ if self.verbatim() => {}
             Event::Code(s) => {
-                let markup = format!("#raw({});", quoted(s));
+                let markup = format!("#code-run({});", quoted(s));
                 self.buf().push_str(&markup);
             }
             Event::InlineMath(s) => {
@@ -708,7 +737,7 @@ impl<'a> Walk<'a> {
             }
             Event::FootnoteReference(label) => {
                 let label = label.to_string();
-                let tag = format!("fn-{:x}", label.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3)));
+                let tag = format!("fn-{}-{:x}", self.part, label.bytes().fold(0xcbf29ce484222325u64, |h, b| (h ^ b as u64).wrapping_mul(0x100000001b3)));
                 let markup = if self.noted.insert(label.clone()) {
                     let body = self.notes.get(&label).cloned().unwrap_or_default();
                     format!("#footnote[{body}]<{tag}>")
@@ -728,7 +757,7 @@ fn options() -> Options {
 }
 
 fn parse(text: &str) -> Vec<Event<'_>> {
-    Parser::new_ext(text, options()).collect()
+    crate::html::parts(text, options()).into_iter().flat_map(|r| Parser::new_ext(&text[r], options())).collect()
 }
 
 /// Whether the note opens with a top heading that says its name, so the
@@ -755,19 +784,23 @@ fn opens_with_name(events: &[Event], title: &str) -> bool {
     words.trim().eq_ignore_ascii_case(title.trim())
 }
 
-fn walk(note: &Note, breaks: bool, bad: &Bad) -> Walked {
+/// A note written as markup. `part` is 0 for the note's own words and
+/// counts the files set after it; `used` is what the parts before used,
+/// so a picture or a formula is numbered once across them all.
+fn walk(note: &Note, breaks: bool, bad: &Bad, attached: &[attach::Attached], part: usize, used: Walked) -> Walked {
     let events = parse(note.text);
     // A footnote's body comes at the end of the parser's events and is
     // wanted where the note refers to it.
     let mut notes = HashMap::new();
     let mut body = Vec::with_capacity(events.len());
-    let mut used = Walked::default();
+    let mut used = used;
+    let body_before = std::mem::take(&mut used.body);
     let mut it = events.iter();
     while let Some(ev) = it.next() {
         if let Event::Start(Tag::FootnoteDefinition(label)) = ev {
             // What it uses goes on the note's own list, so a picture here
             // and one elsewhere are not given one number.
-            let mut inner = Walk { note, breaks: false, bad, notes: HashMap::new(), noted: HashSet::new(), out: std::mem::take(&mut used), stack: vec![(Frame::Root, String::new())], first_block: false, shares: Default::default(), nested: true };
+            let mut inner = Walk { note, breaks: false, bad, notes: HashMap::new(), noted: HashSet::new(), out: std::mem::take(&mut used), stack: vec![(Frame::Root, String::new())], first_block: false, shares: Default::default(), nested: true, attached, main: false, part };
             for e in it.by_ref().take_while(|e| !matches!(e, Event::End(TagEnd::FootnoteDefinition))) {
                 inner.event(e);
             }
@@ -779,19 +812,23 @@ fn walk(note: &Note, breaks: bool, bad: &Bad) -> Walked {
         }
     }
     // The widths are in the separator's dashes, which the events do not carry.
-    let shares = Parser::new_ext(note.text, options())
-        .into_offset_iter()
+    let shares = crate::html::parts(note.text, options())
+        .into_iter()
+        .flat_map(|part| {
+            let at = part.start;
+            Parser::new_ext(&note.text[part], options()).into_offset_iter().map(move |(ev, r)| (ev, r.start + at..r.end + at))
+        })
         .filter_map(|(ev, r)| match ev {
             Event::Start(Tag::Table(_)) => Some(note.text[r].lines().nth(1).and_then(rhythm::shares_of)),
             _ => None,
         })
         .collect();
-    let mut w = Walk { note, breaks, bad, notes, noted: HashSet::new(), out: used, stack: vec![(Frame::Root, String::new())], first_block: true, shares, nested: false };
+    let mut w = Walk { note, breaks, bad, notes, noted: HashSet::new(), out: used, stack: vec![(Frame::Root, String::new())], first_block: true, shares, nested: false, attached, main: part == 0, part };
     for ev in body {
         w.event(ev);
     }
     let (_, text) = w.stack.pop().expect("the root stays");
-    w.out.body = text;
+    w.out.body = body_before + &text;
     w.out
 }
 
@@ -846,13 +883,16 @@ fn head(title: &str, lang: &str, look: &Look, chain: &[String], o: &PdfConfig, p
     let size = o.size.clamp(PdfConfig::LEAST_SIZE, PdfConfig::MOST_SIZE);
     let heads: String = rhythm::HEADINGS.iter().map(|h| format!("{}, ", h.scale)).collect();
     let mut s = format!(
-        "#let base = {size}pt\n#let heads = ({heads})\n#let ink = rgb(\"#1F1E1D\")\n#let muted = rgb(\"#77746B\")\n#let border = rgb(\"#DFDFDC\")\n#let plate = rgb(\"#F4F3F1\")\n#let accent = rgb({accent})\n#let link-ink = rgb({link})\n#let chip = {chip}\n#let wash = rgb({wash})\n#let words = {}\n#let code = {}\n#let leading = {leading}em\n#let gap = {}em\n#let colored = {}\n#let numbered = {}\n#set document(title: {})\n#set page(width: {w}pt, height: {h}pt, margin: {margin}mm)\n",
+        "#let base = {size}pt\n#let heads = ({heads})\n#let title-scale = {}\n#let ink = rgb(\"#1F1E1D\")\n#let muted = rgb(\"#77746B\")\n#let border = rgb(\"#DFDFDC\")\n#let plate = rgb(\"#F4F3F1\")\n#let accent = rgb({accent})\n#let link-ink = rgb({link})\n#let chip = {chip}\n#let wash = rgb({wash})\n#let words = {}\n#let code = {}\n#let leading = {leading}em\n#let gap = {}em\n#let colored = {}\n#let numbered = {}\n#set document(title: {})\n#set page(width: {w}pt, height: {}, margin: {margin}mm)\n#let words-room = {w}pt - {}mm\n",
+        rhythm::TITLE,
         family(&look.words),
         family(&look.code),
         leading + 0.4,
         o.color,
-        o.numbers,
+        o.numbers && !o.long(),
         quoted(title),
+        if o.long() { "auto".to_string() } else { format!("{h}pt") },
+        margin * 2.,
     );
     s += TEMPLATE;
     s += &format!("\n#set text(lang: {})\n", quoted(lang));
@@ -861,7 +901,7 @@ fn head(title: &str, lang: &str, look: &Look, chain: &[String], o: &PdfConfig, p
     }
     if o.contents {
         s += "#context if query(heading).len() > 0 { outline(title: none, depth: 3, indent: 1.2em); v(1em) }\n";
-        if o.breaks {
+        if o.breaks && !o.long() {
             s += "#pagebreak(weak: true);\n";
         }
     }
@@ -897,6 +937,17 @@ impl Laid {
         Some(Picture { width: pixmap.width(), height: pixmap.height(), rgba: pixmap.data().to_vec() })
     }
 
+    /// The first page as a PNG, at `pixels_per_point`, or fewer pixels
+    /// if a long note would make a picture too tall to open.
+    pub fn png(&self, pixels_per_point: f32) -> Result<Vec<u8>, String> {
+        const TALLEST: f32 = 32_000.;
+        let (_, h) = self.size(0).ok_or("no page")?;
+        let k = pixels_per_point.min(TALLEST / h.max(1.));
+        let page = self.doc.pages().first().ok_or("no page")?;
+        let pixmap = typst_render::render(page, &typst_render::RenderOptions { pixel_per_pt: typst::utils::Scalar::new(k as f64), ..Default::default() });
+        pixmap.encode_png().map_err(|e| e.to_string())
+    }
+
     pub fn pdf(&self) -> Result<Vec<u8>, String> {
         typst_pdf::pdf(&self.doc, &typst_pdf::PdfOptions::default()).map_err(|errors| errors.first().map_or_else(|| "the file could not be made".to_string(), |e| e.message.to_string()))
     }
@@ -905,10 +956,67 @@ impl Laid {
 /// Typst's cache let go, when the sheet closes: it holds what it laid out.
 pub fn forget() {
     comemo::evict(0);
+    attach::forget();
+}
+
+/// The note and the files set after it, as markup: the note's words,
+/// then each file on a page of its own (on a long page, under a rule),
+/// a quiet line over it leading back to where the note names it.
+fn set_all(note: &Note, attached: &[attach::Attached], o: &PdfConfig, bad: &Bad) -> Walked {
+    let breaks = o.breaks && !o.long();
+    let mut w = walk(note, breaks, bad, attached, 0, Walked::default());
+    if attached.is_empty() {
+        return w;
+    }
+    // A file named only where no way back can return (a footnote) goes
+    // back to the top.
+    if (0..attached.len()).any(|n| !w.labeled.contains(&n)) {
+        w.body = format!("#metadata(none)<onyx-top>{}", w.body);
+    }
+    for (n, a) in attached.iter().enumerate() {
+        let back = if w.labeled.contains(&n) { format!("<onyx-from-{n}>") } else { "<onyx-top>".to_string() };
+        let turn = if o.long() { "#part-gap;\n" } else { "#pagebreak(weak: true);\n" };
+        // The contents' Appendix, before the first, and each file's name
+        // under it, in English whatever the note's language.
+        let entries = format!("{}#appendix-entry(2, {});", if n == 0 { "#appendix-entry(1, \"Appendix\");" } else { "" }, quoted(&a.title));
+        w.body += &format!("{turn}#metadata(none)<onyx-part-{n}>{entries}#part-head({back}, {}, {});\n\n", quoted(note.title), quoted(&a.name));
+        match &a.body {
+            attach::Body::Pdf { pages, .. } => {
+                if !bad.attached.contains(&a.path) {
+                    w.body += &pdf_pages(n, *pages, o.long());
+                }
+            }
+            attach::Body::Note(text) | attach::Body::File(text) => {
+                if matches!(a.body, attach::Body::Note(_)) && o.name && !opens_with_name(&parse(text), &a.title) {
+                    w.body += &format!("#part-title({});\n\n", quoted(&a.title));
+                }
+                let part = Note { text, title: &a.title, path: &a.path, vault: note.vault };
+                w = walk(&part, breaks, bad, attached, n + 1, w);
+            }
+        }
+    }
+    w
+}
+
+/// A PDF's pages set after the note, each on a page of its own.
+fn pdf_pages(n: usize, pages: usize, long: bool) -> String {
+    (1..=pages).map(|page| format!("{}#pdf-page(\"/attached/{n}.pdf\", {page}, {long});\n", if page > 1 && !long { "#pagebreak();\n" } else { "" })).collect()
 }
 
 fn lay_out_here(note: &Note, look: &Look, o: &PdfConfig, paper: &str) -> Result<Laid, String> {
-    let (fonts, chain) = gather(note.text, look);
+    // A card is set as the file it shows, embedded (`attach::cards_as_embeds`).
+    let text = attach::cards_as_embeds(note.text);
+    let note = &Note { text: &text, title: note.title, path: note.path, vault: note.vault };
+    let attached = if o.attached { attach::gather(note) } else { Vec::new() };
+    let mut texts = vec![note.title, note.text];
+    if !attached.is_empty() {
+        texts.push("↑");
+        for a in &attached {
+            texts.extend([a.title.as_str(), a.name.as_str()]);
+            texts.extend(a.text());
+        }
+    }
+    let (fonts, chain) = gather(&texts, look);
     let events = parse(note.text);
     let show_name = o.name && !opens_with_name(&events, note.title);
     drop(events);
@@ -921,10 +1029,15 @@ fn lay_out_here(note: &Note, look: &Look, o: &PdfConfig, paper: &str) -> Result<
     }
     let mut files = HashMap::new();
     files.insert(file_id("/onyx.tmTheme").ok_or("no theme file")?, Bytes::new(THEME));
+    for (n, a) in attached.iter().enumerate() {
+        if let attach::Body::Pdf { bytes, .. } = &a.body {
+            files.insert(file_id(&format!("/attached/{n}.pdf")).ok_or("no attached file")?, bytes.clone());
+        }
+    }
     let mut place = Place { book: LazyHash::new(FontBook::from_fonts(&fonts)), fonts, main: Source::new(main, String::new()), sources, files };
 
     let mut bad = Bad::default();
-    let walked = walk(note, o.breaks, &bad);
+    let walked = set_all(note, &attached, o, &bad);
     place.take_pictures(&walked)?;
     place.with_main(format!("{head}{}", walked.body));
     let whole = place.compile();
@@ -933,7 +1046,7 @@ fn lay_out_here(note: &Note, look: &Look, o: &PdfConfig, paper: &str) -> Result<
         Err(first) => {
             // Each part alone, to find what the whole could not take.
             for formula in &walked.formulas {
-                let trial = Walk { note, breaks: false, bad: &bad, notes: HashMap::new(), noted: HashSet::new(), out: Walked::default(), stack: vec![(Frame::Root, String::new())], first_block: false, shares: Default::default(), nested: true }.formula(formula, false);
+                let trial = Walk { note, breaks: false, bad: &bad, notes: HashMap::new(), noted: HashSet::new(), out: Walked::default(), stack: vec![(Frame::Root, String::new())], first_block: false, shares: Default::default(), nested: true, attached: &[], main: false, part: 0 }.formula(formula, false);
                 place.with_main(format!("{head}{trial}"));
                 if place.compile().is_err() {
                     bad.formulas.insert(formula.clone());
@@ -945,11 +1058,19 @@ fn lay_out_here(note: &Note, look: &Look, o: &PdfConfig, paper: &str) -> Result<
                     bad.pictures.insert(path.clone());
                 }
             }
-            if bad.formulas.is_empty() && bad.pictures.is_empty() {
+            for (n, a) in attached.iter().enumerate() {
+                if let attach::Body::Pdf { pages, .. } = &a.body {
+                    place.with_main(format!("{head}{}", pdf_pages(n, *pages, o.long())));
+                    if place.compile().is_err() {
+                        bad.attached.insert(a.path.clone());
+                    }
+                }
+            }
+            if bad.formulas.is_empty() && bad.pictures.is_empty() && bad.attached.is_empty() {
                 return Err(first);
             }
             // A picture left out moves the numbers of those after it.
-            let walked = walk(note, o.breaks, &bad);
+            let walked = set_all(note, &attached, o, &bad);
             place.take_pictures(&walked)?;
             place.with_main(format!("{head}{}", walked.body));
             place.compile()?
@@ -974,14 +1095,20 @@ pub fn lay_out(note: &Note, look: &Look, o: &PdfConfig, paper: &str) -> Result<A
 /// to be finished here does not land on a file the save panel never
 /// asked about. A name the panel did ask about stands.
 pub fn output_path(chosen: &Path) -> PathBuf {
-    if chosen.extension().is_some_and(|e| e.eq_ignore_ascii_case("pdf")) {
+    finished(chosen, "pdf")
+}
+
+/// `chosen` ending in `.ext`; a name finished here, not the save panel's,
+/// gets a number rather than land on a file it never asked about.
+pub fn finished(chosen: &Path, ext: &str) -> PathBuf {
+    if chosen.extension().is_some_and(|e| e.eq_ignore_ascii_case(ext)) {
         return chosen.to_path_buf();
     }
     let name = chosen.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
     (0..)
-        .map(|n| chosen.with_file_name(if n == 0 { format!("{name}.pdf") } else { format!("{name} {n}.pdf") }))
+        .map(|n| chosen.with_file_name(if n == 0 { format!("{name}.{ext}") } else { format!("{name} {n}.{ext}") }))
         .find(|p| !p.exists())
-        .unwrap_or_else(|| chosen.with_extension("pdf"))
+        .unwrap_or_else(|| chosen.with_extension(ext))
 }
 
 #[cfg(test)]
@@ -1011,12 +1138,5 @@ mod tests {
         assert!(!live_address("Other Note.md"));
         assert!(!live_address("#heading"));
         assert!(!live_address("C:/notes/a.md"));
-    }
-
-    #[test]
-    fn an_address_is_decoded() {
-        assert_eq!(decoded("my%20picture.png"), "my picture.png");
-        assert_eq!(decoded("100%.png"), "100%.png");
-        assert_eq!(decoded("%E7%9F%B3.png"), "石.png");
     }
 }

@@ -1,7 +1,7 @@
 //! The core from a terminal: each part run without the window, by a
 //! person or an agent. A product adds a subcommand for each part it has.
 
-use onyx_core::{config::Config, paths, pdf, update, vault};
+use onyx_core::{config::Config, docx, paths, pdf, update, vault, web};
 
 fn main() {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -29,6 +29,7 @@ fn main() {
             }
         },
         Some("pdf") => pdf_of(&args[1..]),
+        Some(kind @ ("docx" | "html")) => document_of(kind, &args[1..]),
         Some("vault") => {
             // The tree of a vault, as the window shows it, or a note made in it.
             let Some(root) = args.get(1).map(std::path::PathBuf::from) else {
@@ -76,7 +77,7 @@ fn main() {
             }
         }
         _ => {
-            eprintln!("usage: onyx-core paths | config | update | vault <folder> [new <name>] | --try-update <version> <bundle>");
+            eprintln!("usage: onyx-core paths | config | update | vault <folder> [new <name>] | pdf <note> <out> <fonts> | docx <note> <out> | html <note> <out> | --try-update <version> <bundle>");
             2
         }
     };
@@ -87,7 +88,7 @@ fn main() {
 /// `fonts`, with the settings file's options.
 fn pdf_of(args: &[String]) -> i32 {
     let [note, out, fonts] = args else {
-        eprintln!("usage: onyx-core pdf <note> <out.pdf> <fonts folder>");
+        eprintln!("usage: onyx-core pdf <note> <out.pdf or .png> <fonts folder>");
         return 2;
     };
     let faces: Vec<&'static [u8]> = std::fs::read_dir(fonts).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.extension().is_some_and(|x| x == "ttf" || x == "otf")).filter_map(|p| std::fs::read(p).ok()).map(|b| &*Vec::leak(b)).collect();
@@ -98,18 +99,59 @@ fn pdf_of(args: &[String]) -> i32 {
         return 1;
     };
     let title = vault::title(path);
-    let look = pdf::Look { words: vec!["Inter".into(), "Noto Sans SC".into()], code: vec!["JetBrains Mono".into(), "Noto Sans SC".into()], fallbacks: vec![], accent: "#277580".into(), link: "#1F6F79".into() };
-    let options = Config::load().pdf;
+    let look = pdf::Look { words: vec!["Inter".into(), "Noto Sans SC".into()], code: vec!["JetBrains Mono".into(), "Noto Sans SC".into()], fallbacks: vec!["PingFang SC".into(), "Apple Color Emoji".into(), "Noto Color Emoji".into(), "Segoe UI Emoji".into()], accent: "#277580".into(), link: "#1F6F79".into() };
+    let mut options = Config::load().pdf;
+    // A picture of the note, one long page, when the name asks for one.
+    let png = out.to_ascii_lowercase().ends_with(".png");
+    if png {
+        options.format = "image".into();
+    }
     let paper = if options.paper.is_empty() { "a4" } else { &options.paper };
     let started = std::time::Instant::now();
     let made = pdf::lay_out(&pdf::Note { text: &text, title: &title, path, vault: path.parent() }, &look, &options, paper).and_then(|laid| {
-        let bytes = laid.pdf()?;
+        let bytes = if png { laid.png(2.)? } else { laid.pdf()? };
         paths::write_atomic(std::path::Path::new(out), &bytes).map_err(|e| e.to_string())?;
         Ok((laid.pages(), bytes.len()))
     });
     match made {
         Ok((pages, size)) => {
             println!("{pages} pages, {} KB, in {:?}", size / 1024, started.elapsed());
+            0
+        }
+        Err(e) => {
+            eprintln!("onyx-core: {e}");
+            1
+        }
+    }
+}
+
+/// A note written as a Word document or a web page, with the export
+/// sheet's options as the settings keep them.
+fn document_of(kind: &str, args: &[String]) -> i32 {
+    let [note, out] = args else {
+        eprintln!("usage: onyx-core {kind} <note> <out>");
+        return 2;
+    };
+    let path = std::path::Path::new(note);
+    let Ok(text) = vault::read(path) else {
+        eprintln!("onyx-core: {note} could not be read");
+        return 1;
+    };
+    let title = vault::title(path);
+    let look = pdf::Look { words: vec!["Inter".into(), "PingFang SC".into()], code: vec!["JetBrains Mono".into(), "PingFang SC".into()], fallbacks: vec!["Apple Color Emoji".into()], accent: "#277580".into(), link: "#1F6F79".into() };
+    let mut options = Config::load().pdf;
+    if options.paper.is_empty() {
+        options.paper = "a4".into();
+    }
+    let note = pdf::Note { text: &text, title: &title, path, vault: path.parent() };
+    let started = std::time::Instant::now();
+    let made = match kind {
+        "docx" => docx::write(&note, &look, &options),
+        _ => web::write(&note, &look, &options).map(String::into_bytes),
+    };
+    match made.and_then(|bytes| paths::write_atomic(std::path::Path::new(out), &bytes).map(|_| bytes.len()).map_err(|e| e.to_string())) {
+        Ok(size) => {
+            println!("{} KB, in {:?}", size / 1024, started.elapsed());
             0
         }
         Err(e) => {
