@@ -589,6 +589,132 @@ pub fn pdf_outline(path: &Path) -> Result<Vec<PdfMark>, String> {
     .map_err(String::from)
 }
 
+/// Contents read from a PDF's type, for one with no outline: the lines
+/// set larger than its body text, as an eye takes a page's titles. The
+/// body is the size most of its letters have; a line a fifth larger or
+/// more is a heading, its level by its size among the headings' (three
+/// at most, the larger the higher), a heading wrapped onto a second line
+/// joined to its first, and a line that comes back at the same height
+/// on three pages or more (a running head) kept only where it first is. A size many of the letters have is a second
+/// size of text, not a heading's; a sentence is not a heading; past a
+/// few lines a page the smallest headings go. Empty for a PDF with no
+/// text, as a scan is.
+pub fn pdf_contents(pages: &[PdfText]) -> Vec<PdfMark> {
+    struct Line {
+        page: usize,
+        text: String,
+        size: i32,
+        top: f32,
+        bottom: f32,
+    }
+    // Sizes in half points: what a line's letters have in common.
+    let half = |em: f32| (em * 2.).round() as i32;
+    let mut letters: HashMap<i32, usize> = HashMap::new();
+    let mut lines = Vec::new();
+    for (p, page) in pages.iter().enumerate() {
+        for r in page.lines() {
+            let inked: Vec<&PdfGlyph> = page.glyphs[r.clone()].iter().filter(|g| !g.text.trim().is_empty()).collect();
+            if inked.is_empty() {
+                continue;
+            }
+            let mut sizes: HashMap<i32, usize> = HashMap::new();
+            for g in &inked {
+                let n = g.text.chars().count();
+                *letters.entry(half(g.em)).or_default() += n;
+                *sizes.entry(half(g.em)).or_default() += n;
+            }
+            let Some(size) = sizes.into_iter().max_by_key(|&(s, n)| (n, s)).map(|(s, _)| s) else { continue };
+            let top = inked.iter().map(|g| g.base - g.em * 0.85).fold(f32::MAX, f32::min);
+            let bottom = inked.iter().map(|g| g.base + g.em * 0.25).fold(f32::MIN, f32::max);
+            let text = unligate(&page.words(r.start, r.end).split_whitespace().collect::<Vec<_>>().join(" "));
+            lines.push(Line { page: p, text, size, top, bottom });
+        }
+    }
+    let all: usize = letters.values().sum();
+    let Some(body) = letters.iter().max_by_key(|&(&s, &n)| (n, -s)).map(|(&s, _)| s) else { return Vec::new() };
+    // A size a large share of the letters have is a second size of text
+    // (a letter's greeting, a table), not a heading's.
+    let rare = |size: i32| letters.get(&size).is_some_and(|&n| n * 6 < all);
+    // Down each page as it reads, not in the order the file draws.
+    lines.sort_by(|a, b| a.page.cmp(&b.page).then(a.top.total_cmp(&b.top)));
+    // Larger by a fifth and rare, a few words with a letter among them,
+    // not a sentence running on (a comma at its end, a dozen words).
+    let heading = |l: &Line| {
+        l.size as f32 >= body as f32 * 1.2 && rare(l.size) && l.text.chars().any(char::is_alphabetic) && l.text.chars().count() <= 80 && l.text.split_whitespace().count() <= 12 && !l.text.ends_with([',', ';', '，', '；'])
+    };
+    let mut heads: Vec<Line> = Vec::new();
+    for l in lines.into_iter().filter(heading) {
+        if let Some(last) = heads.last_mut() {
+            if last.page == l.page && last.size == l.size && l.top > last.top && l.top - last.bottom < l.size as f32 / 2. * 0.8 {
+                last.text.push(' ');
+                last.text.push_str(&l.text);
+                last.bottom = l.bottom;
+                continue;
+            }
+        }
+        heads.push(l);
+    }
+    // A running head: the same words at the same height on three pages
+    // or more. Its first stands, as the document's title.
+    let mut on: HashMap<(String, i32), std::collections::HashSet<usize>> = HashMap::new();
+    for h in &heads {
+        on.entry((h.text.clone(), (h.top / 2.).round() as i32)).or_default().insert(h.page);
+    }
+    let mut seen = std::collections::HashSet::new();
+    heads.retain(|h| {
+        let key = (h.text.clone(), (h.top / 2.).round() as i32);
+        on.get(&key).is_none_or(|p| p.len() < 3) || seen.insert(key)
+    });
+    heads.dedup_by(|b, a| a.page == b.page && a.text == b.text);
+    let mut levels: Vec<i32> = heads.iter().map(|h| h.size).collect();
+    levels.sort_unstable_by(|a, b| b.cmp(a));
+    levels.dedup();
+    // A list a few lines to a page at most: the smallest size goes while
+    // there are more, as a table of contents keeps the larger titles.
+    let most = (pages.len() * 6).max(12);
+    while heads.len() > most && levels.len() > 1 {
+        let Some(least) = levels.pop() else { break };
+        heads.retain(|h| h.size != least);
+    }
+    let depth_of = |size: i32| levels.iter().position(|&s| s == size).unwrap_or(0).min(2);
+    let mut out: Vec<PdfMark> = heads
+        .iter()
+        .take(MARKS_MOST)
+        .map(|h| PdfMark { title: h.text.clone(), depth: depth_of(h.size), page: Some(h.page), down: Some((h.top - h.size as f32 / 2. * 0.5).max(0.)), kids: false, open: true })
+        .collect();
+    // A level no line stands under before it, as the third size with no
+    // second over it, comes up to stand under the line before it.
+    let mut was = None::<usize>;
+    for m in &mut out {
+        m.depth = match was {
+            None => 0,
+            Some(d) => m.depth.min(d + 1),
+        };
+        was = Some(m.depth);
+    }
+    for i in 0..out.len() {
+        out[i].kids = out.get(i + 1).is_some_and(|n| n.depth > out[i].depth);
+    }
+    out
+}
+
+/// Letters a font draws as one (`ﬁ`) written out, as a title reads.
+fn unligate(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        match c {
+            'ﬀ' => out.push_str("ff"),
+            'ﬁ' => out.push_str("fi"),
+            'ﬂ' => out.push_str("fl"),
+            'ﬃ' => out.push_str("ffi"),
+            'ﬄ' => out.push_str("ffl"),
+            'ﬅ' | 'ﬆ' => out.push_str("st"),
+            c => out.push(c),
+        }
+    }
+    out
+}
+
 fn read_outline(pdf: &hayro::hayro_syntax::Pdf) -> Vec<PdfMark> {
     use hayro::hayro_syntax::object::{Dict, ObjectIdentifier};
     let xref = pdf.xref();
@@ -987,6 +1113,43 @@ mod tests {
         let marks = pdf_outline(&path).unwrap();
         let got: Vec<(&str, usize, Option<usize>, Option<f32>, bool, bool)> = marks.iter().map(|m| (m.title.as_str(), m.depth, m.page, m.down, m.kids, m.open)).collect();
         assert_eq!(got, vec![("Intro", 0, Some(0), Some(20.), true, false), ("Part", 1, Some(1), None, false, false), ("Über", 0, Some(1), Some(70.), false, false)]);
+    }
+
+    /// Contents from the type: the title and the sections larger than
+    /// the body, a wrapped title joined, a running head left out.
+    #[test]
+    fn contents_from_type() {
+        fn line(glyphs: &mut Vec<PdfGlyph>, text: &str, em: f32, base: f32) {
+            let mut x = 50.;
+            for (i, c) in text.chars().enumerate() {
+                let w = em * 0.5;
+                glyphs.push(PdfGlyph { x0: x, x1: x + w, base, em, text: c.to_string(), gap: if i == 0 { 2 } else if c == ' ' { 1 } else { 0 } });
+                x += w;
+            }
+        }
+        let page = |head: Option<(&str, f32)>, extra: &[(&str, f32, f32)]| {
+            let mut g = Vec::new();
+            line(&mut g, "Itinerary", 14., 30.);
+            if let Some((t, em)) = head {
+                line(&mut g, t, em, 80.);
+            }
+            for &(t, em, base) in extra {
+                line(&mut g, t, em, base);
+            }
+            for i in 0..12 {
+                line(&mut g, "the words of the body of the page run on here", 10., 300. + i as f32 * 14.);
+            }
+            PdfText { size: (600., 800.), glyphs: g }
+        };
+        let pages = vec![
+            page(Some(("Trip to", 28.)), &[("Southbank", 28., 112.), ("Hotel", 18., 200.)]),
+            page(Some(("Flights", 18.)), &[("Seats", 14.5, 240.)]),
+            page(None, &[("42", 18., 260.)]),
+        ];
+        let marks = pdf_contents(&pages);
+        let got: Vec<(&str, usize, Option<usize>, bool)> = marks.iter().map(|m| (m.title.as_str(), m.depth, m.page, m.kids)).collect();
+        assert_eq!(got, vec![("Itinerary", 0, Some(0), false), ("Trip to Southbank", 0, Some(0), true), ("Hotel", 1, Some(0), false), ("Flights", 1, Some(1), true), ("Seats", 2, Some(1), false)]);
+        assert!(pdf_contents(&[PdfText::default()]).is_empty());
     }
 }
 

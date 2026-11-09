@@ -196,6 +196,14 @@ impl Render for AssetDrag {
 }
 
 /// A picture's corners on the canvas, as round as Craft's, and a frame's.
+/// A line's own color with nothing of it showing, the fill under a line
+/// drawn alone: gpui blends a border into its fill in plain color as it
+/// nears the fill, so a fill of clear black darkens the soft inside of a
+/// round corner into a second, darker line.
+pub(crate) fn clear_of(line: Hsla) -> Hsla {
+    line.opacity(0.)
+}
+
 pub const PICTURE_ROUND: f32 = crate::embed::CONTROL_ROUND;
 
 /// What the editor tells the view around it.
@@ -413,6 +421,12 @@ impl Editor {
     }
 
     /// Where the note is, which a picture's path goes by.
+    /// What the note knows of the files it shows, shared with its frames;
+    /// a tab's frame takes it too (`shell/library.rs`).
+    pub(crate) fn store(&self) -> Rc<RefCell<Pictures>> {
+        self.pictures.clone()
+    }
+
     pub fn set_place(&mut self, note: PathBuf, vault: Option<PathBuf>, cx: &mut Context<Self>) {
         let mut pictures = self.pictures.borrow_mut();
         if pictures.note != note || pictures.vault != vault {
@@ -754,7 +768,8 @@ impl Editor {
         }
         self.text_changed(cx);
         // A caret a change leaves on a picture's line (a picture just
-        // written, an undo) stays in the line, which shows as written.
+        // typed) stays in the line, which shows as written; a paste
+        // selects what it brought whole after (`hold_brought`).
         if self.editing.is_some_and(|l| l != self.sel.head.line) {
             self.editing = None;
         }
@@ -1117,8 +1132,12 @@ impl Editor {
         }
         if let Some(text) = item.text() {
             let text = text.replace("\r\n", "\n").replace('\r', "\n");
+            let open = self.editing;
             self.insert(&text, cx);
             self.doc.end_step();
+            if open.is_none() {
+                self.hold_brought();
+            }
         }
     }
 
@@ -1211,8 +1230,12 @@ impl Editor {
                 } else if b.line + 1 < e.doc.line_count() && filled(b.line + 1) {
                     text.push('\n');
                 }
+                let open = e.editing;
                 e.insert(&text, cx);
                 e.doc.end_step();
+                if open.is_none() {
+                    e.hold_brought();
+                }
             });
         })
         .detach();
@@ -1954,7 +1977,7 @@ fn paint_plate(left: f32, top: f32, width: f32, height: f32, head: f32, theme: &
     let r = px(TABLE_R);
     let corners = Corners { top_left: r, top_right: r, bottom_left: px(0.), bottom_right: px(0.) };
     window.paint_quad(quad(Bounds::new(point(px(left), px(top)), size(px(width), px(head))), corners, theme.muted.opacity(0.7), px(0.), theme.transparent, BorderStyle::default()));
-    window.paint_quad(quad(Bounds::new(point(px(left), px(top)), size(px(width), px(height))), r, theme.transparent, px(1.), theme.border, BorderStyle::default()));
+    window.paint_quad(quad(Bounds::new(point(px(left), px(top)), size(px(width), px(height))), r, clear_of(theme.border), px(1.), theme.border, BorderStyle::default()));
 }
 
 /// One row at a place on the page. `line` is the text's line, or none
@@ -2026,13 +2049,19 @@ fn paint_row(row: &Row, ox: f32, oy: f32, height: f32, full_w: Pixels, line: Opt
             // A frame is a view of its own, laid over the row (`embed.rs`);
             // so is a picture's bar, which comes over it on the pointer.
             if !p.embed {
+                // Edged as a frame is, its bar standing inside the line. The
+                // picture's own rim stops in the middle of that line, so the
+                // soft edge a round corner gives it falls under the line and
+                // never shows past it.
+                let inner = Bounds::new(control.origin + point(px(0.5), px(0.5)), size(control.size.width - px(1.), control.size.height - px(1.)));
                 let drawn = info.pictures.borrow().drawn.get(&p.path).cloned();
                 match drawn {
                     Some(image) => {
-                        let _ = window.paint_image(control, control, Corners::all(px(round)), image, 0, false);
+                        let _ = window.paint_image(inner, inner, Corners::all(px(round - 0.5)), image, 0, false);
                     }
-                    None => window.paint_quad(quad(control, px(round), theme.muted, px(0.), theme.transparent, BorderStyle::default())),
+                    None => window.paint_quad(quad(inner, px(round - 0.5), theme.muted, px(0.), theme.transparent, BorderStyle::default())),
                 }
+                window.paint_quad(quad(control, px(round), clear_of(theme.border), px(1.), theme.border, BorderStyle::default()));
             }
             // The caption under it, on a quiet plate as wide as its words.
             if let Some(source) = &p.source {
@@ -2077,7 +2106,7 @@ fn paint_text(r: &TextRow, ox: f32, oy: f32, height: f32, line: Option<usize>, i
                     let inner = Bounds::new(point(b.origin.x + b.size.width * 0.15, b.origin.y + b.size.height * 0.15), size(b.size.width * 0.7, b.size.height * 0.7));
                     let _ = window.paint_svg(inner, "icons/check.svg".into(), None, TransformationMatrix::unit(), theme.primary_foreground, cx);
                 } else {
-                    window.paint_quad(quad(b, px(4.), theme.transparent, px(1.5), theme.muted_foreground.opacity(0.7), BorderStyle::default()));
+                    window.paint_quad(quad(b, px(4.), clear_of(theme.muted_foreground), px(1.5), theme.muted_foreground.opacity(0.7), BorderStyle::default()));
                 }
             }
             Widget::Guide { x } => window.paint_quad(fill(Bounds::new(point(px(ox + x), px(oy)), size(px(1.), px(height))), theme.border)),
@@ -2266,7 +2295,7 @@ impl Element for EditorElement {
         }
         drop(cache);
         if let Some(b) = info.cell {
-            window.paint_quad(quad(Bounds::new(point(px(ox) + b.origin.x, px(oy) + b.origin.y), b.size), px(3.), theme.transparent, px(1.5), theme.primary, BorderStyle::default()));
+            window.paint_quad(quad(Bounds::new(point(px(ox) + b.origin.x, px(oy) + b.origin.y), b.size), px(3.), clear_of(theme.primary), px(1.5), theme.primary, BorderStyle::default()));
         }
         if let Some(c) = &info.controls {
             window.with_content_mask(None, |window| paint_controls(c, ox, oy, &theme, window, cx));

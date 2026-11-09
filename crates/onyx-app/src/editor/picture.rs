@@ -238,6 +238,18 @@ impl Editor {
         }
     }
 
+    /// A piece a paste or a file brought in, selected whole as a press
+    /// on it would, not opened as words: the caret the paste leaves at the
+    /// end of its line would show the line as written under it. Only
+    /// typing and the pencil open a piece's line.
+    pub(super) fn hold_brought(&mut self) {
+        let Some(line) = self.editing.filter(|&l| self.sel.is_caret() && l == self.sel.head.line) else { return };
+        self.editing = None;
+        if self.object_line(line) {
+            self.sel = self.object_sel(line);
+        }
+    }
+
     /// Where a selection from `anchor` may end on a piece's line: the
     /// whole of it, so a selection takes a picture whole or not at all.
     pub(super) fn held_by_object(&self, anchor: Pos, p: Pos) -> Pos {
@@ -754,5 +766,5 @@ pub(super) fn paint_picture_edge(c: &PicPaint, ox: f32, oy: f32, theme: &gpui_co
 pub(super) fn paint_ring(control: Bounds<Pixels>, color: Hsla, window: &mut Window) {
     let out = px(RING_OUT);
     let b = Bounds::new(point(control.origin.x - out, control.origin.y - out), gpui::size(control.size.width + out * 2., control.size.height + out * 2.));
-    window.paint_quad(quad(b, px(crate::embed::CONTROL_ROUND + RING_OUT), gpui::transparent_black(), px(RING_W), color, BorderStyle::default()));
+    window.paint_quad(quad(b, px(crate::embed::CONTROL_ROUND + RING_OUT), super::clear_of(color), px(RING_W), color, BorderStyle::default()));
 }

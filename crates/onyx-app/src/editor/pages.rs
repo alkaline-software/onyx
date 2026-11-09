@@ -109,7 +109,6 @@ impl Editor {
             if !embed && alpha <= 0. {
                 continue;
             }
-            let h = if embed { h } else { HEAD_H.min(h) };
             if let Some(tall) = words {
                 let mut store = self.pictures.borrow_mut();
                 if store.embed_heights.get(&path).is_none_or(|was| (was - tall).abs() > 0.5) {
@@ -117,6 +116,7 @@ impl Editor {
                     cx.notify();
                 }
             }
+            let h = if embed { h } else { HEAD_H.min(h) };
             let b = Bounds::new(point(bounds.origin.x + px(x), bounds.origin.y + px(top)), size(px(w), px(h)));
             if b.intersects(&view) {
                 out.push((frame, b));

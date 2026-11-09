@@ -438,6 +438,9 @@ impl Shell {
             });
             let (place, root) = (to.clone(), root.clone());
             self.tabs[ix].editor.update(cx, |e, cx| e.set_place(place, root, cx));
+            if let Some(asset) = &self.tabs[ix].asset {
+                asset.moved_to(to.clone(), cx);
+            }
             self.tabs[ix].path = to;
             self.tabs[ix]._sub = sub;
         }

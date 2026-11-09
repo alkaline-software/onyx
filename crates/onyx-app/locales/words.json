@@ -1934,15 +1934,6 @@
     "de": "Die Datei wurde nicht erstellt: {why}",
     "es": "No se creó el archivo: {why}"
   },
-  "The first {n} of {total} pages.": {
-    "zh-Hans": "共 {total} 页中的前 {n} 页。",
-    "zh-Hant": "共 {total} 頁中的前 {n} 頁。",
-    "ja": "全 {total} ページのうち最初の {n} ページ。",
-    "ko": "전체 {total}쪽 중 처음 {n}쪽.",
-    "fr": "Les {n} premières pages sur {total}.",
-    "de": "Die ersten {n} von {total} Seiten.",
-    "es": "Las primeras {n} de {total} páginas."
-  },
   "The folder could not be made: {why}": {
     "zh-Hans": "无法新建文件夹：{why}",
     "zh-Hant": "無法新增檔案夾：{why}",

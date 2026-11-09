@@ -3286,8 +3286,9 @@ impl Shell {
                 .relative()
                 .child(chip)
                 .when(self.shown.as_deref().is_some_and(vault::is_note), |d| d.child(h_flex().absolute().right(px(PATH_BAR_PAD)).top_0().bottom_0().gap(px(2.)).items_center().child(self.path_button("path-export", "icons/file-export.svg", t("Export (⇧⌘E)"), Self::press_export, &theme, cx))))
-                // An asset: the system's app for it, where the note has its paper.
-                .when(self.shown.as_deref().is_some_and(|p| !vault::is_note(p)), |d| {
+                // An asset: the system's app for it, where the note has its
+                // paper; a picture or a PDF has its frame's bar and menu.
+                .when(self.shown.as_deref().is_some_and(|p| !vault::is_note(p)) && !self.shown_framed(), |d| {
                     d.child(
                         h_flex()
                             .absolute()
@@ -3296,12 +3297,17 @@ impl Shell {
                             .bottom_0()
                             .gap(px(2.))
                             .items_center()
-                            .children(self.render_zoom(&theme, cx))
                             .child(self.path_button("path-open", "icons/external-link.svg", t("Open with Default App"), Self::press_open_app, &theme, cx)),
                     )
                 })
                 .into_any_element(),
         )
+    }
+
+    /// Whether the shown tab is a picture or a PDF in its frame.
+    fn shown_framed(&self) -> bool {
+        let Some(shown) = self.shown.as_deref() else { return false };
+        self.tabs.iter().find(|t| t.path == shown).and_then(|t| t.asset.as_ref()).is_some_and(|a| a.framed())
     }
 
     /// A quiet square at the path bar's end.
@@ -4702,10 +4708,21 @@ impl Shell {
                     }
                 }
                 "assets" => self.set_side_view(SideView::Assets, window, cx),
-                // `renamefile=<path>::<name>`: a file renamed as the sheet renames it.
+                // `renamefile=<path>::<name>`: a file renamed as the sheet
+                // renames it, in its turn, after a `preview=` before it.
                 s if s.starts_with("renamefile=") => {
                     if let Some((path, name)) = s["renamefile=".len()..].split_once("::") {
-                        self.rename_entry(Path::new(path), name, window, cx);
+                        let (path, name) = (PathBuf::from(path), name.to_string());
+                        let wait = later;
+                        later += GO_STEP;
+                        cx.spawn_in(window, async move |this, cx| {
+                            cx.background_executor().timer(Duration::from_millis(wait)).await;
+                            let _ = this.update_in(cx, |s, window, cx| {
+                                s.rename_entry(&path, &name, window, cx);
+                                cx.notify();
+                            });
+                        })
+                        .detach();
                     }
                 }
                 // What the preview's player has read of its file, on stderr.
