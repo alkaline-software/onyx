@@ -946,6 +946,9 @@ impl<M: InputModeKind> InputBaseState<M> {
         if range.end > self.text.len() || range.start > range.end {
             return;
         }
+        // On characters' starts, as a caller's arithmetic may not leave
+        // it. (Studio addition.)
+        let range = self.text.clip_offset(range.start, Bias::Left)..self.text.clip_offset(range.end, Bias::Right);
         self.with_edits_allowed(|this| {
             this.undo_manager.commit_transaction();
             this.undo_manager.pending_intent = Some(EditIntent::Atomic);
@@ -961,6 +964,14 @@ impl<M: InputModeKind> InputBaseState<M> {
     /// addition.)
     pub fn offset_at(&self, position: Point<Pixels>) -> usize {
         self.index_for_mouse_position(position)
+    }
+
+    /// A wheel's event, from wherever the pointer is: a gesture begun
+    /// over the editor and carried off it goes on moving the editor and
+    /// nothing else, as the app's scroll router hands it here. (Studio
+    /// addition.)
+    pub fn scroll_wheel(&mut self, event: &ScrollWheelEvent, window: &mut Window, cx: &mut Context<Self>) {
+        self.on_scroll_wheel(event, window, cx);
     }
 
     /// A right click at a point of the window, as the mouse makes it.
@@ -2191,8 +2202,16 @@ impl<M: InputModeKind> InputBaseState<M> {
 
         let row = point.row;
 
-        // Calculate row offset by multiplying the number of lines before it with the line height
-        let mut row_offset_y = line_height * self.display_map.buffer_line_to_display_row(row);
+        // Studio: the row the offset is drawn on, its line's soft wraps
+        // counted, from the display map. Upstream took the wraps from the
+        // last layout, which has only the lines in view, so an offset deep
+        // in a long paragraph out of view scrolled to the paragraph's first
+        // row: a find's first step stopped short of its match.
+        let row_offset_y = line_height
+            * self
+                .display_map
+                .buffer_pos_to_display_pos(crate::input::BufferPoint::new(row, point.column))
+                .row;
 
         // For Right alignment use 0 margin: the cursor indicator is clamped inside bounds
         // in layout_cursor, so shifting the text here would cause a first-click visual jump.
@@ -2209,7 +2228,6 @@ impl<M: InputModeKind> InputBaseState<M> {
             if let Some(pos) = line.position_for_index(point.column, last_layout, false) {
                 let bounds_width = bounds.size.width - last_layout.line_number_width;
                 let col_offset_x = pos.x;
-                row_offset_y += pos.y;
                 if col_offset_x - safety_margin < -scroll_offset.x {
                     // If the position is out of the visible area, scroll to make it visible
                     scroll_offset.x = -col_offset_x + safety_margin;
@@ -2603,6 +2621,16 @@ impl<M: InputModeKind> InputBaseState<M> {
     #[inline]
     pub(super) fn offset_to_utf16(&self, offset: usize) -> usize {
         self.text.offset_to_offset_utf16(offset)
+    }
+
+    /// A selection moved onto characters' starts and into the text: its
+    /// start back to the one it is in, its end on to the next. (Studio
+    /// addition.)
+    fn on_chars(&self, sel: Selection) -> Selection {
+        let len = self.text.len();
+        let start = self.text.clip_offset(sel.start.min(len), Bias::Left);
+        let end = self.text.clip_offset(sel.end.min(len), if sel.end == sel.start { Bias::Left } else { Bias::Right });
+        Selection::new(start, end.max(start))
     }
 
     #[inline]
@@ -3044,6 +3072,12 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
         if !self.is_editable() {
             return;
         }
+        // The selection and what an input method marks on characters'
+        // starts, whatever put them where they are: an offset inside a
+        // character panicked at the slices below as a letter was typed,
+        // and the app aborted. (Studio addition.)
+        self.selected_range = self.on_chars(self.selected_range);
+        self.ime_marked_range = self.ime_marked_range.map(|r| self.on_chars(r));
         let selection_before = self.selected_range;
 
         if self.blink_cursor.read(cx).visible() {
@@ -3251,6 +3285,12 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
         if !self.is_editable() {
             return;
         }
+        // The selection and what an input method marks on characters'
+        // starts, whatever put them where they are: an offset inside a
+        // character panicked at the slices below as a letter was typed,
+        // and the app aborted. (Studio addition.)
+        self.selected_range = self.on_chars(self.selected_range);
+        self.ime_marked_range = self.ime_marked_range.map(|r| self.on_chars(r));
         let selection_before = self.selected_range;
 
         let starts_composition = self.ime_marked_range.is_none();
@@ -3358,7 +3398,16 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
         let last_layout = self.last_layout.as_ref()?;
         let line_height = last_layout.line_height;
         let line_number_width = last_layout.line_number_width;
-        let range = self.range_from_utf16(&range_utf16);
+        let mut range = self.range_from_utf16(&range_utf16);
+        // While an input method composes, its candidates stand under where
+        // the composition began, as AppKit's own fields keep them. The
+        // range asked for ran to letters the last layout did not have yet,
+        // and the panel jumped at every key. (Studio addition.)
+        if let Some(marked) = self.ime_marked_range {
+            if range.start >= marked.start && range.start <= marked.end {
+                range = marked.start..marked.start;
+            }
+        }
 
         let mut start_origin = None;
         let mut end_origin = None;
@@ -3396,9 +3445,12 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
         }
 
         let start_origin = start_origin.unwrap_or_default();
-        let mut end_origin = end_origin.unwrap_or_default();
-        // Ensure at same line.
-        end_origin.y = start_origin.y;
+        // An end the layout does not have, or on another line, ends where
+        // it starts: a box with its right edge left of its left one put
+        // the candidates anywhere. (Studio addition.)
+        let end_origin = end_origin
+            .filter(|end| end.y == start_origin.y && end.x >= start_origin.x)
+            .unwrap_or(start_origin);
 
         Some(Bounds::from_corners(
             bounds.origin + line_number_origin + start_origin,
@@ -3858,6 +3910,52 @@ mod tests {
                      — paint would jitter (Bug C regression)",
                     deferred.y,
                     safe_y_min,
+                );
+            });
+        });
+    }
+
+    /// An offset deep in a soft-wrapped paragraph out of view scrolls to the
+    /// wrapped row it is on, not to the paragraph's first row: the find's
+    /// first step to a single match stopped a few rows short of it.
+    #[gpui::test]
+    fn test_scroll_to_offset_in_wrapped_line_out_of_view(cx: &mut TestAppContext) {
+        let input_view = InputView::new(cx);
+        let mut cx = VisualTestContext::from_window(input_view.window_handle.into(), cx);
+        let input = input_view.input;
+
+        cx.update(|window, cx| {
+            input.update(cx, |state, cx| {
+                let mut text: String = (1..=200).map(|i| format!("line {i}\n")).collect();
+                text.push_str(&"word ".repeat(2000));
+                state.set_value(text, window, cx);
+            });
+        });
+        cx.run_until_parked();
+
+        cx.update(|_, cx| {
+            input.update(cx, |state, cx| {
+                let line = 200;
+                let offset = state.text.len() - 3;
+                let rows = state.display_map.buffer_line_to_display_row_range(line).unwrap();
+                assert!(rows.len() > 2, "the last line should wrap, got {rows:?}");
+                let last_layout = state.last_layout.as_ref().unwrap();
+                assert!(
+                    !last_layout.visible_range.contains(&line),
+                    "the last line should start out of view"
+                );
+                let line_height = last_layout.line_height;
+                let height = state.last_bounds.unwrap().size.height;
+
+                state.scroll_to(offset, None, cx);
+
+                let deferred = state.deferred_scroll_offset.expect("scroll_to should scroll");
+                let row_top = line_height * (rows.end - 1);
+                assert!(
+                    row_top >= -deferred.y && row_top + line_height <= -deferred.y + height,
+                    "the offset's row at {row_top:?} should be in view from {:?} to {:?}",
+                    -deferred.y,
+                    -deferred.y + height,
                 );
             });
         });

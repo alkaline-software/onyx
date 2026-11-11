@@ -27,6 +27,18 @@
 //! scroller that names itself by `zooms` too lets such an event pass to
 //! its own listener, and nothing scrolls.
 //!
+//! A place that scrolls by a count of its own and not by a handle (the
+//! terminal's rows back, the toolkit's code editor) names itself too, by
+//! where it is and what moves it (`name_own`): it owns a gesture begun
+//! over it as a handle's scroller does. While the pointer stays on it the
+//! wheel is its own listener's, as the toolkit gives it; carried off it,
+//! the router hands each event to what moves it and nothing else hears it.
+//!
+//! A gesture begun over nothing that scrolls (the tabs' row, the path bar,
+//! a margin) moves no named scroller: carried onto one, it is stopped
+//! there. What is not named (a sideways strip) still has the events over
+//! it, so a sideways flick there works.
+//!
 //! While something stands over the window (a sheet, the search, the
 //! viewer, a menu, a fly-out, or a panel of the system's), nothing under
 //! it scrolls: it says so as it is drawn (`over`), names its own scrollers
@@ -36,7 +48,43 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use gpui::{point, px, Global, Pixels, ScrollHandle, ScrollWheelEvent, TouchPhase};
+use gpui::{point, px, App, Bounds, Global, Pixels, ScrollHandle, ScrollWheelEvent, TouchPhase, Window};
+
+/// What moves a place that scrolls by itself, given a wheel's event.
+pub type Wheel = Rc<dyn Fn(&ScrollWheelEvent, &mut Window, &mut App)>;
+
+/// A scroller as the router knows it: a handle it moves itself, or a
+/// place that scrolls by its own count, where it was last laid out.
+#[derive(Clone)]
+enum Scroller {
+    Handle(ScrollHandle),
+    Own(Rc<Cell<Bounds<Pixels>>>, Wheel),
+}
+
+impl Scroller {
+    fn contains(&self, at: &gpui::Point<Pixels>) -> bool {
+        match self {
+            Scroller::Handle(h) => h.bounds().contains(at),
+            Scroller::Own(b, _) => b.get().contains(at),
+        }
+    }
+
+    /// Whether it has anything to scroll: a place of its own always may.
+    fn scrolls(&self) -> bool {
+        match self {
+            Scroller::Handle(h) => h.max_offset().y > px(0.),
+            Scroller::Own(..) => true,
+        }
+    }
+}
+
+/// What the router did with an event: let it go on to what is under the
+/// pointer, stopped it, or gives it to a place that scrolls by itself.
+pub enum Route {
+    Pass,
+    Stop,
+    Give(Wheel),
+}
 
 /// The window's scrollers, for a view the window does not draw itself
 /// (a frame in a note) to name its own.
@@ -51,18 +99,19 @@ const GAP: Duration = Duration::from_millis(150);
 pub struct Scrollers {
     /// The scrollers drawn in the last frame, in the order drawn: the last
     /// is on top.
-    live: RefCell<Vec<ScrollHandle>>,
+    live: RefCell<Vec<Scroller>>,
     /// The scrollers of what stands over the window, and whether anything
     /// does.
-    over: RefCell<Vec<ScrollHandle>>,
+    over: RefCell<Vec<Scroller>>,
     covered: Cell<bool>,
     /// The scrollers that zoom by ⌘ and the wheel.
     zooms: RefCell<Vec<ScrollHandle>>,
     /// While set, what is named stands over the window (`lift`).
     lifted: Cell<bool>,
     /// The scroller the gesture under way began in, if it began in one,
-    /// and whether it is one of what stands over the window.
-    owner: RefCell<Option<(ScrollHandle, bool)>>,
+    /// and whether it is one of what stands over the window; `Nowhere`
+    /// when it began over nothing that scrolls.
+    owner: RefCell<Owner>,
     last: Cell<Option<Instant>>,
 }
 
@@ -79,10 +128,20 @@ impl Scrollers {
 
     /// A scroller drawn now.
     pub fn name(&self, handle: &ScrollHandle) {
+        self.push(Scroller::Handle(handle.clone()));
+    }
+
+    /// A place drawn now that scrolls by a count of its own: where it is
+    /// (set as it is laid out) and what moves it.
+    pub fn name_own(&self, bounds: Rc<Cell<Bounds<Pixels>>>, wheel: Wheel) {
+        self.push(Scroller::Own(bounds, wheel));
+    }
+
+    fn push(&self, s: Scroller) {
         if self.lifted.get() {
-            self.over.borrow_mut().push(handle.clone());
+            self.over.borrow_mut().push(s);
         } else {
-            self.live.borrow_mut().push(handle.clone());
+            self.live.borrow_mut().push(s);
         }
     }
 
@@ -112,21 +171,20 @@ impl Scrollers {
     /// A scroller of what stands over the window.
     pub fn name_over(&self, handle: &ScrollHandle) {
         self.covered.set(true);
-        self.over.borrow_mut().push(handle.clone());
+        self.over.borrow_mut().push(Scroller::Handle(handle.clone()));
     }
 
-    /// One wheel event, in the capture phase. True when it was applied
-    /// here, or nothing may take it, and it must go no further. `system`
+    /// One wheel event, in the capture phase: what to do with it. `system`
     /// is true while a panel of the system's stands over the window.
-    pub fn route(&self, e: &ScrollWheelEvent, system: bool) -> bool {
+    pub fn route(&self, e: &ScrollWheelEvent, system: bool) -> Route {
         if system {
-            *self.owner.borrow_mut() = None;
-            return true;
+            *self.owner.borrow_mut() = Owner::None;
+            return Route::Stop;
         }
         let covered = self.covered.get();
         if e.modifiers.platform && !covered && self.zooms.borrow().iter().any(|h| h.bounds().contains(&e.position)) {
-            *self.owner.borrow_mut() = None;
-            return false;
+            *self.owner.borrow_mut() = Owner::None;
+            return Route::Pass;
         }
         let now = Instant::now();
         let fresh = self.last.get().is_none_or(|at| now.duration_since(at) > GAP);
@@ -137,25 +195,70 @@ impl Scrollers {
             TouchPhase::Ended | TouchPhase::Cancelled => false,
         };
         let delta = e.delta.pixel_delta(px(20.));
+        let list = if covered { self.over.borrow().clone() } else { self.live.borrow().clone() };
         if begins {
             // The top scroller under the pointer that can move the
             // gesture's way, else the top one with something to scroll.
-            let list = if covered { self.over.borrow() } else { self.live.borrow() };
-            let under: Vec<&ScrollHandle> = list.iter().rev().filter(|h| h.bounds().contains(&e.position) && h.max_offset().y > px(0.)).collect();
-            let found = under.iter().find(|h| can_move(h, delta.y)).or(under.first()).map(|h| (*h).clone());
-            drop(list);
-            *self.owner.borrow_mut() = found.map(|h| (h, covered));
+            let under: Vec<&Scroller> = list.iter().rev().filter(|s| s.contains(&e.position) && s.scrolls()).collect();
+            let found = under.iter().find(|s| match s {
+                Scroller::Handle(h) => can_move(h, delta.y),
+                Scroller::Own(..) => true,
+            });
+            let found = found.or(under.first()).map(|s| (*s).clone());
+            *self.owner.borrow_mut() = match found {
+                Some(s) => Owner::Some(s, covered),
+                None => Owner::Nowhere,
+            };
         }
         // A gesture begun under what now stands over the window ends there.
-        if covered && self.owner.borrow().as_ref().is_some_and(|(_, over)| !over) {
-            *self.owner.borrow_mut() = None;
+        if covered && matches!(&*self.owner.borrow(), Owner::Some(_, false)) {
+            *self.owner.borrow_mut() = Owner::None;
         }
-        let Some((owner, _)) = self.owner.borrow().clone() else { return covered };
-        let x = (owner.offset().x + delta.x).clamp(-owner.max_offset().x, px(0.));
-        let y = (owner.offset().y + delta.y).clamp(-owner.max_offset().y, px(0.));
-        owner.set_offset(point(x, y));
-        true
+        let owner = self.owner.borrow().clone();
+        match owner {
+            // Begun over nothing that scrolls: it moves no scroller it is
+            // carried onto, and what is not named has it.
+            Owner::Nowhere => {
+                if list.iter().any(|s| s.contains(&e.position)) {
+                    Route::Stop
+                } else {
+                    Route::Pass
+                }
+            }
+            Owner::None => {
+                if covered {
+                    Route::Stop
+                } else {
+                    Route::Pass
+                }
+            }
+            // Its own listener has it while the pointer is on it; carried
+            // off, it is handed what moves it, and nothing else hears it.
+            Owner::Some(Scroller::Own(bounds, wheel), _) => {
+                if bounds.get().contains(&e.position) {
+                    Route::Pass
+                } else {
+                    Route::Give(wheel)
+                }
+            }
+            Owner::Some(Scroller::Handle(owner), _) => {
+                let x = (owner.offset().x + delta.x).clamp(-owner.max_offset().x, px(0.));
+                let y = (owner.offset().y + delta.y).clamp(-owner.max_offset().y, px(0.));
+                owner.set_offset(point(x, y));
+                Route::Stop
+            }
+        }
     }
+}
+
+/// Who a gesture belongs to: nobody yet (or it ended under something over
+/// the window), nothing that scrolls, or a scroller.
+#[derive(Clone, Default)]
+enum Owner {
+    #[default]
+    None,
+    Nowhere,
+    Some(Scroller, bool),
 }
 
 /// Whether a scroller has room to move by `dy`: up (above 0) while it

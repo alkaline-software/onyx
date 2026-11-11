@@ -183,6 +183,32 @@ pub struct Config {
     pub app: AppConfig,
     pub editor: EditorConfig,
     pub pdf: PdfConfig,
+    pub terminal: TerminalConfig,
+}
+
+/// The terminal beside a note, as Settings, Terminal changes it. The look
+/// is Kaku's, as Emaki's terminal has it; the letters' size, a row's
+/// height and the room round the screen are fixed, and the face is the
+/// window's code face.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct TerminalConfig {
+    /// `match` follows the window's appearance; `dark` and `light` keep
+    /// Kaku Dark or Kaku Light whatever the window is.
+    pub theme: String,
+    /// `bar`, `block` or `underline`.
+    pub cursor: String,
+    pub cursor_blink: bool,
+    /// Whether the face may join letters ("->" as an arrow).
+    pub ligatures: bool,
+    /// A selection is copied when the button is let go.
+    pub copy_on_select: bool,
+}
+
+impl Default for TerminalConfig {
+    fn default() -> Self {
+        Self { theme: "match".into(), cursor: "bar".into(), cursor_blink: true, ligatures: false, copy_on_select: true }
+    }
 }
 
 impl Config {

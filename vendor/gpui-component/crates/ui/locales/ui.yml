@@ -242,6 +242,76 @@ List:
     zh-TW: 搜尋...
     it: Ricerca...
 Input:
+  Find:
+    en: Find
+    zh-CN: 查找
+    zh-HK: 尋找
+    zh-TW: 尋找
+    ja: 検索
+    ko: 찾기
+    fr: Rechercher
+    de: Suchen
+    es: Buscar
+  Match Case:
+    en: Match Case
+    zh-CN: 区分大小写
+    zh-HK: 區分大小寫
+    zh-TW: 區分大小寫
+    ja: 大文字と小文字を区別
+    ko: 대소문자 구분
+    fr: Respecter la casse
+    de: Groß-/Kleinschreibung
+    es: Coincidir mayúsculas
+  Whole Word:
+    en: Whole Word
+    zh-CN: 全字匹配
+    zh-HK: 全字匹配
+    zh-TW: 全字拼寫須相符
+    ja: 単語単位
+    ko: 단어 단위로
+    fr: Mot entier
+    de: Ganzes Wort
+    es: Palabra completa
+  Regular Expression:
+    en: Regular Expression
+    zh-CN: 正则表达式
+    zh-HK: 正規表達式
+    zh-TW: 規則運算式
+    ja: 正規表現
+    ko: 정규식
+    fr: Expression régulière
+    de: Regulärer Ausdruck
+    es: Expresión regular
+  Previous:
+    en: Previous
+    zh-CN: 上一个
+    zh-HK: 上一個
+    zh-TW: 上一個
+    ja: 前へ
+    ko: 이전
+    fr: Précédent
+    de: Zurück
+    es: Anterior
+  Next:
+    en: Next
+    zh-CN: 下一个
+    zh-HK: 下一個
+    zh-TW: 下一個
+    ja: 次へ
+    ko: 다음
+    fr: Suivant
+    de: Weiter
+    es: Siguiente
+  Close:
+    en: Close
+    zh-CN: 关闭
+    zh-HK: 關閉
+    zh-TW: 關閉
+    ja: 閉じる
+    ko: 닫기
+    fr: Fermer
+    de: Schließen
+    es: Cerrar
   Decrement:
     en: Decrement
     zh-CN: 减少
@@ -257,11 +327,21 @@ Input:
     zh-CN: 替换
     zh-HK: 替換
     zh-TW: 取代
+    ja: 置換
+    ko: 바꾸기
+    fr: Remplacer
+    de: Ersetzen
+    es: Reemplazar
   Replace All:
     en: Replace All
     zh-CN: 全部替换
     zh-HK: 全部替換
     zh-TW: 全部取代
+    ja: すべて置換
+    ko: 모두 바꾸기
+    fr: Tout remplacer
+    de: Alle ersetzen
+    es: Reemplazar todo
   Cut:
     en: Cut
     zh-CN: 剪切

@@ -509,7 +509,7 @@ impl Shell {
         let sub = Self::listen(&editor, path.clone(), cx);
         let (title, title_sub) = self.make_title(&path, window, cx);
         let asset = Asset { body: Body::Reading, opened: Instant::now(), _sub: None };
-        self.tabs.push(Tab { path: path.clone(), editor, title, dirty: false, saved: String::new(), save_due: None, _sub: sub, _title_sub: title_sub, asset: Some(asset) });
+        self.tabs.push(Tab { path: path.clone(), editor, title, dirty: false, saved: String::new(), save_due: None, _sub: sub, _title_sub: title_sub, asset: Some(asset), source: None });
         self.closed_tabs.retain(|c| *c != path);
         self.sort_tabs();
         self.show_tab(&path, window, cx);

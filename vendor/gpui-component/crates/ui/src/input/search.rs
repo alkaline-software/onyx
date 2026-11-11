@@ -1,4 +1,5 @@
 use ropey::Rope;
+use rust_i18n::t;
 use std::ops::Range;
 use std::time::Instant;
 
@@ -126,8 +127,8 @@ impl<M: crate::input::overlay::OverlayMode> SearchPanel<M> {
         window: &mut Window,
         cx: &mut App,
     ) -> Entity<Self> {
-        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder("Find"));
-        let replace_input = cx.new(|cx| InputState::new(window, cx).placeholder("Replace"));
+        let search_input = cx.new(|cx| InputState::new(window, cx).placeholder(t!("Input.Find").to_string()));
+        let replace_input = cx.new(|cx| InputState::new(window, cx).placeholder(t!("Input.Replace").to_string()));
 
         cx.new(|cx| {
             let _subscriptions =
@@ -408,7 +409,7 @@ impl<M: crate::input::overlay::OverlayMode> SearchPanel<M> {
         &self,
         id: &'static str,
         icon: Icon,
-        tip: &'static str,
+        tip: SharedString,
         on: bool,
         enabled: bool,
         size: f32,
@@ -439,10 +440,16 @@ impl<M: crate::input::overlay::OverlayMode> SearchPanel<M> {
                     .hover(move |s| s.bg(hover))
                     .on_click(cx.listener(move |this, _, window, cx| act(this, window, cx)))
             })
-            .managed_tooltip(move |window, cx| crate::tooltip::label(tip, window, cx))
+            .managed_tooltip(move |window, cx| crate::tooltip::label(tip.clone(), window, cx))
             .child(icon.with_size(px(14.)).text_color(ink))
             .into_any_element()
     }
+}
+
+/// A button's label: its words in the window's language, then its keys.
+/// (Studio addition.)
+fn tip(words: impl std::fmt::Display, keys: &str) -> SharedString {
+    format!("{words} ({keys})").into()
 }
 
 impl<M: crate::input::overlay::OverlayMode> Focusable for SearchPanel<M> {
@@ -501,7 +508,7 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
                 .cursor_pointer()
                 .hover(|s| s.bg(theme.foreground.opacity(0.07)))
                 .on_click(cx.listener(|this, _, window, cx| this.toggle_replace_mode(window, cx)))
-                .managed_tooltip(|window, cx| crate::tooltip::label("Replace (⌥⌘F)", window, cx))
+                .managed_tooltip(|window, cx| crate::tooltip::label(tip(t!("Input.Replace"), "⌥⌘F"), window, cx))
                 .child(
                     icon.with_size(px(14.))
                         .text_color(theme.muted_foreground)
@@ -515,9 +522,9 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
 
         let mut toggles = Some(h_flex()
             .gap(px(1.))
-            .child(self.tool("search-case", Icon::new(IconName::CaseSensitive), "Match Case (⌥⌘C)", !options.case_insensitive, true, 20., cx, |this, _, cx| this.toggle_case(cx)))
-            .child(self.tool("search-word", Icon::default().path("icons/whole-word.svg"), "Whole Word (⌥⌘W)", options.whole_word, true, 20., cx, |this, _, cx| this.toggle_word(cx)))
-            .child(self.tool("search-regex", Icon::default().path("icons/regex.svg"), "Regular Expression (⌥⌘R)", options.regex, true, 20., cx, |this, _, cx| this.toggle_regex(cx))));
+            .child(self.tool("search-case", Icon::new(IconName::CaseSensitive), tip(t!("Input.Match Case"), "⌥⌘C"), !options.case_insensitive, true, 20., cx, |this, _, cx| this.toggle_case(cx)))
+            .child(self.tool("search-word", Icon::default().path("icons/whole-word.svg"), tip(t!("Input.Whole Word"), "⌥⌘W"), options.whole_word, true, 20., cx, |this, _, cx| this.toggle_word(cx)))
+            .child(self.tool("search-regex", Icon::default().path("icons/regex.svg"), tip(t!("Input.Regular Expression"), "⌥⌘R"), options.regex, true, 20., cx, |this, _, cx| this.toggle_regex(cx))));
 
         let field = div()
             .flex_1()
@@ -541,9 +548,9 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
                 .text_color(if bad { theme.danger } else { theme.muted_foreground })
                 .child(count)
         });
-        let prev = self.tool("search-prev", Icon::new(IconName::ChevronUp), "Previous (⇧↩)", false, has_matches, TOOL, cx, |this, window, cx| this.prev(window, cx));
-        let next = self.tool("search-next", Icon::new(IconName::ChevronDown), "Next (↩)", false, has_matches, TOOL, cx, |this, window, cx| this.next(window, cx));
-        let close = self.tool("search-close", Icon::new(IconName::Close), "Close (esc)", false, true, TOOL, cx, |this, window, cx| this.hide(window, cx));
+        let prev = self.tool("search-prev", Icon::new(IconName::ChevronUp), tip(t!("Input.Previous"), "⇧↩"), false, has_matches, TOOL, cx, |this, window, cx| this.prev(window, cx));
+        let next = self.tool("search-next", Icon::new(IconName::ChevronDown), tip(t!("Input.Next"), "↩"), false, has_matches, TOOL, cx, |this, window, cx| this.next(window, cx));
+        let close = self.tool("search-close", Icon::new(IconName::Close), tip(t!("Input.Close"), "esc"), false, true, TOOL, cx, |this, window, cx| this.hide(window, cx));
         let mut find_row = h_flex().h(px(ROW_H)).gap(px(4.)).items_center().children(chevron).child(field);
         // Narrow, the field has the row with the close button, and what
         // stands beside it in a wide panel goes under it.
@@ -580,8 +587,8 @@ impl<M: crate::input::overlay::OverlayMode> Render for SearchPanel<M> {
                     let input = Input::new(&self.replace_input).focus_bordered(false).small().shadow_none();
                     if narrow { div().flex_1().min_w(px(64.)).child(input.w_full()) } else { div().child(input.w(self.input_width)) }
                 })
-                .child(self.tool("search-replace-one", Icon::new(IconName::Replace), "Replace (↩)", false, has_matches, TOOL, cx, |this, window, cx| this.replace_next(window, cx)))
-                .child(self.tool("search-replace-all", Icon::default().path("icons/replace-all.svg"), "Replace All (⌘↩)", false, has_matches, TOOL, cx, |this, window, cx| this.replace_all(window, cx)));
+                .child(self.tool("search-replace-one", Icon::new(IconName::Replace), tip(t!("Input.Replace"), "↩"), false, has_matches, TOOL, cx, |this, window, cx| this.replace_next(window, cx)))
+                .child(self.tool("search-replace-all", Icon::default().path("icons/replace-all.svg"), tip(t!("Input.Replace All"), "⌘↩"), false, has_matches, TOOL, cx, |this, window, cx| this.replace_all(window, cx)));
             div().overflow_hidden().child(row).with_animation(
                 ElementId::Name(format!("search-replace-row-{row_serial}").into()),
                 Animation::new(SEARCH_ANIM).with_easing(ease_out_cubic),

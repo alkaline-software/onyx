@@ -39,3 +39,7 @@ gpui-component-assets = { path = "vendor/gpui-component/crates/assets" }
 # future Rust still compiles it without a word (vendor/block/UPSTREAM.md).
 [patch.crates-io]
 block = { path = "vendor/block" }
+# The terminal's screen model, with a wide character cut by a resize
+# cleared, a resize that reflows, and the prompt's marks
+# (vendor/vt100/UPSTREAM.md).
+vt100 = { path = "vendor/vt100" }

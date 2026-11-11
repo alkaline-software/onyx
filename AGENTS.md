@@ -23,16 +23,16 @@ Each is here because breaking it loses data or brings back a fixed bug. The doc 
 - **A note is written whole, through `onyx_core::vault::write`**, a temp file and a rename, never in place and never in part: two seconds after its first unsaved change (a timer later keys do not reset), and when it is left; never on each keystroke, and never when its text is what the disk has. (`docs/window.md`)
 - **A note that has changes is never replaced by what the disk holds.** The disk's text is joined with what was typed (`merge::merge`), every change of both kept. (`docs/window.md`)
 - **Nothing goes straight off the disk.** A note or a folder deleted goes to the system's trash (`vault::trash`). (`docs/window.md`)
-- **A row's height goes by its kind, never by what stands in it or beside it**, in all three modes, from `Rhythm`: a word typed on a blank line moves nothing. (`docs/editor.md`)
+- **A row's height goes by its kind, never by what stands in it or beside it**, in a note and in a frame, from `Rhythm`: a word typed on a blank line moves nothing. (`docs/editor.md`)
 - **The editor never slices a line at a byte that is not a character's boundary**, and the caret steps by grapheme (`lines::Doc`). (`docs/editor.md`)
 - **Typed text arrives through gpui's input handler, never through a key binding**, so an input method composes in place. Keys that move or change are actions. (`docs/editor.md`)
 - **A change made in many places at once is one step of undo** (`Doc::replace_many`): a list renumbered after Enter is not ten steps. (`docs/editor.md`)
 - **A motion that repeats runs on the window's clock** (`ambient::phase`), never `Animation::repeat`.
-- **Every scroller that goes up and down names itself** to the router as it is drawn (`Scrollers::name`), or a flick in it scrolls whatever the pointer reaches next.
+- **A scroll gesture, its momentum included, moves only the scroller it began in**, never what the pointer is carried onto. Every scroller that goes up and down names itself to the router as it is drawn (`Scrollers::name`); anything else that takes the wheel (the terminal, the source pane's editor) names where it is and what moves it (`name_own`); a gesture begun over nothing that scrolls moves none. A new one is checked with `flick=` from it onto its neighbor and back (`docs/probing.md`). Every scroller has the toolkit's bar: it stays a second after the last movement, then fades over half a second (`vendor/gpui-component`, `scrollbar.rs`).
 - **A button is `choice_pill`**, a pill with an icon before its word. The toolkit's `Button` is only for an icon alone.
 - **Every word the window shows goes through `i18n::t`** and is in `locales/words.json` in every language; `cargo test -p onyx-app` fails otherwise.
 - **A key is drawn on caps** through `key_text`, `kbd_hint` or `tip`, named as the Mac has it and bound as `secondary-<key>`.
-- **Every child process starts through `onyx_core::process::command`**, never `Command::new`.
+- **Every child process starts through `onyx_core::process::command`**, never `Command::new`; the terminal's shell is the one exception, a pty's child that portable-pty starts (`pty.rs`).
 - **Per-system calls live in `sys.rs`**, each with a body for every system. (`docs/platform.md`)
 - **One copy of gpui.** The pin is in `Cargo.lock`. Changes to the toolkit go in `vendor/gpui-component/`, marked `(Studio addition.)` and listed in its `UPSTREAM.md`. Build from the root, never inside `vendor/`.
 
@@ -40,8 +40,8 @@ Each is here because breaking it loses data or brings back a fixed bug. The doc 
 
 | You are about to touch | Read first |
 |---|---|
-| `editor.rs`, `editor/`, `embed.rs`, `viewer.rs`, `layout.rs`, `lines.rs`, `markdown.rs`, `tables.rs`; `onyx-core/src/rhythm.rs`, `html.rs`, `check.rs`: the live preview, spacing, the caret, the keys, the modes, tables, HTML, pictures, spelling | `docs/editor.md` |
-| `shell.rs`, `shell/library.rs`, `tabs.rs`, `ui_state.rs`, `main.rs`: the sidebar, the vault, a note's life, the tabs, the strip, the landing page, the menus; `onyx-core/src/vault.rs` | `docs/window.md` |
+| `editor.rs`, `editor/`, `embed.rs`, `viewer.rs`, `layout.rs`, `lines.rs`, `markdown.rs`, `tables.rs`, `source.rs`, `sublime.rs`; `onyx-core/src/rhythm.rs`, `html.rs`, `check.rs`: the live preview, the source pane, spacing, the caret, the keys, tables, HTML, pictures, spelling | `docs/editor.md` |
+| `shell.rs`, `shell/library.rs`, `tabs.rs`, `terminal.rs`, `ui_state.rs`, `main.rs`: the sidebar, the vault, a note's life, the tabs, the strip, the terminal, the landing page, the menus; `onyx-core/src/vault.rs`, `pty.rs`, `shell_marks.rs` | `docs/window.md` |
 | `settings.rs`, `look.rs`, `fonts.rs`, `assets.rs`, `themes/onyx.json`, `scripts/icon/`; anything a person sees, new or changed | `docs/design.md`, then the doc of the part it is in |
 | `sys.rs`, `csd.rs`, `update.rs`, `process.rs`, `vendor/`, `Cargo.toml`, `.github/workflows/`, any `cfg` for an OS | `docs/platform.md` |
 | `export.rs`, `onyx-core/src/pdf.rs`, `docx.rs`, `web.rs`, `reading.rs`, `pdf/template.typ`: Export (PDF, image, Word, web page), printing, its sheet, how a note looks on paper | `docs/export.md` |
@@ -59,6 +59,8 @@ crates/onyx-core/          everything without a window
   src/update.rs              the newest release and its installer
   src/link_card.rs           a web link's card: the page's head read, its pictures kept in the cache
   src/process.rs             every child process, with no console window on Windows
+  src/pty.rs                 the terminal's shell on a pty, and its screen model (vt100)
+  src/shell_marks.rs         the shell started so its prompt marks itself (OSC 133)
   src/pdf.rs                 a note set as a PDF or an image by Typst; pdf/ holds its template, code theme and math
   src/docx.rs, src/web.rs    a note as a Word document and as a web page, from reading.rs's tree of its blocks
   src/rhythm.rs              the note's vertical measures, for the canvas and the page
@@ -79,6 +81,9 @@ crates/onyx-app/           the window
   src/embed.rs               a file a note embeds, in a frame: a PDF's pages, a note, a document; the bar every embedded file has, a picture's too; zoom, selection, sidebar
   src/editor.rs              the live-preview editor: paint, the caret, the keys, the input method
   src/editor/cells.rs        a table on the canvas: the caret in its cells, its handles and edges
+  src/source.rs              the note's source in a pane beside it, a code editor that follows the note and is followed
+  src/sublime.rs             Sublime Text's keys in the source pane, as Emaki's editor has them
+  src/terminal.rs            the terminal at the page's right: the vault's shells, a tab each, as Emaki's shell terminal
   src/card.rs                a link alone on its line as a card, small, medium or large: a file's, a web page's
   src/editor/cards.rs        a link shown as a link, a card or the whole file: its line written again
   src/editor/writing.rs      a note's spelling and grammar, off the window's thread
@@ -98,10 +103,10 @@ crates/onyx-app/           the window
   src/i18n.rs                the window's words in eight languages
   src/sys.rs                 per-system calls
   src/csd.rs                 the window's own buttons where the system draws none
-  src/ui_state.rs            what the window remembers: bounds, sidebar, vault, tabs, note, mode, recent vaults
+  src/ui_state.rs            what the window remembers: bounds, sidebar, vault, tabs, note, source, widths, recent vaults
   assets/ themes/ locales/   icons, fonts, the app icon; the palette; the words
   macos/ windows/ linux/     what each system's package needs
-vendor/                    the toolkit and the blocks crate, each with an UPSTREAM.md
+vendor/                    the toolkit, the blocks crate and the terminal's screen model (vt100), each with an UPSTREAM.md
 scripts/                   the dev build, the icon, the release
 docs/                      how each part works and its traps; release.md; probing.md
 ```

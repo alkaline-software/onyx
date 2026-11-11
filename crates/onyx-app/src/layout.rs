@@ -599,12 +599,8 @@ impl<'a> Reader<'a> {
         let in_table = matches!(info.kind, LineKind::TableFirst(_) | LineKind::TableRow(_));
         // A cell is a line of its own: the row's bars never show.
         let on_line = self.on_line(line) && !in_table;
-        let source = self.mode == Mode::Source;
         let start = self.analysis.line_starts[line];
         let mut hidden = Vec::new();
-        if source {
-            return hidden;
-        }
         if !on_line {
             hidden.extend(info.marks.iter().cloned());
         }
@@ -633,14 +629,14 @@ impl<'a> Reader<'a> {
     }
 
     fn block_revealed(&self, first: usize, last: usize) -> bool {
-        self.mode == Mode::Source || self.sel.is_some_and(|(a, b)| a.line <= last && b.line >= first)
+        self.sel.is_some_and(|(a, b)| a.line <= last && b.line >= first)
     }
 
     /// Whether a line shows as it is written: a block's lines go together.
     fn revealed(&self, line: usize) -> bool {
         match &self.analysis.lines[line].kind {
             LineKind::FenceOpen(_) | LineKind::FenceClose | LineKind::Code => self.analysis.code_block_at(line).is_none_or(|b| self.block_revealed(b.first, b.last)),
-            LineKind::TableFirst(_) | LineKind::TableRow(_) => self.mode == Mode::Source,
+            LineKind::TableFirst(_) | LineKind::TableRow(_) => false,
             _ if self.block_of_html(line).is_some() => self.block_of_html(line).is_some_and(|b| self.block_revealed(b.first, b.last)),
             _ => self.on_line(line),
         }
@@ -1019,19 +1015,13 @@ impl<'a> Reader<'a> {
         let info = &self.analysis.lines[line];
         let rhythm = self.rhythm;
         let px_text = self.look.text_px;
-        let source = self.mode == Mode::Source;
         let muted = theme.muted_foreground;
 
         // What stands in place of the line, when the caret is away.
-        if !source {
-            match &info.kind {
-                LineKind::TableFirst(t) | LineKind::TableRow(t) => {
-                    let table = &self.analysis.tables[*t];
-                    let (Some(row), Some((_, grid))) = (table.row_of(line), grids.get(&table.first)) else { return Row::Hidden };
-                    return self.table_row(table, row, grid.clone(), hidden, width, theme, window);
-                }
-                _ => {}
-            }
+        if let LineKind::TableFirst(t) | LineKind::TableRow(t) = &info.kind {
+            let table = &self.analysis.tables[*t];
+            let (Some(row), Some((_, grid))) = (table.row_of(line), grids.get(&table.first)) else { return Row::Hidden };
+            return self.table_row(table, row, grid.clone(), hidden, width, theme, window);
         }
         // A picture on a line of its own, in markdown or in HTML, stands as
         // a picture whether the caret is on its line or not.
@@ -1085,8 +1075,8 @@ impl<'a> Reader<'a> {
             Across::Start => TextAlign::Left,
         };
         let len = self.doc.line(line).len();
-        let flow = self.flow(line, 0..len, &styles, &links, if source { &[] } else { hidden }, font_px, line_h, wrap, align, theme.foreground, window);
-        let widgets = if source { Vec::new() } else { self.widgets(line, inset, top_pad, line_h, theme, window) };
+        let flow = self.flow(line, 0..len, &styles, &links, hidden, font_px, line_h, wrap, align, theme.foreground, window);
+        let widgets = self.widgets(line, inset, top_pad, line_h, theme, window);
         Row::Text(TextRow { flow, inset, top_pad, widgets })
     }
 
@@ -1131,16 +1121,12 @@ impl<'a> Reader<'a> {
 
     /// Where a line's words begin: in by its quotes and its list levels.
     pub fn base_inset(&self, info: &markdown::LineInfo) -> f32 {
-        if self.mode == Mode::Source { 0. } else { QUOTE_INDENT * info.quote_depth as f32 }
+        QUOTE_INDENT * info.quote_depth as f32
     }
 
-    /// Code and its fences stand in from the plate's edge in every mode:
-    /// the source is still read on a plate, with the room a plate has.
+    /// Code and its fences stand in from the plate's edge.
     fn inset_of(&self, info: &markdown::LineInfo) -> f32 {
         let on_plate = matches!(info.kind, LineKind::Code | LineKind::FenceOpen(_) | LineKind::FenceClose);
-        if self.mode == Mode::Source {
-            return if on_plate { PLATE_X } else { 0. };
-        }
         let base = self.base_inset(info);
         match &info.list {
             Some(m) => base + LIST_INDENT * (m.depth as f32 + 1.),
@@ -1158,9 +1144,6 @@ impl<'a> Reader<'a> {
     /// room left is shared by what the rest ask, as a browser sets a
     /// table, so a word is broken only where the room gives out.
     fn make_grids(&self, grids: &mut HashMap<usize, (u64, Rc<Grid>)>, width: f32, theme: &gpui_component::Theme, window: &mut Window) {
-        if self.mode == Mode::Source {
-            return;
-        }
         grids.retain(|first, _| self.analysis.tables.iter().any(|t| t.first == *first));
         for t in &self.analysis.tables {
             let mut h = DefaultHasher::new();
@@ -1375,9 +1358,8 @@ impl<'a> Reader<'a> {
             };
         // The caption: small and quiet, centered under the control, no
         // narrower than a short line of words: the line whole, as written,
-        // in Source while the caret is on it, else once the bar's pencil
-        // put the caret there (`editor/picture.rs`).
-        let source = (revealed && (self.mode == Mode::Source || self.editing == Some(line))).then(|| {
+        // once the bar's pencil put the caret there (`editor/picture.rs`).
+        let source = (revealed && self.editing == Some(line)).then(|| {
             let len = self.doc.line(line).len();
             let (styles, links) = self.styled(line, FontWeight::NORMAL, false, false, &[], theme);
             let styles: Vec<St> = styles.into_iter().map(|st| St { color: theme.muted_foreground, ..st }).collect();
@@ -1393,11 +1375,11 @@ impl<'a> Reader<'a> {
     /// A link shown as a card: a file it leads to, or a page of the web.
     /// Its height goes by its size alone, and a large one's by its width,
     /// so nothing moves as what it shows arrives (`card.rs`). One that
-    /// leads nowhere stands as the words it is, and so does one in Source
-    /// or with the caret in its line.
+    /// leads nowhere stands as the words it is, and so does one with the
+    /// caret in its line.
     fn card_row(&self, line: usize, on: &PictureOn, size: CardSize, inset: f32, room: f32) -> Option<Row> {
-        // In Source, and while the caret is in its line, it is its words.
-        if self.mode == Mode::Source || self.editing == Some(line) {
+        // While the caret is in its line, it is its words.
+        if self.editing == Some(line) {
             return None;
         }
         let web = onyx_core::link_card::is_web(&on.src);

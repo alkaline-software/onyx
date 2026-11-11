@@ -343,6 +343,20 @@ upstream revision finds them.
 
 64. `crates/ui/src/input/input.rs`, `textarea.rs`: `flush(bool)` on `Input` and `Textarea` takes away the room upstream keeps round a multi-line field's text, whatever its size, so a field can stand in line with the text around it.
 
+65. `crates/base/src/scrollbar.rs` (`SETTLE`, `born`, the state's first value): a bar drawn anew starts from its scroller's offset, and for `SETTLE` after it takes a change of the offset as where it starts, not as a scroll. A scroller kept between draws (a panel that comes and goes) showed its bar each time it came. From Emaki.
+
+66. `crates/base/src/input/base/movement.rs` (`move_to`, `vertical_offset`): the caret is put on a character's first byte, whatever offset it is moved to. ↑ or ↓ onto a line not laid out kept the line before's column in bytes, which could fall inside a character (CJK, an emoji, an accent), and the next letter typed or Enter sliced the text there and the app aborted. From Emaki.
+
+67. `crates/base/src/input/base/state.rs` (`replace_text_in_range`, the input method's `replace_and_mark_text_in_range`, `replace_bytes`, `on_chars`): before any text goes in, the selection and the marked range are put on characters' starts, and so is the range a caller replaces. A caret inside a character made the next letter typed slice the text there; the panic could not unwind out of AppKit's `insertText:`, and the app aborted. From Emaki, where a user hit it in the file's editor.
+
+68. `crates/base/src/input/base/state.rs` (`scroll_to`): the row an offset is scrolled to is its wrapped row from the display map. Upstream added the row within its line from the last layout, which has only the lines in view, so an offset deep in a long paragraph out of view scrolled to the paragraph's first row: the find's first step stopped short of its match. A test (`test_scroll_to_offset_in_wrapped_line_out_of_view`) holds it. From Emaki.
+
+69. `crates/base/src/input/base/state.rs` (`bounds_for_range`): while an input method composes, the box its candidates stand under is at the start of the marked text, whatever part of it is asked for, and a box's end the last layout lacks, or on another line, is its start. Upstream answered from the last frame's layout, which did not have the letter just typed, and the panel jumped at every key. From Emaki.
+
+70. `crates/ui/src/input/search.rs` (`tip`), `crates/ui/locales/ui.yml` (`Input`): the code editor's find card speaks the window's language: its field's words (Find, Replace) and every button's label, its keys after. Upstream wrote them in English whatever the language.
+
+71. `crates/base/src/input/base/state.rs` (`scroll_wheel`): a wheel's event given to an editor from outside it, as over it. The app's scroll router keeps a gesture in the scroller it began in, momentum included; an editor scrolls by its own offset, not by a handle the router moves, so a gesture carried off it is handed here.
+
 ## Updating
 
 Check out the new upstream revision, copy the four crates over these, re-apply

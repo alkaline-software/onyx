@@ -458,15 +458,6 @@
     "de": "Bearbeiten",
     "es": "Edición"
   },
-  "Edit (⌃1)": {
-    "zh-Hans": "编辑 (⌃1)",
-    "zh-Hant": "編輯 (⌃1)",
-    "ja": "編集 (⌃1)",
-    "ko": "편집 (⌃1)",
-    "fr": "Édition (⌃1)",
-    "de": "Bearbeiten (⌃1)",
-    "es": "Edición (⌃1)"
-  },
   "Edit Link": {
     "zh-Hans": "编辑链接",
     "zh-Hant": "編輯連結",
@@ -944,24 +935,6 @@
     "de": "Mittlere Karte",
     "es": "Tarjeta mediana"
   },
-  "Middle": {
-    "zh-Hans": "中",
-    "zh-Hant": "中",
-    "ja": "ミドル",
-    "ko": "중간",
-    "fr": "Moyen",
-    "de": "Mittel",
-    "es": "Medio"
-  },
-  "Middle (⌥2)": {
-    "zh-Hans": "中 (⌥2)",
-    "zh-Hant": "中 (⌥2)",
-    "ja": "ミドル (⌥2)",
-    "ko": "중간 (⌥2)",
-    "fr": "Moyen (⌥2)",
-    "de": "Mittel (⌥2)",
-    "es": "Medio (⌥2)"
-  },
   "Minimize": {
     "zh-Hans": "最小化",
     "zh-Hant": "縮到最小",
@@ -1060,24 +1033,6 @@
     "fr": "Placer {n} éléments dans la corbeille",
     "de": "{n} Objekte in den Papierkorb legen",
     "es": "Trasladar {n} ítems a la papelera"
-  },
-  "Narrow": {
-    "zh-Hans": "窄",
-    "zh-Hant": "窄",
-    "ja": "ナロー",
-    "ko": "좁게",
-    "fr": "Étroit",
-    "de": "Schmal",
-    "es": "Estrecho"
-  },
-  "Narrow (⌥1)": {
-    "zh-Hans": "窄 (⌥1)",
-    "zh-Hant": "窄 (⌥1)",
-    "ja": "ナロー (⌥1)",
-    "ko": "좁게 (⌥1)",
-    "fr": "Étroit (⌥1)",
-    "de": "Schmal (⌥1)",
-    "es": "Estrecho (⌥1)"
   },
   "New Folder": {
     "zh-Hans": "新建文件夹",
@@ -1520,24 +1475,6 @@
     "de": "Onyx beenden",
     "es": "Salir de Onyx"
   },
-  "Read": {
-    "zh-Hans": "阅读",
-    "zh-Hant": "閱讀",
-    "ja": "閲覧",
-    "ko": "읽기",
-    "fr": "Lire",
-    "de": "Lesen",
-    "es": "Leer"
-  },
-  "Read (⌃3)": {
-    "zh-Hans": "阅读 (⌃3)",
-    "zh-Hant": "閱讀 (⌃3)",
-    "ja": "閲覧 (⌃3)",
-    "ko": "읽기 (⌃3)",
-    "fr": "Lire (⌃3)",
-    "de": "Lesen (⌃3)",
-    "es": "Leer (⌃3)"
-  },
   "Recent": {
     "zh-Hans": "最近",
     "zh-Hant": "最近",
@@ -1844,14 +1781,14 @@
     "de": "Quelltext",
     "es": "Código fuente"
   },
-  "Source (⌃2)": {
-    "zh-Hans": "源代码 (⌃2)",
-    "zh-Hant": "原始碼 (⌃2)",
-    "ja": "ソース (⌃2)",
-    "ko": "소스 (⌃2)",
-    "fr": "Source (⌃2)",
-    "de": "Quelltext (⌃2)",
-    "es": "Código fuente (⌃2)"
+  "Source (⌘⇧S)": {
+    "zh-Hans": "源代码 (⌘⇧S)",
+    "zh-Hant": "原始碼 (⌘⇧S)",
+    "ja": "ソース (⌘⇧S)",
+    "ko": "소스 (⌘⇧S)",
+    "fr": "Source (⌘⇧S)",
+    "de": "Quelltext (⌘⇧S)",
+    "es": "Código fuente (⌘⇧S)"
   },
   "Spanish": {
     "zh-Hans": "西班牙语",
@@ -2222,24 +2159,6 @@
     "de": "Darstellung",
     "es": "Visualización"
   },
-  "Wide": {
-    "zh-Hans": "宽",
-    "zh-Hant": "寬",
-    "ja": "ワイド",
-    "ko": "넓게",
-    "fr": "Large",
-    "de": "Breit",
-    "es": "Ancho"
-  },
-  "Wide (⌥3)": {
-    "zh-Hans": "宽 (⌥3)",
-    "zh-Hant": "寬 (⌥3)",
-    "ja": "ワイド (⌥3)",
-    "ko": "넓게 (⌥3)",
-    "fr": "Large (⌥3)",
-    "de": "Breit (⌥3)",
-    "es": "Ancho (⌥3)"
-  },
   "Window": {
     "zh-Hans": "窗口",
     "zh-Hant": "視窗",
@@ -2419,5 +2338,248 @@
     "fr": "↩ pour renommer, Échap pour annuler",
     "de": "↩ zum Umbenennen, Esc zum Abbrechen",
     "es": "↩ para renombrar, Esc para cancelar"
+  },
+  "New Tab": {
+    "zh-Hans": "新建标签页",
+    "zh-Hant": "新增標籤頁",
+    "ja": "新規タブ",
+    "ko": "새로운 탭",
+    "fr": "Nouvel onglet",
+    "de": "Neuer Tab",
+    "es": "Nueva pestaña"
+  },
+  "Clear": {
+    "zh-Hans": "清除",
+    "zh-Hant": "清除",
+    "ja": "消去",
+    "ko": "지우기",
+    "fr": "Effacer",
+    "de": "Löschen",
+    "es": "Borrar"
+  },
+  "Terminal": {
+    "zh-Hans": "终端",
+    "zh-Hant": "終端機",
+    "ja": "ターミナル",
+    "ko": "터미널",
+    "fr": "Terminal",
+    "de": "Terminal",
+    "es": "Terminal"
+  },
+  "Terminal (⌃`)": {
+    "zh-Hans": "终端 (⌃`)",
+    "zh-Hant": "終端機 (⌃`)",
+    "ja": "ターミナル (⌃`)",
+    "ko": "터미널 (⌃`)",
+    "fr": "Terminal (⌃`)",
+    "de": "Terminal (⌃`)",
+    "es": "Terminal (⌃`)"
+  },
+  "Copied": {
+    "zh-Hans": "已拷贝",
+    "zh-Hant": "已拷貝",
+    "ja": "コピーしました",
+    "ko": "복사됨",
+    "fr": "Copié",
+    "de": "Kopiert",
+    "es": "Copiado"
+  },
+  "New Shell": {
+    "zh-Hans": "新 Shell",
+    "zh-Hant": "新 Shell",
+    "ja": "新規シェル",
+    "ko": "새 셸",
+    "fr": "Nouveau shell",
+    "de": "Neue Shell",
+    "es": "Nuevo shell"
+  },
+  "The shell has ended.": {
+    "zh-Hans": "Shell 已结束。",
+    "zh-Hant": "Shell 已結束。",
+    "ja": "シェルは終了しました。",
+    "ko": "셸이 종료되었습니다.",
+    "fr": "Le shell s’est terminé.",
+    "de": "Die Shell ist beendet.",
+    "es": "La shell ha terminado."
+  },
+  "No shell open. Press + for a new one.": {
+    "zh-Hans": "没有打开的 Shell。按 + 新建一个。",
+    "zh-Hant": "沒有開啟的 Shell。按 + 新增一個。",
+    "ja": "開いているシェルはありません。+ を押すと新しく開きます。",
+    "ko": "열린 셸이 없습니다. +를 눌러 새로 여세요.",
+    "fr": "Aucun shell ouvert. Appuyez sur + pour en ouvrir un.",
+    "de": "Keine Shell offen. Drücke +, um eine neue zu öffnen.",
+    "es": "No hay ninguna shell abierta. Pulsa + para abrir una."
+  },
+  "Could not start a shell: {error}": {
+    "zh-Hans": "无法启动 Shell：{error}",
+    "zh-Hant": "無法啟動 Shell：{error}",
+    "ja": "シェルを起動できませんでした: {error}",
+    "ko": "셸을 시작할 수 없음: {error}",
+    "fr": "Impossible de lancer un shell : {error}",
+    "de": "Shell konnte nicht gestartet werden: {error}",
+    "es": "No se pudo iniciar una shell: {error}"
+  },
+  "{n} line back": {
+    "zh-Hans": "已向上 {n} 行",
+    "zh-Hant": "已向上 {n} 行",
+    "ja": "{n} 行前",
+    "ko": "{n}줄 위",
+    "fr": "{n} ligne plus haut",
+    "de": "{n} Zeile zurück",
+    "es": "{n} línea atrás"
+  },
+  "{n} lines back": {
+    "zh-Hans": "已向上 {n} 行",
+    "zh-Hant": "已向上 {n} 行",
+    "ja": "{n} 行前",
+    "ko": "{n}줄 위",
+    "fr": "{n} lignes plus haut",
+    "de": "{n} Zeilen zurück",
+    "es": "{n} líneas atrás"
+  },
+  "New Tab (⌘T)": {
+    "zh-Hans": "新建标签页 (⌘T)",
+    "zh-Hant": "新增標籤頁 (⌘T)",
+    "ja": "新規タブ (⌘T)",
+    "ko": "새로운 탭 (⌘T)",
+    "fr": "Nouvel onglet (⌘T)",
+    "de": "Neuer Tab (⌘T)",
+    "es": "Nueva pestaña (⌘T)"
+  },
+  "Look": {
+    "zh-Hans": "外观",
+    "zh-Hant": "外觀",
+    "ja": "外観",
+    "ko": "모양",
+    "fr": "Aspect",
+    "de": "Aussehen",
+    "es": "Aspecto"
+  },
+  "Behavior": {
+    "zh-Hans": "行为",
+    "zh-Hant": "行為",
+    "ja": "動作",
+    "ko": "동작",
+    "fr": "Comportement",
+    "de": "Verhalten",
+    "es": "Comportamiento"
+  },
+  "Theme": {
+    "zh-Hans": "主题",
+    "zh-Hant": "主題",
+    "ja": "テーマ",
+    "ko": "테마",
+    "fr": "Thème",
+    "de": "Design",
+    "es": "Tema"
+  },
+  "Match window": {
+    "zh-Hans": "跟随窗口",
+    "zh-Hant": "跟隨視窗",
+    "ja": "自動",
+    "ko": "창에 맞춤",
+    "fr": "Automatique",
+    "de": "Automatisch",
+    "es": "Automático"
+  },
+  "Cursor": {
+    "zh-Hans": "光标",
+    "zh-Hant": "游標",
+    "ja": "カーソル",
+    "ko": "커서",
+    "fr": "Curseur",
+    "de": "Cursor",
+    "es": "Cursor"
+  },
+  "Bar": {
+    "zh-Hans": "竖线",
+    "zh-Hant": "直線",
+    "ja": "バー",
+    "ko": "막대",
+    "fr": "Barre",
+    "de": "Balken",
+    "es": "Barra"
+  },
+  "Block": {
+    "zh-Hans": "方块",
+    "zh-Hant": "方塊",
+    "ja": "ブロック",
+    "ko": "블록",
+    "fr": "Bloc",
+    "de": "Block",
+    "es": "Bloque"
+  },
+  "Underline": {
+    "zh-Hans": "下划线",
+    "zh-Hant": "底線",
+    "ja": "下線",
+    "ko": "밑줄",
+    "fr": "Soulignement",
+    "de": "Unterstrich",
+    "es": "Subrayado"
+  },
+  "Blinking cursor": {
+    "zh-Hans": "光标闪烁",
+    "zh-Hant": "游標閃爍",
+    "ja": "カーソルの点滅",
+    "ko": "커서 깜박임",
+    "fr": "Curseur clignotant",
+    "de": "Blinkender Cursor",
+    "es": "Cursor parpadeante"
+  },
+  "Open Fonts": {
+    "zh-Hans": "打开字体",
+    "zh-Hant": "打開字體",
+    "ja": "フォントを開く",
+    "ko": "서체 열기",
+    "fr": "Ouvrir Polices",
+    "de": "Schriften öffnen",
+    "es": "Abrir Tipos de letra"
+  },
+  "Ligatures": {
+    "zh-Hans": "连字",
+    "zh-Hant": "連字",
+    "ja": "合字",
+    "ko": "합자",
+    "fr": "Ligatures",
+    "de": "Ligaturen",
+    "es": "Ligaduras"
+  },
+  "Joins {arrow} and {unequal} into one mark.": {
+    "zh-Hans": "将 {arrow} 和 {unequal} 连成一个符号。",
+    "zh-Hant": "將 {arrow} 和 {unequal} 連成一個符號。",
+    "ja": "{arrow} や {unequal} を 1 つの記号にします。",
+    "ko": "{arrow}와 {unequal}을 하나의 기호로 잇습니다.",
+    "fr": "Lie {arrow} et {unequal} en un seul signe.",
+    "de": "Verbindet {arrow} und {unequal} zu einem Zeichen.",
+    "es": "Une {arrow} y {unequal} en un solo signo."
+  },
+  "Copy on select": {
+    "zh-Hans": "选中即复制",
+    "zh-Hant": "選取即拷貝",
+    "ja": "選択時にコピー",
+    "ko": "선택 시 복사",
+    "fr": "Copier la sélection",
+    "de": "Beim Auswählen kopieren",
+    "es": "Copiar al seleccionar"
+  },
+  "The styling and UI design are from {kaku}, made by {tw93}.": {
+    "zh-Hans": "样式与界面设计来自 {tw93} 制作的 {kaku}。",
+    "zh-Hant": "樣式與介面設計來自 {tw93} 製作的 {kaku}。",
+    "ja": "スタイルと UI デザインは {tw93} による {kaku} のものです。",
+    "ko": "스타일과 UI 디자인은 {tw93}이 만든 {kaku}에서 가져왔습니다.",
+    "fr": "Le style et l’interface viennent de {kaku}, créé par {tw93}.",
+    "de": "Stil und UI-Design stammen von {kaku}, gemacht von {tw93}.",
+    "es": "El estilo y el diseño de la interfaz vienen de {kaku}, creado por {tw93}."
+  },
+  "Find in this terminal": {
+    "zh-Hans": "在此终端中查找",
+    "zh-Hant": "在此終端機中尋找",
+    "ja": "このターミナル内を検索",
+    "ko": "이 터미널에서 찾기",
+    "fr": "Rechercher dans ce terminal",
+    "de": "In diesem Terminal suchen",
+    "es": "Buscar en este terminal"
   }
 }

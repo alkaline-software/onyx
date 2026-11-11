@@ -25,7 +25,7 @@ use onyx_core::update;
 use crate::i18n::{phrase, t, tf, weave};
 use crate::menu::Entry;
 use crate::shell::{Escape, OpenSettings, Shell};
-use crate::widgets::{page_in, small_pill, wordmark, Press};
+use crate::widgets::{choice_pill, page_in, small_pill, wordmark, Press};
 
 /// The window's size as it opens, and the least it is dragged to. It is
 /// never narrower than it opens: the rows are laid out for that width,
@@ -48,6 +48,7 @@ pub const SETTINGS_CONTEXT: &str = "Settings";
 pub const SECTIONS: &[(&str, &str, &str)] = &[
     ("appearance", phrase("Appearance"), "icons/palette.svg"),
     ("text", phrase("Text"), "icons/a-large-small.svg"),
+    ("terminal", phrase("Terminal"), "icons/terminal.svg"),
     ("about", phrase("About"), "icons/info.svg"),
 ];
 
@@ -198,6 +199,7 @@ impl Shell {
             "text" if self.settings_page == "spelling" => self.spelling_rows(cx),
             "text" => self.fonts_rows(cx),
             "about" => self.about_rows(cx),
+            "terminal" => self.terminal_rows(cx),
             _ => self.appearance_rows(window, cx),
         };
         let title = SECTIONS.iter().find(|(k, _, _)| *k == section).map(|(_, name, _)| t(name)).unwrap_or(t("Appearance"));
@@ -209,7 +211,6 @@ impl Shell {
                 "text-page",
                 vec![("fonts", "", t("Fonts").into()), ("size", "", t("Size").into()), ("spelling", "", t("Spelling").into())],
                 self.settings_page,
-                false,
                 false,
                 Rc::new(|this: &mut Self, key, _, cx| {
                     this.settings_page = key;
@@ -330,7 +331,6 @@ impl Shell {
                 _ => "system",
             },
             true,
-            false,
             Rc::new(|this: &mut Self, key, window, cx| {
                 this.cfg.app.appearance = key.to_string();
                 let _ = Config::edit(|c| c.app.appearance = key.to_string());
@@ -557,7 +557,6 @@ impl Shell {
                 vec![("small", "", t("Small").into()), ("medium", "", t("Medium").into()), ("large", "", t("Large").into()), ("custom", "", t("Custom").into())],
                 now,
                 true,
-                false,
                 Rc::new(|this: &mut Self, key, _, cx| this.set_text_size(key, cx)),
                 cx,
             ))
@@ -867,6 +866,65 @@ impl Shell {
             .into_any_element();
         let language = div().when(!on, |d| d.opacity(0.45).occlude()).child(pill).into_any_element();
         vec![group(None, None, vec![line(t("Check spelling and grammar").into(), None, check, &theme), line(t("Language").into(), None, language, &theme)], &theme)]
+    }
+
+    /// The terminal's look and behavior, as Emaki's Settings, Terminal
+    /// has them: its scheme, its cursor, and the face, which is the
+    /// window's code face, set in Text, Fonts.
+    fn terminal_rows(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let theme = cx.theme().clone();
+        let term = self.cfg.terminal.clone();
+        let pick = |keys: &[&'static str], now: &str| keys.iter().copied().find(|k| *k == now).unwrap_or(keys[0]);
+        let scheme = div().w(CONTROL_W).child(self.motion.segmented("term-theme", vec![("match", "", t("Match window").into()), ("dark", "", t("Dark").into()), ("light", "", t("Light").into())], pick(&["match", "dark", "light"], &term.theme), true, Rc::new(|this: &mut Self, key, _, cx| this.set_terminal(|t| t.theme = key.into(), cx)), cx)).into_any_element();
+        let cursor = div().w(CONTROL_W).child(self.motion.segmented("term-cursor", vec![("bar", "", t("Bar").into()), ("block", "", t("Block").into()), ("underline", "", t("Underline").into())], pick(&["bar", "block", "underline"], &term.cursor), true, Rc::new(|this: &mut Self, key, _, cx| this.set_terminal(|t| t.cursor = key.into(), cx)), cx)).into_any_element();
+        let blink = self.motion.switch("term-blink", term.cursor_blink, Rc::new(|this: &mut Self, on, _, cx| this.set_terminal(|t| t.cursor_blink = on, cx)), cx);
+        let ligatures = self.motion.switch("term-ligatures", term.ligatures, Rc::new(|this: &mut Self, on, _, cx| this.set_terminal(|t| t.ligatures = on, cx)), cx);
+        let copy = self.motion.switch("term-copy", term.copy_on_select, Rc::new(|this: &mut Self, on, _, cx| this.set_terminal(|t| t.copy_on_select = on, cx)), cx);
+        // The face is the window's code face, set in Text, Fonts.
+        let fonts = choice_pill("term-fonts", "icons/a-large-small.svg", t("Open Fonts"), Press::Quiet, false, &theme)
+            .h(CONTROL_H)
+            .on_click(cx.listener(|this, _, _, cx| {
+                this.settings_section = "text";
+                this.settings_page = "fonts";
+                cx.notify();
+            }))
+            .into_any_element();
+        // The marks it joins, with a zero-width mark between the two
+        // letters of each, or the window's own face would join them here.
+        let joins: SharedString = tf("Joins {arrow} and {unequal} into one mark.", &[("arrow", &"-\u{200C}>"), ("unequal", &"!\u{200C}=")]).into();
+        let (link_color, link_hover) = (theme.muted_foreground, theme.primary);
+        let credit_link = |id: &'static str, name: &'static str, url: &'static str| {
+            div()
+                .id(id)
+                .cursor_pointer()
+                .text_decoration_1()
+                .text_decoration_color(link_color.opacity(0.6))
+                .hover(move |s| s.text_color(link_hover).text_decoration_color(link_hover))
+                .on_click(move |_, _, cx| cx.open_url(url))
+                .child(name)
+        };
+        // The two names are links, set where each language's order puts
+        // them.
+        let credit = weave(
+            t("The styling and UI design are from {kaku}, made by {tw93}."),
+            vec![("kaku", credit_link("term-credit", "Kaku", "https://kaku.fun").into_any_element()), ("tw93", credit_link("term-credit-author", "tw93", "https://github.com/tw93").into_any_element())],
+            h_flex().flex_wrap().px(px(14.)).text_size(px(11.5)).text_color(theme.muted_foreground),
+        )
+        .into_any_element();
+        vec![
+            group(Some(t("Look").into()), None, vec![line(t("Theme").into(), None, scheme, &theme), line(t("Cursor").into(), None, cursor, &theme), line(t("Blinking cursor").into(), None, blink, &theme), line(t("Font").into(), None, fonts, &theme)], &theme),
+            group(Some(t("Behavior").into()), None, vec![line(t("Ligatures").into(), Some(joins), ligatures, &theme), line(t("Copy on select").into(), None, copy, &theme)], &theme),
+            credit,
+        ]
+    }
+
+    /// A change to the terminal's settings: kept, and the terminal drawn
+    /// with it at once.
+    fn set_terminal(&mut self, change: impl Fn(&mut onyx_core::config::TerminalConfig), cx: &mut Context<Self>) {
+        change(&mut self.cfg.terminal);
+        let _ = Config::edit(|c| change(&mut c.terminal));
+        self.push_look(cx);
+        cx.notify();
     }
 
     fn settings_pick(&mut self, what: &'static str, id: SharedString, window: &mut Window, cx: &mut Context<Self>) {

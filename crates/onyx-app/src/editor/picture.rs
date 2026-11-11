@@ -7,13 +7,12 @@
 //! View, the pencil and a menu. The bar is a view of its own laid over
 //! the row's top; the picture under it is painted here.
 //!
-//! Outside Source a picture's line, and a frame's, is one piece to the
+//! A picture's line, and a frame's, is one piece to the
 //! caret, as a block is in Craft: a press on the picture selects it whole
 //! and ringed in the accent, and so do ↑ ↓ ← → arriving on its line and
 //! ⌫ from the start of the line under it; ⌫ or ⌦ then takes it out, ⌘C
 //! copies it, ↩ opens a line under it. The pencil on the bar puts the
-//! caret in the line itself, which then shows under it as written, as
-//! Source shows it.
+//! caret in the line itself, which then shows under it as written.
 //!
 //! Its whole edge takes a drag, as a window's does, and so does a PDF's
 //! frame's, which is sized as a picture is: a side, the top or the foot,
@@ -177,10 +176,9 @@ impl Editor {
     // -- one piece ----------------------------------------------------------
 
     /// Whether `line` is drawn as a picture or a file's frame and is one
-    /// piece to the caret: in every mode but Source, unless the pencil
-    /// opened it.
+    /// piece to the caret, unless the pencil opened it.
     pub(super) fn object_line(&self, line: usize) -> bool {
-        if self.mode == Mode::Source || self.editing == Some(line) || line >= self.doc.line_count() {
+        if self.editing == Some(line) || line >= self.doc.line_count() {
             return false;
         }
         let Some(on) = self.reader().picture_on(line) else { return false };
@@ -396,7 +394,7 @@ impl Editor {
         if line >= self.doc.line_count() {
             return;
         }
-        self.editing = (self.mode != Mode::Source).then_some(line);
+        self.editing = Some(line);
         self.sel = Sel::caret(Pos::new(line, self.doc.line(line).len()));
         self.want_scroll = true;
         window.focus(&self.focus, cx);

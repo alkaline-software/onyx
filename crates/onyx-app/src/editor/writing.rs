@@ -200,7 +200,7 @@ impl Editor {
     }
 
     /// The mark at a place, as its menu needs it.
-    pub(super) fn issue_at(&self, offset: usize) -> Option<MenuIssue> {
+    pub(crate) fn issue_at(&self, offset: usize) -> Option<MenuIssue> {
         if self.locked() {
             return None;
         }

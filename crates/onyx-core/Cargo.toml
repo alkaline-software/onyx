@@ -49,6 +49,15 @@ hayro = "0.7"
 # Typst already brings.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 
+# The terminal beside a note (`pty.rs`): a pty of the system's and a
+# screen model with no renderer, which the window draws.
+vt100 = "0.16"
+portable-pty = "0.9"
+
+# Whether the program in the terminal reads its line a key at a time.
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [target.'cfg(windows)'.dependencies]
 # The installer and updater on Windows; pinned to the version release.yml's vpk uses.
 velopack = "=1.2.161"

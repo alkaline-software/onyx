@@ -16,7 +16,6 @@ use std::time::{Duration, Instant};
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::tooltip::ManagedTooltipExt as _;
 use gpui_component::{h_flex, ActiveTheme as _, Icon, Sizable as _};
 
 /// A menu or a list coming in, and going out.
@@ -399,27 +398,11 @@ impl Motion {
     /// chosen one paints its own plate, so nothing flashes. `fill` shares
     /// the width it is given among the choices.
     #[allow(clippy::type_complexity)]
-    pub fn segmented<V: 'static>(&self, control: &'static str, options: Vec<(&'static str, &'static str, SharedString)>, current: &'static str, fill: bool, icons: bool, on: Rc<dyn Fn(&mut V, &'static str, &mut Window, &mut Context<V>)>, cx: &mut Context<V>) -> AnyElement {
-        self.segmented_in(control, options.into_iter().map(|(k, i, l)| (k, i, l, None)).collect(), current, fill, icons, 1., on, cx)
-    }
-
-    /// A segmented control of icons alone, each segment a square and each
-    /// in a color of its own: the icon takes its color while it is the
-    /// choice or under the pointer, in place of the plain ink.
-    pub fn segmented_tinted<V: 'static>(&self, control: &'static str, options: Vec<(&'static str, &'static str, SharedString, Hsla)>, current: &'static str, lift: f32, on: Rc<dyn Fn(&mut V, &'static str, &mut Window, &mut Context<V>)>, cx: &mut Context<V>) -> AnyElement {
-        self.segmented_in(control, options.into_iter().map(|(k, i, l, c)| (k, i, l, Some(c))).collect(), current, false, true, lift, on, cx)
-    }
-
-    fn segmented_in<V: 'static>(&self, control: &'static str, options: Vec<(&'static str, &'static str, SharedString, Option<Hsla>)>, current: &'static str, fill: bool, icons: bool, lift: f32, on: Rc<dyn Fn(&mut V, &'static str, &mut Window, &mut Context<V>)>, cx: &mut Context<V>) -> AnyElement {
-        // With `icons`, a segment is its icon alone, a square with no track
-        // under the row, as tall and as round as a tab's plate, which it
-        // stands beside: the raised plate and the icon's color say which
-        // is chosen, and a track beside the card's edge was one layer too
-        // many. Its word is said on hover.
-        let (pad, seg_h, seg_px, seg_text, round) = (px(if icons { 0. } else { 3. }), px(if icons { 24. } else { 22. }), px(if icons { 0. } else { 11. }), px(12.5), px(if icons { 7. } else { 6. }));
+    pub fn segmented<V: 'static>(&self, control: &'static str, options: Vec<(&'static str, &'static str, SharedString)>, current: &'static str, fill: bool, on: Rc<dyn Fn(&mut V, &'static str, &mut Window, &mut Context<V>)>, cx: &mut Context<V>) -> AnyElement {
+        let (pad, seg_h, seg_px, seg_text, round) = (px(3.), px(22.), px(11.), px(12.5), px(6.));
         let theme = cx.theme().clone();
         let dark = theme.mode.is_dark();
-        let track_bg = if icons { theme.transparent } else if dark { theme.tab_bar_segmented } else { theme.muted };
+        let track_bg = if dark { theme.tab_bar_segmented } else { theme.muted };
         let plate_bg = if dark { theme.secondary_active } else { theme.popover };
         let (from, to) = {
             let mut st = self.choices.borrow_mut();
@@ -444,12 +427,12 @@ impl Motion {
             (Some(a), Some(b)) => Some(div().absolute().rounded(round).bg(plate_bg).shadow_sm().with_animation(ElementId::Name(format!("{control}-plate-{to}").into()), Animation::new(SLIDE).with_easing(ease_out_quint()), move |d, t| {
                 let x = a.origin.x + (b.origin.x - a.origin.x) * t;
                 let w = a.size.width + (b.size.width - a.size.width) * t;
-                d.left(x).top(b.origin.y).w(w).h(b.size.height).opacity(lift)
+                d.left(x).top(b.origin.y).w(w).h(b.size.height)
             })),
             _ => None,
         };
         let measured = plate.is_some();
-        let ids: Vec<String> = options.iter().map(|(k, _, _, _)| format!("{control}-{k}")).collect();
+        let ids: Vec<String> = options.iter().map(|(k, _, _)| format!("{control}-{k}")).collect();
         let segments = self.segments.clone();
         let entity = cx.entity().downgrade();
         let row = h_flex()
@@ -473,14 +456,13 @@ impl Motion {
                     let _ = entity.update(cx, |_, cx| cx.notify());
                 }
             })
-            .children(options.into_iter().map(|(key, icon, label, tint)| {
+            .children(options.into_iter().map(|(key, icon, label)| {
                 let active = key == current;
                 let on = on.clone();
-                let lit = tint.unwrap_or(theme.foreground);
+                let lit = theme.foreground;
                 h_flex()
                     .id(SharedString::from(format!("{control}-{key}")))
                     .h(seg_h)
-                    .when(icons, |d| d.w(seg_h).justify_center())
                     .px(seg_px)
                     .gap(px(5.))
                     .items_center()
@@ -488,7 +470,7 @@ impl Motion {
                     .cursor_pointer()
                     .text_size(seg_text)
                     .when(fill, |d| d.flex_1().justify_center())
-                    .when(active && !measured, |d| d.bg(plate_bg.opacity(lift)).when(lift >= 1., |d| d.shadow_sm()))
+                    .when(active && !measured, |d| d.bg(plate_bg).shadow_sm())
                     // A hover that changes the text's color is set in every
                     // state, never under a `when`: gpui hears the pointer
                     // leave only while a hover style is set, and a segment
@@ -497,8 +479,8 @@ impl Motion {
                     .hover(move |s| s.text_color(lit))
                     .when(active, |d| d.font_weight(FontWeight::MEDIUM))
                     .on_click(cx.listener(move |this, _, window, cx| on(this, key, window, cx)))
-                    .when(!icon.is_empty(), |d| d.child(Icon::default().path(icon).with_size(if icons { px(14.) } else { seg_text + px(1.5) })))
-                    .map(|d| if icons { d.managed_tooltip(move |window, cx| tip(label.clone(), window, cx)) } else { d.child(label) })
+                    .when(!icon.is_empty(), |d| d.child(Icon::default().path(icon).with_size(seg_text + px(1.5))))
+                    .child(label)
             }));
         h_flex()
             .id(SharedString::from(format!("{control}-track")))

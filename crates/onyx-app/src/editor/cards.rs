@@ -12,7 +12,7 @@ use std::ops::Range;
 use gpui::*;
 use onyx_core::html::{self, Across, CardSize};
 
-use super::{Editor, Mode};
+use super::Editor;
 use crate::lines::{Pos, Sel};
 use crate::markdown::{LineKind, SpanKind};
 
@@ -90,7 +90,7 @@ impl Editor {
 
     /// What a menu at a byte of a line can change of the link there.
     pub(crate) fn layout_at(&self, line: usize, at: usize) -> Option<LayoutAt> {
-        if self.locked() || self.mode == Mode::Source {
+        if self.locked() {
             return None;
         }
         let found = self.link_on(line, at)?;

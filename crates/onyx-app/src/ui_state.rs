@@ -38,17 +38,17 @@ pub struct UiState {
     pub vault: Option<PathBuf>,
     pub tabs: Vec<PathBuf>,
     pub note: Option<PathBuf>,
-    /// How notes are shown: `live`, `source` or `reading`. The app's own,
-    /// not a note's; only the person changes it.
-    pub mode: Option<String>,
     /// The vaults opened before, the latest first, for the landing page.
     pub recent_vaults: Vec<PathBuf>,
     /// The folders folded shut in the sidebar's tree, by their path.
     pub folded: Vec<PathBuf>,
-    /// How wide notes run: `narrow`, `middle` or `wide`, the app's own as
-    /// `mode` is. Not `wide`, which earlier builds kept as a list of
-    /// notes: a file with that list has to go on reading.
-    pub page_width: Option<String>,
+    /// Whether the note's source shows beside it, and the share of the
+    /// page it takes, the app's own, not a note's.
+    pub source_open: Option<bool>,
+    pub source_share: Option<f32>,
+    /// The terminal's width; whether it shows is not kept, as its shells
+    /// are not.
+    pub term_w: Option<f32>,
     /// The folder the last PDF went to, where the next save panel opens.
     /// One since moved or gone is passed over for the note's own.
     pub export_folder: Option<PathBuf>,
@@ -152,16 +152,16 @@ mod tests {
 
     #[test]
     fn a_first_launch_chooses_nothing() {
-        assert_eq!(UiState::default().page_width, None);
-        assert_eq!(UiState::default().mode, None);
+        assert_eq!(UiState::default().source_open, None);
     }
 
     #[test]
-    fn a_file_from_when_wide_was_each_note_s_still_reads() {
-        let old = r#"{"tabs":["/v/a.md"],"note":"/v/a.md","mode":"reading","wide":["/v/a.md"]}"#;
+    fn a_file_from_before_the_source_pane_still_reads() {
+        // The modes, the three widths and the full width the person chose
+        // are gone, and so is the list of notes `wide` once was.
+        let old = r#"{"tabs":["/v/a.md"],"note":"/v/a.md","mode":"reading","page_width":"wide","wide":["/v/a.md"],"full_width":true}"#;
         let ui: UiState = serde_json::from_str(old).expect("the file reads");
         assert_eq!(ui.tabs.len(), 1);
-        assert_eq!(ui.mode.as_deref(), Some("reading"));
-        assert_eq!(ui.page_width, None);
+        assert_eq!(ui.source_open, None);
     }
 }

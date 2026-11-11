@@ -483,7 +483,7 @@ impl Shell {
 
     fn export_choice(&self, id: &'static str, choices: Vec<(&'static str, &'static str, SharedString)>, now: &str, set: fn(&mut PdfConfig, &'static str), cx: &mut Context<Self>) -> AnyElement {
         let current = choices.iter().find(|c| c.0 == now).map_or(choices[0].0, |c| c.0);
-        div().w(px(186.)).child(self.motion.segmented(id, choices, current, true, false, Rc::new(move |this: &mut Self, key, _, cx| this.set_export(|o| set(o, key), cx)), cx)).into_any_element()
+        div().w(px(186.)).child(self.motion.segmented(id, choices, current, true, Rc::new(move |this: &mut Self, key, _, cx| this.set_export(|o| set(o, key), cx)), cx)).into_any_element()
     }
 
     /// How the note is set: what the page is, what the words are in, and
@@ -548,7 +548,7 @@ impl Shell {
     fn export_formats(&self, cx: &mut Context<Self>) -> AnyElement {
         let now = FORMATS.iter().find(|f| f.0 == self.cfg.pdf.format).map_or("pdf", |f| f.0);
         let choices = FORMATS.iter().map(|(key, name, _)| (*key, "", SharedString::from(t(name)))).collect();
-        div().px(px(16.)).pb(px(6.)).child(self.motion.segmented("pdf-format", choices, now, true, false, Rc::new(|this: &mut Self, key, _, cx| this.set_export(|o| o.format = key.into(), cx)), cx)).into_any_element()
+        div().px(px(16.)).pb(px(6.)).child(self.motion.segmented("pdf-format", choices, now, true, Rc::new(|this: &mut Self, key, _, cx| this.set_export(|o| o.format = key.into(), cx)), cx)).into_any_element()
     }
 
     /// The page, or the blank paper it will be while it is first laid

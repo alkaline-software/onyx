@@ -100,34 +100,15 @@ pub fn key_bindings() -> Vec<KeyBinding> {
     ]
 }
 
-/// How a note is shown.
+/// How a note is shown: written in, or read only, as an asset's tab and
+/// a note in a frame are.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Mode {
     /// As it reads, with the marks of what the caret is in shown.
     #[default]
     Live,
-    /// As it is written, every mark shown, the styles kept.
-    Source,
     /// As it reads only, with nothing to type in.
     Reading,
-}
-
-impl Mode {
-    pub fn key(self) -> &'static str {
-        match self {
-            Mode::Live => "live",
-            Mode::Source => "source",
-            Mode::Reading => "reading",
-        }
-    }
-
-    pub fn from_key(key: &str) -> Mode {
-        match key {
-            "source" => Mode::Source,
-            "reading" => Mode::Reading,
-            _ => Mode::Live,
-        }
-    }
 }
 
 /// A link a right click was on: what it goes to, its words, and the
@@ -280,6 +261,8 @@ pub struct Editor {
     mode: Mode,
     look: Look,
     focus: FocusHandle,
+    /// Counts the text's readings (`reanalyze`), for `version`.
+    version: u64,
     /// The scroller the view around the editor puts it in.
     pub scroll: ScrollHandle,
     cache: Rc<RefCell<Cache>>,
@@ -385,6 +368,7 @@ impl Editor {
             mode: Mode::Live,
             look: Look::default(),
             focus: cx.focus_handle(),
+            version: 0,
             scroll: ScrollHandle::new(),
             cache: Rc::new(RefCell::new(Cache::default())),
             marked: None,
@@ -500,7 +484,6 @@ impl Editor {
             let was_reading = self.mode == Mode::Reading;
             self.mode = mode;
             self.marked = None;
-            // A caret left on a picture's line in Source takes it whole.
             self.editing = None;
             self.hold_objects();
             self.want_scroll = true;
@@ -753,6 +736,35 @@ impl Editor {
 
     fn reanalyze(&mut self) {
         self.analysis = markdown::analyze(&self.doc.text());
+        self.version += 1;
+    }
+
+    /// A count that moves whenever the text may have changed, by any way,
+    /// for a view of the same text to follow it (`source.rs`).
+    pub(crate) fn version(&self) -> u64 {
+        self.version
+    }
+
+    /// The byte of the text the caret is at.
+    pub(crate) fn caret_byte(&self) -> usize {
+        self.doc.offset_of(self.sel.head)
+    }
+
+    /// The caret put at a byte of the text, the keyboard here and the view
+    /// brought to it: from the source pane as it goes (`source.rs`).
+    pub(crate) fn put_caret_at(&mut self, at: usize, window: &mut Window, cx: &mut Context<Self>) {
+        self.sel = Sel::caret(self.doc.pos_of(at.min(self.doc.text().len())));
+        self.editing = None;
+        self.hold_objects();
+        self.want_scroll = true;
+        window.focus(&self.focus, cx);
+        cx.notify();
+    }
+
+    /// The spelling and grammar marks as the note shows them, in bytes of
+    /// its text.
+    pub(crate) fn shown_issues(&self) -> &[onyx_core::check::Issue] {
+        if self.locked() { &[] } else { self.writing.shown(&self.doc) }
     }
 
     /// After every change: the text read again, numbered lists put
@@ -773,7 +785,7 @@ impl Editor {
         if self.editing.is_some_and(|l| l != self.sel.head.line) {
             self.editing = None;
         }
-        if self.sel.is_caret() && self.mode != Mode::Source && self.object_line(self.sel.head.line) {
+        if self.sel.is_caret() && self.object_line(self.sel.head.line) {
             self.editing = Some(self.sel.head.line);
         }
         self.want_scroll = true;
@@ -2504,7 +2516,6 @@ impl Editor {
     fn paint_info(&mut self, _: Point<Pixels>, _: &mut Window, _: &mut Context<Self>) -> PaintInfo {
         let (sa, _) = self.sel.range();
         let cache = self.cache.borrow();
-        let gridded = self.mode != Mode::Source;
         let caret = (self.sel.is_caret() && self.caret_shown()).then(|| self.caret_at(sa)).flatten().map(|c| Bounds::new(point(px(c.x), px(c.bar_y)), size(px(1.5), px(c.bar_h))));
         let cell = self.revealing().then(|| self.cell_of(self.sel.head)).flatten().and_then(|at| {
             let t = self.table(at.table)?;
@@ -2522,13 +2533,13 @@ impl Editor {
             let p = self.pointer_at;
             drop(cache);
             control_on = self.control_at(p.0, p.1);
-            return self.finish_info(sa, caret, cell, control_on, hover_row, gridded);
+            return self.finish_info(sa, caret, cell, control_on, hover_row);
         }
         drop(cache);
-        self.finish_info(sa, caret, cell, control_on, hover_row, gridded)
+        self.finish_info(sa, caret, cell, control_on, hover_row)
     }
 
-    fn finish_info(&self, _: Pos, caret: Option<Bounds<Pixels>>, cell: Option<Bounds<Pixels>>, on: Option<cells::Control>, hover_row: Option<(f32, f32)>, gridded: bool) -> PaintInfo {
+    fn finish_info(&self, _: Pos, caret: Option<Bounds<Pixels>>, cell: Option<Bounds<Pixels>>, on: Option<cells::Control>, hover_row: Option<(f32, f32)>) -> PaintInfo {
         let origin = point(self.origin.x, self.origin.y);
         let shift = |b: Bounds<Pixels>| Bounds::new(point(origin.x + b.origin.x, origin.y + b.origin.y), b.size);
         let cache = self.cache.borrow();
@@ -2556,8 +2567,8 @@ impl Editor {
             focus: self.focus.clone(),
             pointer: self.pointer,
             cache: self.cache.clone(),
-            blocks: self.analysis.code_blocks.iter().filter(|b| gridded || b.first < usize::MAX).map(|b| (b.first, b.last, self.reader().base_inset(&self.analysis.lines[b.first]))).collect(),
-            tables: if gridded { self.analysis.tables.iter().map(|t| (t.first, t.last)).collect() } else { Vec::new() },
+            blocks: self.analysis.code_blocks.iter().map(|b| (b.first, b.last, self.reader().base_inset(&self.analysis.lines[b.first]))).collect(),
+            tables: self.analysis.tables.iter().map(|t| (t.first, t.last)).collect(),
             sel: self.sel,
             marked: self.marked,
             caret: caret.map(shift),

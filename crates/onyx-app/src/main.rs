@@ -23,6 +23,9 @@ mod scroll;
 mod settings;
 mod shell;
 mod tabs;
+mod source;
+mod terminal;
+mod sublime;
 mod sys;
 mod tables;
 mod ui_state;
@@ -34,7 +37,7 @@ use gpui_component::Root;
 
 use i18n::t;
 use onyx_core::config::Config;
-use shell::{ZoomIn, ZoomOut, ZoomReset, CloseTab, CloseVault, Escape, ExportPdf, PrintNote, FindInNote, FindNext, FindPrev, NewFolder, NewNote, NewVault, ReopenTab, Tab1, Tab2, Tab3, Tab4, Tab5, Tab6, Tab7, Tab8, Tab9, OpenSettings, OpenVault, Shell, ShowLive, ShowNarrow, ShowMiddle, ShowReading, ShowSource, ShowWide, ToggleReading, ToggleSearch, ToggleSidebar, KEY_CONTEXT, MIN_W};
+use shell::{ZoomIn, ZoomOut, ZoomReset, CloseTab, CloseVault, Escape, ExportPdf, PrintNote, FindInNote, FindNext, FindPrev, NewFolder, NewNote, NewVault, ReopenTab, Tab1, Tab2, Tab3, Tab4, Tab5, Tab6, Tab7, Tab8, Tab9, OpenSettings, OpenVault, Shell, ToggleSearch, ToggleSidebar, ToggleSource, ToggleTerminal, KEY_CONTEXT, MIN_W};
 
 actions!(onyx_app, [Quit, CloseWindow, Hide, HideOthers, ShowAll, Minimize, Zoom, ToggleFullScreen]);
 
@@ -61,7 +64,6 @@ fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("space", viewer::ViewerClose, Some(viewer::VIEWER_CONTEXT)),
         KeyBinding::new("left", viewer::ViewerPrev, Some(viewer::VIEWER_CONTEXT)),
         KeyBinding::new("right", viewer::ViewerNext, Some(viewer::VIEWER_CONTEXT)),
-        KeyBinding::new("secondary-e", ToggleReading, None),
         KeyBinding::new("secondary-k", ToggleSearch, None),
         KeyBinding::new("secondary-f", FindInNote, None),
         KeyBinding::new("secondary-g", FindNext, None),
@@ -86,18 +88,14 @@ fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("secondary-7", Tab7, None),
         KeyBinding::new("secondary-8", Tab8, None),
         KeyBinding::new("secondary-9", Tab9, None),
-        // ⌃ with a digit shows a way of reading on a Mac. Elsewhere ctrl
-        // is `secondary`, which picks a tab, so the modes add alt.
-        KeyBinding::new(if cfg!(target_os = "macos") { "ctrl-1" } else { "ctrl-alt-1" }, ShowLive, None),
-        KeyBinding::new(if cfg!(target_os = "macos") { "ctrl-2" } else { "ctrl-alt-2" }, ShowSource, None),
-        KeyBinding::new(if cfg!(target_os = "macos") { "ctrl-3" } else { "ctrl-alt-3" }, ShowReading, None),
-        KeyBinding::new("alt-1", ShowNarrow, None),
-        KeyBinding::new("alt-2", ShowMiddle, None),
-        KeyBinding::new("alt-3", ShowWide, None),
+        KeyBinding::new("secondary-shift-s", ToggleSource, None),
+        KeyBinding::new("ctrl-`", ToggleTerminal, None),
         KeyBinding::new("secondary-q", Quit, None),
     ];
     keys.extend(editor::key_bindings());
+    keys.extend(sublime::bindings());
     keys.extend(embed::key_bindings());
+    keys.extend(terminal::key_bindings());
     keys.extend(shell::tree_keys());
     if cfg!(target_os = "macos") {
         keys.extend([KeyBinding::new("secondary-h", Hide, None), KeyBinding::new("secondary-alt-h", HideOthers, None), KeyBinding::new("secondary-m", Minimize, None), KeyBinding::new("ctrl-secondary-f", ToggleFullScreen, None)]);
@@ -161,7 +159,7 @@ pub(crate) fn app_menus() -> Vec<Menu> {
     menus.push(Menu {
         name: t("View").into(),
         disabled: false,
-        items: vec![MenuItem::action(t("Edit"), ShowLive), MenuItem::action(t("Source"), ShowSource), MenuItem::action(t("Read"), ShowReading), MenuItem::separator(), MenuItem::action(t("Narrow"), ShowNarrow), MenuItem::action(t("Middle"), ShowMiddle), MenuItem::action(t("Wide"), ShowWide), MenuItem::separator(), MenuItem::action(t("Zoom In"), ZoomIn), MenuItem::action(t("Zoom Out"), ZoomOut), MenuItem::action(t("Reset Zoom"), ZoomReset), MenuItem::separator(), MenuItem::action(t("Search…"), ToggleSearch), MenuItem::separator(), MenuItem::action(t("Toggle Sidebar"), ToggleSidebar)],
+        items: vec![MenuItem::action(t("Source"), ToggleSource), MenuItem::action(t("Terminal"), ToggleTerminal), MenuItem::separator(), MenuItem::action(t("Zoom In"), ZoomIn), MenuItem::action(t("Zoom Out"), ZoomOut), MenuItem::action(t("Reset Zoom"), ZoomReset), MenuItem::separator(), MenuItem::action(t("Search…"), ToggleSearch), MenuItem::separator(), MenuItem::action(t("Toggle Sidebar"), ToggleSidebar)],
     });
     menus.push(Menu { name: t("Window").into(), disabled: false, items: vec![MenuItem::action(t("Minimize"), Minimize), MenuItem::action(t("Zoom"), Zoom), MenuItem::action(t("Toggle Full Screen"), ToggleFullScreen)] });
     menus

@@ -5,14 +5,14 @@
 //! as `\|`, a line break as `<br>`.
 //!
 //! A change of the table's shape goes through `tables::Sheet` and is one
-//! step of undo. In Source there is no grid: a table is its lines.
+//! step of undo.
 
 use std::rc::Rc;
 use std::time::Instant;
 
 use gpui::*;
 
-use super::{Editor, Mode};
+use super::Editor;
 use crate::layout::{Cache, Grid, Row};
 use crate::lines::{Pos, Sel};
 use crate::markdown::{cell_ranges, Align, SpanKind, Table};
@@ -102,19 +102,12 @@ pub(super) fn table_box(t: &Table, cache: &Cache) -> Option<TableBox> {
 }
 
 impl Editor {
-    fn gridded(&self) -> bool {
-        self.mode != Mode::Source
-    }
-
     pub(super) fn table(&self, first: usize) -> Option<&Table> {
         self.analysis.tables.iter().find(|t| t.first == first)
     }
 
-    /// The cell a place stands in; in Source, none.
+    /// The cell a place stands in.
     pub(crate) fn cell_of(&self, p: Pos) -> Option<CellAt> {
-        if !self.gridded() {
-            return None;
-        }
         let t = self.analysis.table_at(p.line)?;
         let row = t.row_of(p.line)?;
         let spots = t.cells.get(row)?;
@@ -163,9 +156,6 @@ impl Editor {
     /// A place in a table's line, in the cell nearest it: nothing stands
     /// between the cells, or on the separator.
     fn into_cell(&self, p: Pos) -> Pos {
-        if !self.gridded() {
-            return p;
-        }
         let Some(t) = self.analysis.table_at(p.line) else { return p };
         let row = t.row_of(p.line).unwrap_or(0);
         let Some(spots) = t.cells.get(row).filter(|s| !s.is_empty()) else { return p };
@@ -177,9 +167,6 @@ impl Editor {
     /// in, or, begun outside a table, past the whole of one.
     pub(super) fn held_to(&self, anchor: Pos, p: Pos) -> Pos {
         let p = self.held_by_object(anchor, p);
-        if !self.gridded() {
-            return p;
-        }
         if let Some(cell) = self.cell_of(anchor) {
             let (a, b) = self.cell_span(cell);
             return if p < a { a } else if p > b { b } else { p };
@@ -201,9 +188,6 @@ impl Editor {
 
     /// The `<br>` a place stands inside or against, as a whole.
     fn break_at(&self, p: Pos) -> Option<(usize, usize)> {
-        if !self.gridded() {
-            return None;
-        }
         let start = self.analysis.line_starts[p.line];
         self.analysis.line_spans[p.line].iter().map(|&ix| &self.analysis.spans[ix]).filter(|s| s.kind == SpanKind::Break).map(|s| (s.range.start - start, s.range.end - start)).find(|(a, b)| *a <= p.col && p.col <= *b)
     }
@@ -466,7 +450,7 @@ impl Editor {
         let found = {
             let cache = self.cache.borrow();
             let mut found = None;
-            if self.gridded() && !self.locked() {
+            if !self.locked() {
                 for t in &self.analysis.tables {
                     let Some(b) = table_box(t, &cache) else { continue };
                     let far = ADD + ADD_GAP + 4.;

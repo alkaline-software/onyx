@@ -29,7 +29,9 @@ use onyx_core::config::Config;
 use onyx_core::{update, vault};
 
 use crate::ambient::Ambient;
-use crate::editor::{CellAt, Editor, EditorEvent, Look, MenuAt, MenuIssue, MenuLink, Mode, Scope, TableFacts, Words};
+use crate::editor::{CellAt, Editor, EditorEvent, Look, MenuAt, MenuIssue, MenuLink, Scope, TableFacts, Words};
+use crate::source::SourcePane;
+use crate::terminal::{TermEvent, TermPanel};
 use crate::i18n::{t, tf};
 use crate::menu::{Entry, Menus};
 use crate::scroll::Scrollers;
@@ -37,7 +39,7 @@ use crate::tabs::{Item as TabItem, Tabs};
 use crate::ui_state::{Rect, UiState};
 use crate::widgets::{choice_pill, float_shadow, kbd_hint, key_text, page_in, small_pill, swallow_click, tip, Fig, Motion, Press, FOLD_ANIM, SLIDE};
 
-actions!(onyx, [ExportPdf, PrintNote, ToggleSidebar, OpenSettings, Escape, NewNote, NewFolder, NewVault, OpenVault, CloseVault, ShowLive, ShowSource, ShowReading, ToggleReading, ShowNarrow, ShowMiddle, ShowWide, ToggleSearch, FindInNote, FindNext, FindPrev, CloseTab, ReopenTab, ZoomIn, ZoomOut, ZoomReset, Tab1, Tab2, Tab3, Tab4, Tab5, Tab6, Tab7, Tab8, Tab9]);
+actions!(onyx, [ExportPdf, PrintNote, ToggleSidebar, OpenSettings, Escape, NewNote, NewFolder, NewVault, OpenVault, CloseVault, ToggleSource, ToggleTerminal, ToggleSearch, FindInNote, FindNext, FindPrev, CloseTab, ReopenTab, ZoomIn, ZoomOut, ZoomReset, Tab1, Tab2, Tab3, Tab4, Tab5, Tab6, Tab7, Tab8, Tab9]);
 
 /// The key context of the main window.
 pub const KEY_CONTEXT: &str = "Shell";
@@ -107,24 +109,20 @@ const RAIL_TOP: Pixels = px(if cfg!(target_os = "macos") { 92. } else { 52. });
 const FLY_TOP: Pixels = px(52.);
 /// How many lines of a note the search shows under it.
 const SEARCH_LINES: usize = 3;
-/// An open group: its three squares of `STRIP_SQUARE`, 2 between them.
-const GROUP_W: Pixels = px(76.);
 /// The path's row under the tabs, and how far its path keeps from the
 /// card's sides.
 const PATH_BAR_H: Pixels = px(30.);
 const PATH_BAR_PAD: f32 = 6.;
 /// How far the tabs' row keeps its squares from the card's sides: what
 /// they keep from its top and foot, so the room round them is even.
-const STRIP_END: Pixels = px(10.);
+const STRIP_END: Pixels = px((48. - 4. - 28.) / 2.);
 /// A script's presses and keys land this many milliseconds apart.
 const GO_STEP: u64 = 400;
-/// A group's square, a tab's plate tall.
-const STRIP_SQUARE: Pixels = px(24.);
-/// The line round a group and what it keeps from the squares inside, so
-/// the group is as tall as the tabs' pill beside it, and as round.
-const STRIP_INSET: Pixels = px(2.);
-const STRIP_CAP: Pixels = px(30.);
-const STRIP_CAP_R: Pixels = px(9.);
+/// A button at an end of the tabs' row, as Emaki's panel buttons are.
+const TOGGLE_W: Pixels = px(28.);
+/// The least the source pane and the note beside it are drawn.
+const SOURCE_LEAST: f32 = 320.;
+const NOTE_LEAST: f32 = 420.;
 /// Between each end of the tabs' row and the row.
 const STRIP_END_GAP: Pixels = px(6.);
 
@@ -141,59 +139,19 @@ struct Notice {
     icon: Option<&'static str>,
 }
 
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum StripEnd {
-    Modes,
-    Widths,
-}
-
-/// How wide a note's sheet runs, for every note: the app's own, as the
-/// mode is, and only the person changes it.
-#[derive(Clone, Copy, Default, PartialEq, Eq)]
-enum PageWidth {
-    #[default]
-    Narrow,
-    Middle,
-    Wide,
-}
-
-impl PageWidth {
-    fn key(self) -> &'static str {
-        match self {
-            PageWidth::Narrow => "narrow",
-            PageWidth::Middle => "middle",
-            PageWidth::Wide => "wide",
-        }
-    }
-
-    fn from_key(key: &str) -> PageWidth {
-        match key {
-            "middle" => PageWidth::Middle,
-            "wide" => PageWidth::Wide,
-            _ => PageWidth::Narrow,
-        }
-    }
-
-    /// Its place on the way from Narrow to Wide, which a change eases along.
-    fn level(self) -> f32 {
-        match self {
-            PageWidth::Narrow => 0.,
-            PageWidth::Middle => 1.,
-            PageWidth::Wide => 2.,
-        }
-    }
-}
-
-/// Narrow's sheet, a comfortable line of reading. Wide runs to the page's
-/// edges and Middle halfway there, as far as `MIDDLE_MOST`, past which a
-/// big monitor would stretch it toward Wide. A page no wider than Narrow
-/// has room for one width, and all three are it.
-const NARROW_W: f32 = 700.;
-const MIDDLE_MOST: f32 = 960.;
+/// The sheet's own width is halfway from `READ_W`, a comfortable line of
+/// reading, to the page's edges, as far as `SHEET_MOST`, past which a big
+/// monitor would stretch it; full width it runs to the page's edges. A
+/// page no wider than `READ_W` has room for one width, and both are it.
+/// The sheet is full width while a pane stands beside it, and its own
+/// width while it is alone on the page: nobody chooses it.
+const READ_W: f32 = 700.;
+const SHEET_MOST: f32 = 960.;
 /// The tinted page shows this much round the sheet, and the words stand
-/// `SHEET_GUTTER` in from its edge, Middle's and narrower, and Wide's.
+/// `SHEET_GUTTER` in from its edge at every width, so a full sheet in a
+/// page with no more room than its own width has the same room for words.
 const SHEET_MARGIN: Pixels = px(16.);
-const SHEET_GUTTER: (f32, f32) = (32., 48.);
+const SHEET_GUTTER: f32 = 32.;
 /// The least the window is dragged to.
 pub const MIN_W: Pixels = px(720.);
 /// How often the vault's changes are looked for.
@@ -229,6 +187,9 @@ struct Tab {
     /// A file of the vault's assets shown in the tab, read only; the
     /// editor holds it when it reads as markdown. None for a note.
     asset: Option<Asset>,
+    /// The note's source, once the source pane has shown it (`source.rs`):
+    /// its own, as the editor is, with its caret, scroll and history.
+    source: Option<Entity<SourcePane>>,
 }
 
 /// Where a new vault goes: a folder named for it under iCloud Drive's
@@ -281,17 +242,37 @@ pub struct Shell {
     win_move: bool,
     /// What every editor is set in, and how every note is shown.
     pub(crate) look: Look,
-    mode: Mode,
-    /// The page's width, the card's, figured as each frame is built, so
-    /// the sheet is never a frame behind a window being resized.
     /// When a script's last press has landed, for its picture.
     go_ends: u64,
-    /// A group opened out of its square: which, when, whether it is
-    /// opening or closing, and how open it was when that began.
-    strip_fly: Option<(StripEnd, Instant, bool, f32)>,
-    width: PageWidth,
-    /// A change of width under way: the level it began from, and when.
-    width_anim: Option<(f32, Instant)>,
+    /// The note's source in a pane at the page's left (`source.rs`), for
+    /// every note, kept: whether it shows; its coming or going, how far
+    /// out it was then, when, and its number; its share of the card; and
+    /// whether its edge is held.
+    source_on: bool,
+    source_anim: Option<(f32, Instant, u32)>,
+    source_share: f32,
+    source_drag: bool,
+    /// The terminal at the page's right (`terminal.rs`), the vault's
+    /// shells: made the first time it shows; whether it shows, not kept
+    /// past a launch, as its shells are not; its coming or going as the
+    /// source's; its width, kept; and whether its edge is held.
+    terminal: Option<Entity<TermPanel>>,
+    term_on: bool,
+    term_anim: Option<(f32, Instant, u32)>,
+    term_w: f32,
+    term_drag: bool,
+    _term_sub: Option<Subscription>,
+    /// Whether the terminal was asked for after the source: in a card too
+    /// narrow for both, the one asked for last shows.
+    term_latest: bool,
+    /// The card less the terminal at this frame: the room the source's
+    /// share is of, for a drag of its edge to measure by.
+    source_room: f32,
+    /// The card's place and width, and the note's page beside the source,
+    /// figured as each frame is built, so the sheet is never a frame
+    /// behind a window being resized.
+    card_x: Pixels,
+    card_w: f32,
     page_w: f32,
     /// The color the window's own ground was last set to, so it is set
     /// once and not at every frame.
@@ -517,11 +498,21 @@ impl Shell {
         }
         let mut shell = Self {
             look: Self::look_of(&cfg.editor),
-            mode: Mode::from_key(ui.mode.as_deref().unwrap_or("live")),
-            width: ui.page_width.as_deref().map(PageWidth::from_key).unwrap_or_default(),
-            width_anim: None,
-            strip_fly: None,
+            source_on: ui.source_open.unwrap_or(false),
+            source_anim: None,
+            source_share: ui.source_share.unwrap_or(0.5).clamp(0.1, 0.9),
+            source_drag: false,
+            terminal: None,
+            term_on: false,
+            term_anim: None,
+            term_w: ui.term_w.unwrap_or(crate::terminal::TERM_W).max(crate::terminal::TERM_LEAST),
+            term_drag: false,
+            _term_sub: None,
+            term_latest: false,
+            source_room: 0.,
             go_ends: 0,
+            card_x: px(0.),
+            card_w: 0.,
             page_w: 0.,
             cfg,
             motion: Motion::default(),
@@ -641,7 +632,9 @@ impl Shell {
         ui.side_view = Some(self.side_view.key().to_string());
         ui.sidebar_w = Some(f32::from(self.sidebar_w));
         ui.settings_section = Some(self.settings_section.to_string());
-        ui.page_width = Some(self.width.key().to_string());
+        ui.source_open = Some(self.source_on);
+        ui.source_share = Some(self.source_share);
+        ui.term_w = Some(self.term_w);
         if std::env::var_os("ONYX_VAULT").is_none() {
             ui.vault = self.vault.as_ref().map(|v| v.root.clone());
             ui.note = self.shown.clone();
@@ -678,6 +671,13 @@ impl Shell {
         let look = self.look.clone();
         for tab in &self.tabs {
             tab.editor.update(cx, |ed, cx| ed.set_look(look.clone(), cx));
+            if let Some(pane) = &tab.source {
+                pane.update(cx, |p, cx| p.set_look(look.clone(), cx));
+            }
+        }
+        if let Some(term) = &self.terminal {
+            let cfg = self.cfg.terminal.clone();
+            term.update(cx, |t, cx| t.set_look(cfg, look.mono_family.clone(), cx));
         }
     }
 
@@ -938,8 +938,12 @@ impl Shell {
 
     /// The tab showing, and its editor.
     fn shown_tab(&self) -> Option<&Tab> {
+        self.shown_index().map(|i| &self.tabs[i])
+    }
+
+    fn shown_index(&self) -> Option<usize> {
         let shown = self.shown.as_ref()?;
-        self.tabs.iter().find(|t| t.path == *shown)
+        self.tabs.iter().position(|t| t.path == *shown)
     }
 
     pub(crate) fn shown_editor(&self) -> Option<Entity<Editor>> {
@@ -950,12 +954,10 @@ impl Shell {
     fn make_editor(&self, path: &Path, text: &str, cx: &mut Context<Self>) -> (Entity<Editor>, Subscription) {
         let editor = cx.new(Editor::new);
         let look = self.look.clone();
-        let mode = self.mode;
         let root = self.vault_root().map(Path::to_path_buf);
         let (writing, words) = (self.writing_language(), self.words.clone());
         editor.update(cx, |e, cx| {
             e.set_look(look, cx);
-            e.set_mode(mode, cx);
             e.set_place(path.to_path_buf(), root, cx);
             e.set_writing(writing, words, cx);
             e.set_text(text, cx);
@@ -1050,7 +1052,7 @@ impl Shell {
             Ok(text) => {
                 let (editor, sub) = self.make_editor(&path, &text, cx);
                 let (title, title_sub) = self.make_title(&path, window, cx);
-                self.tabs.push(Tab { path: path.clone(), editor, title, dirty: false, saved: text, save_due: None, _sub: sub, _title_sub: title_sub, asset: None });
+                self.tabs.push(Tab { path: path.clone(), editor, title, dirty: false, saved: text, save_due: None, _sub: sub, _title_sub: title_sub, asset: None, source: None });
                 self.closed_tabs.retain(|c| *c != path);
                 self.sort_tabs();
                 self.show_tab(&path, window, cx);
@@ -2063,6 +2065,11 @@ impl Shell {
                 if let (Some(cell), Some(editor)) = (self.menu_cell.take(), self.menu_editor.clone()) {
                     let id = id.to_string();
                     editor.update(cx, |e, cx| e.table_do(&id, cell, cx));
+                }
+            }
+            ("terminal", id) => {
+                if let Some(term) = self.terminal.clone() {
+                    term.update(cx, |t, cx| t.menu_do(id, window, cx));
                 }
             }
             ("canvas" | "edit", id) => {
@@ -3343,234 +3350,520 @@ impl Shell {
         }
     }
 
-    /// How the note is shown, three squares in a group at the bar's
-    /// left, each in its own color: the pencil in amber, the source in
-    /// blue, the book in green.
-    /// The ends of the tabs' row: how notes are shown at the left and how
-    /// wide at the right, each a square with its choice on it, only while
-    /// a note shows, since neither says anything to the vault's page. Both
-    /// ends keep their width with or without them, so the tabs keep one
-    /// center line, and the squares fade as they come and go.
+    /// The ends of the tabs' row, after Emaki's panel buttons: at the
+    /// left the note's source (a note's only), at the right the terminal
+    /// (while a vault is open), each its icon alone, only while what it
+    /// acts on shows. Both ends keep their width with or without them, so
+    /// the tabs keep one center line, and the buttons fade as they come
+    /// and go.
     fn render_strip_ends(&self, cx: &mut Context<Self>) -> (AnyElement, AnyElement) {
-        let on = self.shown.is_some();
-        let moving = self.motion.presence("strip-ends", on, cx);
-        let fade = |square: AnyElement, id: &'static str| -> AnyElement {
-            match moving {
-                Some((coming, serial)) => div().child(square).with_animation((id, serial as u64), Animation::new(crate::widgets::FOLD_ANIM).with_easing(ease_out_quint()), move |d, t| d.opacity(if coming { t } else { 1. - t })).into_any_element(),
-                None => square,
+        let note = self.shown_tab().is_some_and(|t| t.asset.is_none());
+        let end = |id: &'static str, on: bool, button: AnyElement, cx: &mut Context<Self>| -> Option<AnyElement> {
+            match self.motion.presence(id, on, cx) {
+                Some((coming, serial)) => Some(div().child(button).with_animation((id, serial as u64), Animation::new(crate::widgets::FOLD_ANIM).with_easing(ease_out_quint()), move |d, t| d.opacity(if coming { t } else { 1. - t })).into_any_element()),
+                None => on.then_some(button),
             }
         };
-        let drawn = on || moving.is_some();
-        let modes = h_flex().w(STRIP_CAP).flex_shrink_0().items_center().when(drawn, |d| d.child(fade(self.render_strip_square(StripEnd::Modes, cx), "strip-modes"))).into_any_element();
-        let widths = h_flex().w(STRIP_CAP).flex_shrink_0().justify_end().items_center().when(drawn, |d| d.child(fade(self.render_strip_square(StripEnd::Widths, cx), "strip-widths"))).into_any_element();
-        (modes, widths)
+        let source = self.toggle_button("strip-source", "icons/file-code.svg", t("Source (⌘⇧S)"), self.pressed_line(self.source_anim, self.source_shown()), Rc::new(|this, window, cx| this.toggle_source(window, cx)), cx);
+        let term = self.toggle_button("strip-term", "icons/terminal.svg", t("Terminal (⌃`)"), self.pressed_line(self.term_anim, self.term_shown()), Rc::new(|this, window, cx| this.toggle_terminal(window, cx)), cx);
+        let source = end("strip-source", note, source, cx);
+        let term = end("strip-term", self.vault.is_some() || self.term_on, term, cx);
+        let left = h_flex().w(TOGGLE_W).flex_shrink_0().items_center().children(source).into_any_element();
+        let right = h_flex().w(TOGGLE_W).flex_shrink_0().justify_end().items_center().children(term).into_any_element();
+        (left, right)
     }
 
-    /// A group at rest: the group's line with the choice in it and no
-    /// plate, which says which of several is chosen and here there is one.
-    /// The group that opens is this same line grown.
-    fn render_strip_square(&self, end: StripEnd, cx: &mut Context<Self>) -> AnyElement {
+    /// What a button's line grows or shrinks from, whether it shows, and
+    /// the press's number: what was before the press while the press is a
+    /// moment old, after that what is, as Emaki's `pressed_from`.
+    fn pressed_line(&self, press: Option<(f32, Instant, u32)>, on: bool) -> (bool, bool, u32) {
+        match press {
+            Some((from, at, serial)) => (if at.elapsed() < Duration::from_millis(300) { from >= 0.5 } else { on }, on, serial + 1),
+            None => (on, on, 0),
+        }
+    }
+
+    /// A button that shows a thing and puts it away, as Emaki's: its icon
+    /// alone, gray and washed under the pointer, in the ink while what it
+    /// shows is out, with a short line of the accent under it that grows
+    /// out from its middle and shrinks back.
+    #[allow(clippy::type_complexity)]
+    fn toggle_button(&self, id: &'static str, icon: &'static str, label: &'static str, (was, on, serial): (bool, bool, u32), click: Rc<dyn Fn(&mut Self, &mut Window, &mut Context<Self>)>, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
-        let (id, icon, label, tint): (&'static str, &'static str, SharedString, Hsla) = match end {
-            StripEnd::Modes => match self.mode {
-                Mode::Live => ("strip-modes-square", "icons/pencil-simple.svg", t("Edit (⌃1)").into(), theme.warning),
-                Mode::Source => ("strip-modes-square", "icons/file-code.svg", t("Source (⌃2)").into(), theme.info),
-                Mode::Reading => ("strip-modes-square", "icons/book-open.svg", t("Read (⌃3)").into(), theme.success),
-            },
-            StripEnd::Widths => match self.width {
-                PageWidth::Narrow => ("strip-widths-square", "icons/width-narrow.svg", t("Narrow (⌥1)").into(), theme.primary),
-                PageWidth::Middle => ("strip-widths-square", "icons/width-middle.svg", t("Middle (⌥2)").into(), theme.primary),
-                PageWidth::Wide => ("strip-widths-square", "icons/width-wide.svg", t("Wide (⌥3)").into(), theme.primary),
-            },
-        };
-        let hover_bg = theme.muted;
-        div()
+        let lit = theme.foreground;
+        let wash = theme.muted;
+        let label: SharedString = label.into();
+        let accent = theme.primary;
+        h_flex()
             .id(id)
-            .size(STRIP_CAP)
+            .relative()
+            .size(TOGGLE_W)
             .flex_shrink_0()
-            .flex()
             .items_center()
             .justify_center()
-            .rounded(STRIP_CAP_R)
-            .border_1()
-            .border_color(theme.border)
+            .rounded(px(7.))
             .cursor_pointer()
-            .hover(|s| s.bg(hover_bg))
+            .text_color(if on { lit } else { theme.muted_foreground })
+            .hover(move |s| s.bg(wash).text_color(lit))
             .managed_tooltip(move |window, cx| tip(label.clone(), window, cx))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |this, _, window, cx| {
                 swallow_click(window, cx);
-                this.strip_fly = Some((end, Instant::now(), true, this.strip_fly_open()));
-                cx.notify();
+                click(this, window, cx);
             }))
-            .child(Icon::default().path(icon).with_size(px(14.)).text_color(tint))
+            .child(Icon::default().path(icon).with_size(px(15.)))
+            .children((on || was).then(|| {
+                let (a, b) = (if was { 1. } else { 0. }, if on { 1. } else { 0. });
+                let w = 14.;
+                div().absolute().bottom(px(1.)).left(TOGGLE_W / 2.).h(px(2.)).rounded(px(1.)).bg(accent).with_animation(ElementId::Name(format!("{id}-mark-{serial}").into()), Animation::new(Duration::from_millis(260)).with_easing(ease_out_quint()), move |d, t| {
+                    let now = w * (a + (b - a) * t);
+                    d.w(px(now)).ml(px(-now / 2.))
+                })
+            }))
             .into_any_element()
     }
 
-    /// How open the group is, from 0 at its square to 1 at its three,
-    /// eased on the window's clock.
-    fn strip_fly_open(&self) -> f32 {
-        let Some((_, at, open, from)) = self.strip_fly else { return 0. };
-        let to = if open { 1. } else { 0. };
-        from + (to - from) * ease_out_quint()((at.elapsed().as_secs_f32() / SLIDE.as_secs_f32()).min(1.))
+    /// The note's source beside it, or put away: ⌘⇧S, the View menu and
+    /// the strip's button, for every note, and kept. The keyboard goes
+    /// with it: in the note as it opens, it goes to the same place in the
+    /// source; in the source as it goes, back to the note.
+    pub(crate) fn toggle_source(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let was = self.panes_now();
+        // Put away for the terminal in a card too narrow for both, it comes
+        // back in the terminal's place.
+        if !(self.source_on && !self.source_shown()) {
+            self.source_on = !self.source_on;
+        }
+        self.term_latest = false;
+        self.panes_moved(was);
+        if let Some(ix) = self.shown_index().filter(|&i| self.tabs[i].asset.is_none()) {
+            let editor = self.tabs[ix].editor.clone();
+            if self.source_shown() {
+                let in_note = editor.read(cx).focus_handle(cx).is_focused(window);
+                let pane = self.source_pane(ix, window, cx);
+                if in_note {
+                    let at = editor.read(cx).caret_byte();
+                    pane.update(cx, |p, cx| p.put_caret(at, cx));
+                    window.focus(&pane.focus_handle(cx), cx);
+                }
+            } else if let Some(pane) = self.tabs[ix].source.clone() {
+                if pane.focus_handle(cx).contains_focused(window, cx) {
+                    let at = pane.read(cx).caret(cx);
+                    editor.update(cx, |e, cx| e.put_caret_at(at, window, cx));
+                }
+            }
+        }
+        self.save_ui(window);
+        cx.notify();
     }
 
-    /// It folds back from wherever it stands, so a press while it opens
-    /// turns it without a jump.
-    fn strip_fly_close(&mut self, cx: &mut Context<Self>) {
-        if let Some((end, _, true, _)) = self.strip_fly {
-            self.strip_fly = Some((end, Instant::now(), false, self.strip_fly_open()));
-            cx.notify();
+    /// How far the source pane is out, 0 to 1, eased on the window's clock.
+    fn source_t(&self) -> f32 {
+        let to = if self.source_shown() { 1. } else { 0. };
+        match self.source_anim {
+            Some((from, at, _)) if at.elapsed() < SLIDE => from + (to - from) * ease_out_quint()(at.elapsed().as_secs_f32() / SLIDE.as_secs_f32()),
+            _ => to,
         }
     }
 
-    /// A group, open in place: its line widens along the row to hold the
-    /// three, the chosen square sliding from where it stood to its own
-    /// place on a plate that comes as it opens, while the others come out
-    /// from behind it. It lies over the tabs and moves nothing, solid, with a line and a small shadow that
-    /// comes as it opens, so a tab under it passes behind a clean edge. A
-    /// choice folds it, and so does a press anywhere else.
-    fn render_strip_fly(&mut self, card_x: Pixels, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let (end, at, open, _) = self.strip_fly?;
-        let done = at.elapsed() >= SLIDE;
-        if !open && done {
-            self.strip_fly = None;
+    fn source_moving(&self) -> bool {
+        self.source_anim.is_some_and(|(_, at, _)| at.elapsed() < SLIDE)
+    }
+
+    /// The source pane's width when all the way out, in a card this wide:
+    /// its share of the card, each side keeping its least; in a card too
+    /// narrow for both, half of it.
+    fn source_full_w(&self, card_w: f32) -> f32 {
+        if card_w < SOURCE_LEAST + NOTE_LEAST {
+            return (card_w / 2.).round();
+        }
+        (card_w * self.source_share).clamp(SOURCE_LEAST, card_w - NOTE_LEAST).round()
+    }
+
+    /// The tab's source pane, made the first time it shows.
+    fn source_pane(&mut self, ix: usize, window: &mut Window, cx: &mut Context<Self>) -> Entity<SourcePane> {
+        if let Some(pane) = &self.tabs[ix].source {
+            return pane.clone();
+        }
+        let editor = self.tabs[ix].editor.clone();
+        let look = self.look.clone();
+        let this = cx.entity().downgrade();
+        let pane = cx.new(|cx| SourcePane::new(&editor, look, |input| Self::source_menu(this.clone(), &editor, input), window, cx));
+        self.tabs[ix].source = Some(pane.clone());
+        pane
+    }
+
+    /// A right click in the source: a marked word's corrections, then the
+    /// text's own choices, acting on the pane's words; a correction is
+    /// made in the note, and so comes here.
+    fn source_menu(this: WeakEntity<Self>, editor: &Entity<Editor>, input: &Entity<gpui_component::input::EditorState>) -> crate::source::MenuAt {
+        let (editor, input) = (editor.clone(), input.clone());
+        Rc::new(move |at, window, cx| {
+            let (this, editor, input) = (this.clone(), editor.clone(), input.clone());
+            // Called from inside the editor's own update: what it does
+            // waits for that to end.
+            window.defer(cx, move |window, cx| {
+                // With nothing selected, the word under the pointer is,
+                // as a right click in Emaki's editor selects it.
+                let selection = input.update(cx, |s, cx| s.select_word_at(at, window, cx));
+                let (focus, offset, text) = {
+                    let s = input.read(cx);
+                    (gpui::Focusable::focus_handle(s, cx), s.offset_at(at), s.value().to_string())
+                };
+                let issue = (editor.read(cx).text() == text).then(|| editor.read(cx).issue_at(offset)).flatten();
+                let clipboard = cx.read_from_clipboard().is_some();
+                let _ = this.update(cx, |this, cx| {
+                    // On a marked word the corrections are the menu, and
+                    // nothing else.
+                    let items = match &issue {
+                        Some(issue) => Self::issue_entries(issue),
+                        None => crate::menu::edit_entries(selection, clipboard, false),
+                    };
+                    this.menu_focus = Some(focus);
+                    this.menu_issue = issue;
+                    this.menu_editor = Some(editor);
+                    this.menu_picture = None;
+                    this.menu_link = None;
+                    this.menu_cell = None;
+                    this.menu_remove = None;
+                    this.menu_layout = None;
+                    this.menus.show("canvas", at, items);
+                    cx.notify();
+                });
+            });
+        })
+    }
+
+    /// The source pane at the page's left, `w` wide at this draw: a sheet
+    /// as the note's is, full height, its words at the width it has all
+    /// the way out, so they do not wrap anew as it slides.
+    fn render_source(&mut self, w: f32, full_w: f32, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if w < 1. {
             return None;
         }
-        if !done {
-            window.request_animation_frame();
-        }
-        let shown = self.strip_fly_open();
-        if open {
-            self.scrollers.over();
-        }
+        let ix = self.shown_index().filter(|&i| self.tabs[i].asset.is_none())?;
+        let pane = self.source_pane(ix, window, cx);
         let theme = cx.theme().clone();
-        // Where the choice stands in its group, counted from the end the
-        // group opens away from.
-        let (group, from_end) = match end {
-            StripEnd::Modes => (
-                self.render_mode_group(shown, cx),
-                match self.mode {
-                    Mode::Live => 0.,
-                    Mode::Source => 1.,
-                    Mode::Reading => 2.,
-                },
-            ),
-            StripEnd::Widths => (self.render_width_group(shown, cx), 2. - self.width.level()),
-        };
-        let scrim = open.then(|| {
-            div().id("strip-fly-scrim").absolute().inset_0().occlude().on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, _, window, cx| {
-                    swallow_click(window, cx);
-                    this.strip_fly_close(cx);
-                }),
-            )
-        });
-        let dark = theme.mode.is_dark();
-        let lift = vec![BoxShadow { color: gpui::black().opacity(if dark { 0.4 } else { 0.1 } * shown), offset: point(px(0.), px(2.)), blur_radius: px(8.), spread_radius: px(0.), inset: false }];
-        let w = STRIP_CAP + (GROUP_W - STRIP_SQUARE) * shown;
-        let slide = (STRIP_SQUARE + px(2.)) * from_end * (1. - shown);
-        let top = FRAME + (TITLEBAR_H - FRAME - STRIP_CAP) / 2.;
-        let right = FRAME + STRIP_END + crate::csd::room(window, cx).1;
+        let shown = self.source_t();
         Some(
             div()
-                .absolute()
-                .inset_0()
-                .children(scrim)
+                .w(px(w))
+                .h_full()
+                .flex_shrink_0()
+                .overflow_hidden()
+                .opacity(shown)
                 .child(
-                    div()
-                        .id("strip-fly")
-                        .occlude()
-                        .absolute()
-                        .top(top)
-                        .map(|d| if end == StripEnd::Modes { d.left(card_x + STRIP_END) } else { d.right(right) })
-                        .w(w)
-                        .h(STRIP_CAP)
-                        .rounded(STRIP_CAP_R)
-                        .bg(theme.background)
-                        .border_1()
-                        .border_color(theme.border)
-                        .shadow(lift)
-                        // The clip is the inside of the line, which the
-                        // squares do not cross on their way out.
-                        .child(div().relative().size_full().overflow_hidden().child(div().absolute().top(STRIP_INSET).w(GROUP_W).flex().map(|d| if end == StripEnd::Modes { d.left(STRIP_INSET - slide).justify_start() } else { d.right(STRIP_INSET - slide).justify_end() }).child(group))),
+                    div().w(px(full_w)).h_full().pl(SHEET_MARGIN).py(SHEET_MARGIN).child(
+                        div()
+                            .size_full()
+                            .rounded(px(10.))
+                            .border_1()
+                            .border_color(theme.border)
+                            .bg(theme.background)
+                            .overflow_hidden()
+                            .pt(px(8.))
+                            // A press in it is its own, not the margin's.
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .child(pane),
+                    ),
                 )
                 .into_any_element(),
         )
     }
 
-    fn render_mode_group(&self, lift: f32, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme().clone();
-        let modes = self.motion.segmented_tinted(
-            "mode",
-            vec![("live", "icons/pencil-simple.svg", t("Edit (⌃1)").into(), theme.warning), ("source", "icons/file-code.svg", t("Source (⌃2)").into(), theme.info), ("reading", "icons/book-open.svg", t("Read (⌃3)").into(), theme.success)],
-            self.mode.key(),
-            lift,
-            Rc::new(|this: &mut Self, key, window, cx| this.set_mode(Mode::from_key(key), window, cx)),
-            cx,
-        );
-        div().on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()).child(modes).into_any_element()
+    /// The edge between the source and the note, which takes a drag as
+    /// the sidebar's does: the source as wide as where the pointer is,
+    /// between its least and the note's; a double click shares the page
+    /// half and half. A line of the accent lights on it under the pointer.
+    fn render_source_grip(&self, x: f32, cx: &mut Context<Self>) -> impl IntoElement {
+        let line = cx.theme().primary.opacity(0.55);
+        let held = self.source_drag;
+        div()
+            .id("source-grip")
+            .group("source-grip")
+            .absolute()
+            .top(SHEET_MARGIN)
+            .bottom(SHEET_MARGIN)
+            .left(px(x + f32::from(SHEET_MARGIN) / 2.) - SIDEBAR_GRIP / 2.)
+            .w(SIDEBAR_GRIP)
+            .occlude()
+            .cursor(CursorStyle::ResizeLeftRight)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, ev: &MouseDownEvent, window, cx| {
+                    swallow_click(window, cx);
+                    if ev.click_count == 2 {
+                        this.source_drag = false;
+                        this.source_share = 0.5;
+                        this.save_ui(window);
+                    } else {
+                        this.source_drag = true;
+                    }
+                    cx.notify();
+                }),
+            )
+            .child(div().absolute().top(CARD_R).bottom(CARD_R).left(SIDEBAR_GRIP / 2. - px(1.)).w(px(2.)).rounded(px(1.)).when(held, |d| d.bg(line)).group_hover("source-grip", move |s| s.bg(line)))
+            .when(held, |d| d.child(canvas(|_, _, _| (), |_, _, window, _| window.set_window_cursor_style(CursorStyle::ResizeLeftRight)).absolute().size_0()))
     }
 
-    /// How wide the note runs, Normal or Wide, a group of two at the
-    /// bar's right in the accent.
-    fn render_width_group(&self, lift: f32, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme().clone();
-        let widths = self.motion.segmented_tinted(
-            "width",
-            vec![("narrow", "icons/width-narrow.svg", t("Narrow (⌥1)").into(), theme.primary), ("middle", "icons/width-middle.svg", t("Middle (⌥2)").into(), theme.primary), ("wide", "icons/width-wide.svg", t("Wide (⌥3)").into(), theme.primary)],
-            self.width.key(),
-            lift,
-            Rc::new(|this: &mut Self, key, window, cx| this.set_width(PageWidth::from_key(key), window, cx)),
-            cx,
-        );
-        div().on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation()).child(widths).into_any_element()
-    }
-
-    pub(crate) fn set_mode(&mut self, mode: Mode, window: &mut Window, cx: &mut Context<Self>) {
-        self.mode = mode;
-        self.strip_fly_close(cx);
-        // An asset reads as it is, whatever the mode.
-        for tab in self.tabs.iter().filter(|t| t.asset.is_none()) {
-            tab.editor.update(cx, |e, cx| e.set_mode(mode, cx));
-        }
-        let mut ui = UiState::load();
-        ui.mode = Some(mode.key().to_string());
-        ui.save_later();
-        // The keyboard stays where it is: a caret placed stays, and a
-        // note left by a click in the margin keeps reading whole.
-        let _ = window;
-        cx.notify();
-    }
-
-    /// How wide every note runs. The app's own, as the mode is: only the
-    /// person changes it, and it is kept. The move starts from wherever
-    /// the sheet is, so a second press while it moves turns it without a
-    /// jump.
-    fn set_width(&mut self, width: PageWidth, window: &mut Window, cx: &mut Context<Self>) {
-        self.strip_fly_close(cx);
-        if width == self.width {
+    /// The pointer moved with the source's edge held.
+    fn source_drag_to(&mut self, e: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if e.pressed_button != Some(MouseButton::Left) {
+            self.source_drag_end(window, cx);
             return;
         }
-        self.width_anim = Some((self.width_level(), Instant::now()));
-        self.width = width;
-        self.save_ui(window);
+        // The share is of the room beside the terminal, as the pane is
+        // drawn (`source_full_w(rest)`): of the whole card, the edge stood
+        // left of the pointer by the terminal's share.
+        let room = self.source_room;
+        if room >= SOURCE_LEAST + NOTE_LEAST {
+            let x = f32::from(e.position.x - self.card_x) - f32::from(SHEET_MARGIN) / 2.;
+            self.source_share = x.clamp(SOURCE_LEAST, room - NOTE_LEAST) / room;
+            cx.notify();
+        }
+    }
+
+    fn source_drag_end(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if std::mem::take(&mut self.source_drag) {
+            self.save_ui(window);
+            cx.notify();
+        }
+    }
+
+    /// Where the sheet stands from its own width (0) to the page's (1):
+    /// full while a pane stands beside it, moving as the pane does.
+    fn width_level(&self) -> f32 {
+        let note = self.shown_tab().is_some_and(|t| t.asset.is_none());
+        let source = if note { self.source_t() } else { 0. };
+        source.max(self.term_t())
+    }
+
+    /// The terminal at the page's right, or put away: ⌃`, the View menu
+    /// and the strip's button. The keyboard goes with it, and back to the
+    /// note as it goes.
+    pub(crate) fn toggle_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        // With no vault there is no folder to open one in; one open still
+        // goes away.
+        let root = self.vault_root().map(Path::to_path_buf);
+        if root.is_none() && !self.term_on {
+            return;
+        }
+        let was = self.panes_now();
+        // Put away for the source in a card too narrow for both, it comes
+        // back in the source's place.
+        let back = self.term_on && !self.term_shown();
+        if !back {
+            self.term_on = !self.term_on;
+        }
+        self.term_latest = true;
+        self.panes_moved(was);
+        let term = self.term_panel(window, cx);
+        if back {
+            window.focus(&term.focus_handle(cx), cx);
+        } else if self.term_on {
+            term.update(cx, |t, cx| {
+                if let Some(root) = root {
+                    t.set_cwd(root);
+                }
+                t.set_shown(true, cx);
+            });
+            window.focus(&term.focus_handle(cx), cx);
+        } else {
+            let had = term.focus_handle(cx).contains_focused(window, cx);
+            term.update(cx, |t, cx| t.set_shown(false, cx));
+            if had {
+                match self.shown_editor() {
+                    Some(e) => window.focus(&e.focus_handle(cx), cx),
+                    None => window.focus(&self.focus, cx),
+                }
+            }
+            // The terminal left is drawn while it goes: once more when it has.
+            cx.spawn(async move |this, cx| {
+                cx.background_executor().timer(SLIDE + Duration::from_millis(20)).await;
+                let _ = this.update(cx, |_, cx| cx.notify());
+            })
+            .detach();
+        }
         cx.notify();
     }
 
-    /// Where the sheet stands from Narrow (0) to Wide (2), eased on the
-    /// window's clock.
-    fn width_level(&self) -> f32 {
-        let to = self.width.level();
-        match &self.width_anim {
-            Some((from, at)) if at.elapsed() < SLIDE => from + (to - from) * ease_out_quint()(at.elapsed().as_secs_f32() / SLIDE.as_secs_f32()),
+    /// The terminal, made the first time it is asked for: its menu is the
+    /// window's, and ⌘W with no tab left in it puts it away.
+    fn term_panel(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Entity<TermPanel> {
+        if let Some(t) = &self.terminal {
+            return t.clone();
+        }
+        let this = cx.entity().downgrade();
+        let menu: crate::terminal::TermMenu = Rc::new(move |at, items, _, cx| {
+            let _ = this.update(cx, |this, cx| {
+                this.menu_focus = None;
+                this.menus.show("terminal", at, items);
+                cx.notify();
+            });
+        });
+        let root = self.vault_root().map(Path::to_path_buf).unwrap_or_else(onyx_core::paths::home);
+        let (cfg, mono) = (self.cfg.terminal.clone(), self.look.mono_family.clone());
+        let term = cx.new(|cx| TermPanel::new(root, cfg, mono, menu, cx));
+        self._term_sub = Some(cx.subscribe_in(&term, window, |this: &mut Self, _, ev: &TermEvent, window, cx| match ev {
+            TermEvent::Away => {
+                if this.term_on {
+                    this.toggle_terminal(window, cx);
+                }
+            }
+        }));
+        self.terminal = Some(term.clone());
+        term
+    }
+
+    /// How far the terminal is out, 0 to 1, eased on the window's clock.
+    fn term_t(&self) -> f32 {
+        let to = if self.term_shown() { 1. } else { 0. };
+        match self.term_anim {
+            Some((from, at, _)) if at.elapsed() < SLIDE => from + (to - from) * ease_out_quint()(at.elapsed().as_secs_f32() / SLIDE.as_secs_f32()),
             _ => to,
         }
     }
 
-    fn width_moving(&self) -> bool {
-        self.shown.is_some() && self.width_anim.as_ref().is_some_and(|(_, at)| at.elapsed() < SLIDE)
+    /// Whether the source and the terminal both fit beside the note, each
+    /// at its least.
+    fn panes_fit(&self) -> bool {
+        self.card_w >= crate::terminal::TERM_LEAST + SOURCE_LEAST + NOTE_LEAST
+    }
+
+    /// Whether the source pane shows: asked for, on a note, and not put
+    /// away for the terminal asked for after it in a card too narrow for
+    /// both, as Emaki's panels give way. It comes back when there is room;
+    /// its button says what shows.
+    fn source_shown(&self) -> bool {
+        let note = self.shown_tab().is_some_and(|t| t.asset.is_none());
+        self.source_on && note && !(self.term_on && self.term_latest && !self.panes_fit())
+    }
+
+    /// Whether the terminal shows: asked for, and not put away for the
+    /// source asked for after it in a card too narrow for both.
+    fn term_shown(&self) -> bool {
+        let note = self.shown_tab().is_some_and(|t| t.asset.is_none());
+        self.term_on && !(self.source_on && note && !self.term_latest && !self.panes_fit())
+    }
+
+    /// What shows of the two, and how far out each is, before a change.
+    fn panes_now(&self) -> ((bool, f32), (bool, f32)) {
+        ((self.source_shown(), self.source_t()), (self.term_shown(), self.term_t()))
+    }
+
+    /// After a change, each pane whose showing changed comes or goes from
+    /// where it stood.
+    fn panes_moved(&mut self, ((source, s_at), (term, t_at)): ((bool, f32), (bool, f32))) {
+        let now = Instant::now();
+        if self.source_shown() != source {
+            self.source_anim = Some((s_at, now, self.source_anim.map_or(0, |(_, _, n)| n + 1)));
+        }
+        if self.term_shown() != term {
+            self.term_anim = Some((t_at, now, self.term_anim.map_or(0, |(_, _, n)| n + 1)));
+        }
+    }
+
+    fn term_moving(&self) -> bool {
+        self.term_anim.is_some_and(|(_, at, _)| at.elapsed() < SLIDE)
+    }
+
+    /// The terminal's width when all the way out, in a card this wide: its
+    /// own, leaving the note and the source their least; in a card too
+    /// narrow for them all, a share as the others have.
+    fn term_full_w(&self, card_w: f32) -> f32 {
+        let source = self.source_shown();
+        let others = NOTE_LEAST + if source { SOURCE_LEAST } else { 0. };
+        if card_w < crate::terminal::TERM_LEAST + others {
+            return (card_w / if source { 3. } else { 2. }).round();
+        }
+        self.term_w.clamp(crate::terminal::TERM_LEAST, card_w - others).round()
+    }
+
+    /// The terminal at the page's right, `w` wide at this draw: a sheet of
+    /// its own ground, full height, at the width it has all the way out,
+    /// so its screen keeps its columns as it slides.
+    fn render_terminal(&mut self, w: f32, full_w: f32, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if w < 1. {
+            return None;
+        }
+        let term = self.terminal.clone()?;
+        let theme = cx.theme().clone();
+        let ground = term.read(cx).ground(cx);
+        Some(
+            div()
+                .w(px(w))
+                .h_full()
+                .flex_shrink_0()
+                .overflow_hidden()
+                .opacity(self.term_t())
+                .child(
+                    div().w(px(full_w)).h_full().pr(SHEET_MARGIN).py(SHEET_MARGIN).child(
+                        div()
+                            .size_full()
+                            .rounded(px(crate::terminal::SHEET_R))
+                            .border_1()
+                            .border_color(theme.border)
+                            .bg(ground)
+                            .overflow_hidden()
+                            // A press in it is its own, not the margin's.
+                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                            .child(term),
+                    ),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// The edge between the note and the terminal, as the source's: the
+    /// terminal as wide as from the pointer to the card's edge; a double
+    /// click puts its width back.
+    fn render_term_grip(&self, x: f32, cx: &mut Context<Self>) -> impl IntoElement {
+        let line = cx.theme().primary.opacity(0.55);
+        let held = self.term_drag;
+        div()
+            .id("term-grip")
+            .group("term-grip")
+            .absolute()
+            .top(SHEET_MARGIN)
+            .bottom(SHEET_MARGIN)
+            .left(px(x - f32::from(SHEET_MARGIN) / 2.) - SIDEBAR_GRIP / 2.)
+            .w(SIDEBAR_GRIP)
+            .occlude()
+            .cursor(CursorStyle::ResizeLeftRight)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, ev: &MouseDownEvent, window, cx| {
+                    swallow_click(window, cx);
+                    if ev.click_count == 2 {
+                        this.term_drag = false;
+                        this.term_w = crate::terminal::TERM_W;
+                        this.save_ui(window);
+                    } else {
+                        this.term_drag = true;
+                    }
+                    cx.notify();
+                }),
+            )
+            .child(div().absolute().top(CARD_R).bottom(CARD_R).left(SIDEBAR_GRIP / 2. - px(1.)).w(px(2.)).rounded(px(1.)).when(held, |d| d.bg(line)).group_hover("term-grip", move |s| s.bg(line)))
+            .when(held, |d| d.child(canvas(|_, _, _| (), |_, _, window, _| window.set_window_cursor_style(CursorStyle::ResizeLeftRight)).absolute().size_0()))
+    }
+
+    /// The pointer moved with the terminal's edge held.
+    fn term_drag_to(&mut self, e: &MouseMoveEvent, window: &mut Window, cx: &mut Context<Self>) {
+        if e.pressed_button != Some(MouseButton::Left) {
+            if std::mem::take(&mut self.term_drag) {
+                self.save_ui(window);
+                cx.notify();
+            }
+            return;
+        }
+        let w = f32::from(self.card_x) + self.card_w - f32::from(e.position.x) - f32::from(SHEET_MARGIN) / 2.;
+        let source = self.source_shown();
+        let most = self.card_w - NOTE_LEAST - if source { SOURCE_LEAST } else { 0. };
+        if most >= crate::terminal::TERM_LEAST {
+            self.term_w = w.clamp(crate::terminal::TERM_LEAST, most);
+            cx.notify();
+        }
     }
 
     // -- the page ---------------------------------------------------------------
@@ -3823,7 +4116,7 @@ impl Shell {
                 .into_any_element()
         };
         let sheet_w = sheet_width(level, self.page_w);
-        let gutter = SHEET_GUTTER.0 + (SHEET_GUTTER.1 - SHEET_GUTTER.0) * (level - 1.).max(0.);
+        let gutter = SHEET_GUTTER;
         div()
             .relative()
             .size_full()
@@ -4205,16 +4498,12 @@ pub(crate) fn page_ground(theme: &gpui_component::Theme) -> Hsla {
     theme.background.blend(theme.muted.opacity(0.3))
 }
 
-/// The sheet's width at a level from Narrow (0) to Wide (2) on a page
-/// this wide.
+/// The sheet's width at a level from its own (0) to full width (1) on a
+/// page this wide.
 fn sheet_width(level: f32, page: f32) -> f32 {
-    let wide = (page - 2. * f32::from(SHEET_MARGIN)).max(NARROW_W);
-    let middle = ((NARROW_W + wide) / 2.).min(MIDDLE_MOST);
-    if level <= 1. {
-        NARROW_W + (middle - NARROW_W) * level
-    } else {
-        middle + (wide - middle) * (level - 1.)
-    }
+    let wide = (page - 2. * f32::from(SHEET_MARGIN)).max(READ_W);
+    let own = ((READ_W + wide) / 2.).min(SHEET_MOST);
+    own + (wide - own) * level
 }
 
 /// A name typed in a field that wraps, as a file's name: its lines joined
@@ -4310,7 +4599,7 @@ impl Render for Shell {
             self.ground.set(Some(frame));
             crate::sys::set_window_ground(window, frame.to_rgb());
         }
-        if self.sidebar_moving() || self.width_moving() {
+        if self.sidebar_moving() || self.source_moving() || self.term_moving() {
             window.request_animation_frame();
         }
         let t_side = self.side_t();
@@ -4323,8 +4612,19 @@ impl Render for Shell {
         // any of them moves.
         let items: Vec<TabItem> = self.tabs.iter().map(|t| TabItem { path: t.path.clone(), title: Self::tab_title(&t.path) }).collect();
         let card_x = side_w.max(RAIL_W);
-        self.page_w = f32::from(window.viewport_size().width - card_x - FRAME);
-        let strip_inner = self.page_w - f32::from(STRIP_END * 2. + crate::csd::room(window, cx).1 + (STRIP_CAP + STRIP_END_GAP) * 2.);
+        self.card_x = card_x;
+        self.card_w = f32::from(window.viewport_size().width - card_x - FRAME);
+        // The source pane's room, as far out as it is, a note's only.
+        let note = self.shown_tab().is_some_and(|t| t.asset.is_none());
+        // The terminal's room at the right, as far out as it is.
+        let term_full = self.term_full_w(self.card_w);
+        let term_w = if self.terminal.is_some() { (term_full * self.term_t()).round() } else { 0. };
+        let rest = self.card_w - term_w;
+        self.source_room = rest;
+        let source_full = self.source_full_w(rest);
+        let source_w = if note { (source_full * self.source_t()).round() } else { 0. };
+        self.page_w = rest - source_w;
+        let strip_inner = self.card_w - f32::from(STRIP_END * 2. + crate::csd::room(window, cx).1 + (TOGGLE_W + STRIP_END_GAP) * 2.);
         self.tabs_row.sync(strip_inner - crate::tabs::STRIP_GAP * 2., &items, self.shown.as_deref(), window, cx);
         if self.tabs_row.moving() {
             window.request_animation_frame();
@@ -4332,9 +4632,6 @@ impl Render for Shell {
         let root = self.vault_root().map(Path::to_path_buf);
         // No tab, no row: the plus alone on the strip said nothing.
         let center = if items.is_empty() { div().flex_1().min_w_0().into_any_element() } else { self.tabs_row.render(&items, self.shown.as_deref(), root.as_deref(), cx) };
-        if self.shown.is_none() {
-            self.strip_fly = None;
-        }
         let (modes, widths) = self.render_strip_ends(cx);
         let notice = self.render_notice(&theme, cx);
         let path_bar = self.render_path_bar(cx);
@@ -4342,6 +4639,10 @@ impl Render for Shell {
             div().w_full().flex_shrink_0().overflow_hidden().child(self.render_find_bar(cx)).with_animation("find-bar-in", Animation::new(crate::widgets::MENU_IN).with_easing(ease_out_quint()), |d, t| if t >= 1. { d } else { d.max_h(px(64. * t)).opacity(t) })
         });
         let page = self.render_page(window, cx);
+        let source = self.render_source(source_w, source_full, window, cx);
+        let source_grip = (source.is_some() && self.source_shown()).then(|| self.render_source_grip(source_w, cx));
+        let terminal = self.render_terminal(term_w, term_full, cx);
+        let term_grip = (terminal.is_some() && self.term_shown()).then(|| self.render_term_grip(rest, cx));
         // Under the tabs' row the card is the page's tint, one ground for
         // the path bar, the find bar and the page, with no line between
         // them: the sheet's edge is the one line below the tabs. The card
@@ -4363,8 +4664,19 @@ impl Render for Shell {
                     .bg(page_ground(&theme))
                     .children(path_bar)
                     .children(notice)
-                    .children(find_bar)
-                    .child(div().relative().flex_1().min_h_0().child(page)),
+                    .child(
+                        // The source at the left, the note beside it.
+                        h_flex()
+                            .relative()
+                            .flex_1()
+                            .min_h_0()
+                            .items_stretch()
+                            .children(source)
+                            .child(v_flex().flex_1().min_w_0().h_full().children(find_bar).child(div().relative().flex_1().min_h_0().child(page)))
+                            .children(terminal)
+                            .children(source_grip)
+                            .children(term_grip),
+                    ),
             );
         let pick = Rc::new(|this: &mut Self, what: &'static str, id: SharedString, window: &mut Window, cx: &mut Context<Self>| this.menu_pick(what, id, window, cx));
         let close = Rc::new(|this: &mut Self, cx: &mut Context<Self>| {
@@ -4385,7 +4697,6 @@ impl Render for Shell {
         let rail = self.render_rail(cx);
         let fly = self.render_rail_fly(window, cx);
         let strip = self.render_strip(cx);
-        let strip_fly = self.render_strip_fly(card_x, window, cx);
         let this = cx.entity().downgrade();
         let ambient = self.ambient.clone();
         crate::editor::stamp("shell render ends");
@@ -4427,16 +4738,8 @@ impl Render for Shell {
             .on_action(cx.listener(|this, _: &Tab7, window, cx| this.go_tab(7, window, cx)))
             .on_action(cx.listener(|this, _: &Tab8, window, cx| this.go_tab(8, window, cx)))
             .on_action(cx.listener(|this, _: &Tab9, window, cx| this.go_tab(9, window, cx)))
-            .on_action(cx.listener(|this, _: &ShowLive, window, cx| this.set_mode(Mode::Live, window, cx)))
-            .on_action(cx.listener(|this, _: &ShowSource, window, cx| this.set_mode(Mode::Source, window, cx)))
-            .on_action(cx.listener(|this, _: &ShowReading, window, cx| this.set_mode(Mode::Reading, window, cx)))
-            .on_action(cx.listener(|this, _: &ToggleReading, window, cx| {
-                let mode = if this.mode == Mode::Reading { Mode::Live } else { Mode::Reading };
-                this.set_mode(mode, window, cx)
-            }))
-            .on_action(cx.listener(|this, _: &ShowNarrow, window, cx| this.set_width(PageWidth::Narrow, window, cx)))
-            .on_action(cx.listener(|this, _: &ShowMiddle, window, cx| this.set_width(PageWidth::Middle, window, cx)))
-            .on_action(cx.listener(|this, _: &ShowWide, window, cx| this.set_width(PageWidth::Wide, window, cx)))
+            .on_action(cx.listener(|this, _: &ToggleSource, window, cx| this.toggle_source(window, cx)))
+            .on_action(cx.listener(|this, _: &ToggleTerminal, window, cx| this.toggle_terminal(window, cx)))
             .on_action(cx.listener(|this, _: &ToggleSearch, window, cx| this.toggle_search(window, cx)))
             .on_action(cx.listener(|this, _: &FindInNote, window, cx| this.find_in_note(window, cx)))
             .on_action(cx.listener(|this, _: &FindNext, _, cx| this.find_step(1, cx)))
@@ -4452,7 +4755,6 @@ impl Render for Shell {
                     this.close_search(window, cx);
                 }
                 this.rail_fly_close(cx);
-                this.strip_fly_close(cx);
                 this.pressed = None;
                 this.menus.close(cx);
                 cx.notify();
@@ -4480,7 +4782,13 @@ impl Render for Shell {
                                     if s.side_drag {
                                         s.side_drag_to(e, window, cx);
                                     }
-                                    s.side_drag
+                                    if s.source_drag {
+                                        s.source_drag_to(e, window, cx);
+                                    }
+                                    if s.term_drag {
+                                        s.term_drag_to(e, window, cx);
+                                    }
+                                    s.side_drag || s.source_drag || s.term_drag
                                 });
                                 if held.unwrap_or(false) {
                                     cx.stop_propagation();
@@ -4489,16 +4797,25 @@ impl Render for Shell {
                         });
                         window.on_mouse_event(move |_: &MouseUpEvent, phase, window, cx| {
                             if phase == DispatchPhase::Capture {
-                                let _ = lifter.update(cx, |s, cx| s.side_drag_end(window, cx));
+                                let _ = lifter.update(cx, |s, cx| {
+                                    s.side_drag_end(window, cx);
+                                    s.source_drag_end(window, cx);
+                                });
                             }
                         });
                         window.on_mouse_event(move |e: &ScrollWheelEvent, phase, window, cx| {
                             if phase == DispatchPhase::Capture {
                                 let system = crate::sys::sheet_over(window);
-                                let taken = router.update(cx, |s, _| s.scrollers.route(e, system)).unwrap_or(false);
-                                if taken {
-                                    cx.stop_propagation();
-                                    let _ = router.update(cx, |_, cx| cx.notify());
+                                match router.update(cx, |s, _| s.scrollers.route(e, system)) {
+                                    Ok(crate::scroll::Route::Stop) => {
+                                        cx.stop_propagation();
+                                        let _ = router.update(cx, |_, cx| cx.notify());
+                                    }
+                                    Ok(crate::scroll::Route::Give(wheel)) => {
+                                        cx.stop_propagation();
+                                        wheel(e, window, cx);
+                                    }
+                                    _ => {}
                                 }
                             }
                         });
@@ -4523,7 +4840,6 @@ impl Render for Shell {
             .child(self.render_side_grip(card_x, cx))
             .children(fly)
             .child(strip)
-            .children(strip_fly)
             .children(crate::csd::chrome(window, px(1.) + FRAME / 2. + TITLEBAR_H / 2. - px(12.), |window, _| window.remove_window(), cx))
             .children(sheet)
             .children(search)
@@ -4573,7 +4889,6 @@ impl Shell {
                 }
                 "sidebar" => self.toggle_sidebar(window, cx),
                 "home" => self.show_home(window, cx),
-                "narrow" | "middle" | "wide" => self.set_width(PageWidth::from_key(step), window, cx),
                 s if s.starts_with("key=") => {
                     if let Ok(keystroke) = Keystroke::parse(&s["key=".len()..]) {
                         // As `press=`: into this window alone.
@@ -4634,6 +4949,35 @@ impl Shell {
                                 }
                                 window.dispatch_event(PlatformInput::MouseUp(MouseUpEvent { button, position: to, modifiers, click_count }), cx);
                             });
+                        })
+                        .detach();
+                    }
+                }
+                // `flick=x,y,to x,to y,dy`: a gesture begun at the first
+                // place, its momentum carried to the second, as a finger
+                // lifted and the pointer moved on.
+                s if s.starts_with("flick=") => {
+                    let n: Vec<f32> = s["flick=".len()..].split(',').filter_map(|n| n.parse().ok()).collect();
+                    if let [x, y, tx, ty, dy] = n[..] {
+                        let wait = later;
+                        later += GO_STEP;
+                        cx.spawn_in(window, async move |_, cx| {
+                            cx.background_executor().timer(Duration::from_millis(wait)).await;
+                            let delta = ScrollDelta::Pixels(point(px(0.), px(dy)));
+                            let modifiers = Modifiers::default();
+                            let _ = cx.update(|window, cx| {
+                                let position = point(px(x), px(y));
+                                window.dispatch_event(PlatformInput::MouseMove(MouseMoveEvent { position, pressed_button: None, modifiers }), cx);
+                                window.dispatch_event(PlatformInput::ScrollWheel(ScrollWheelEvent { position, delta, modifiers, touch_phase: TouchPhase::Started }), cx);
+                            });
+                            for _ in 0..10 {
+                                cx.background_executor().timer(Duration::from_millis(16)).await;
+                                let _ = cx.update(|window, cx| {
+                                    let position = point(px(tx), px(ty));
+                                    window.dispatch_event(PlatformInput::MouseMove(MouseMoveEvent { position, pressed_button: None, modifiers }), cx);
+                                    window.dispatch_event(PlatformInput::ScrollWheel(ScrollWheelEvent { position, delta, modifiers, touch_phase: TouchPhase::Moved }), cx);
+                                });
+                            }
                         })
                         .detach();
                     }
@@ -4949,9 +5293,54 @@ impl Shell {
                         e.update(cx, |e, cx| e.type_text("Hello, probe. ", cx));
                     }
                 }
-                "live" => self.set_mode(Mode::Live, window, cx),
-                "source" => self.set_mode(Mode::Source, window, cx),
-                "reading" => self.set_mode(Mode::Reading, window, cx),
+                s if s.starts_with("srctype=") => {
+                    // As keys typed in the source pane: the keyboard there,
+                    // the words through its input handler.
+                    if let Some(ix) = self.shown_index().filter(|&i| self.source_on && self.tabs[i].asset.is_none()) {
+                        let pane = self.source_pane(ix, window, cx);
+                        let words = s["srctype=".len()..].to_string();
+                        window.focus(&pane.focus_handle(cx), cx);
+                        let state = pane.read(cx).state.clone();
+                        state.update(cx, |s, cx| gpui::EntityInputHandler::replace_text_in_range(s, None, &words, window, cx));
+                    }
+                }
+                "source" => self.toggle_source(window, cx),
+                // A right click in the source pane at a point of the
+                // window, as the mouse makes one.
+                s if s.starts_with("srcmenu=") => {
+                    let n: Vec<f32> = s["srcmenu=".len()..].split(',').filter_map(|v| v.parse().ok()).collect();
+                    if let [x, y] = n[..] {
+                        let wait = later;
+                        later += GO_STEP;
+                        cx.spawn_in(window, async move |this, cx| {
+                            cx.background_executor().timer(Duration::from_millis(wait)).await;
+                            let _ = this.update_in(cx, |this, window, cx| {
+                                if let Some(pane) = this.shown_index().and_then(|i| this.tabs[i].source.clone()) {
+                                    let state = pane.read(cx).state.clone();
+                                    state.update(cx, |s, cx| s.secondary_click_at(point(px(x), px(y)), window, cx));
+                                }
+                            });
+                        })
+                        .detach();
+                    }
+                }
+                "term" => self.toggle_terminal(window, cx),
+                // The pause before what comes next, in milliseconds.
+                s if s.starts_with("wait=") => later += s["wait=".len()..].parse::<u64>().unwrap_or(0),
+                // On the terminal's screen once it is drawn, in its turn.
+                s if s.starts_with("term") => {
+                    let (wait, step) = (later, s.to_string());
+                    later += GO_STEP;
+                    cx.spawn_in(window, async move |this, cx| {
+                        cx.background_executor().timer(Duration::from_millis(wait)).await;
+                        let _ = this.update_in(cx, |this, window, cx| {
+                            if let Some(term) = this.terminal.clone() {
+                                term.update(cx, |t, cx| t.probe(&step, window, cx));
+                            }
+                        });
+                    })
+                    .detach();
+                }
                 "menu" => {
                     let first = self.vault.as_ref().and_then(|v| v.tree.children.iter().find(|e| !e.dir).map(|e| e.path.clone()));
                     if let Some(p) = first {
@@ -4983,37 +5372,36 @@ impl Focusable for Shell {
 #[cfg(test)]
 mod tests {
     // By name: a glob here would bring in gpui's own `test`.
-    use super::{FADE_ROOM, NARROW_W, fade_strength, one_line, sheet_width};
+    use super::{FADE_ROOM, READ_W, SHEET_MOST, fade_strength, one_line, sheet_width};
 
     #[test]
-    fn narrow_is_narrowest_and_wide_is_the_page() {
+    fn full_width_is_the_page() {
         // A window with room to spare, a laptop's whole screen, a big
         // monitor's.
         for page in [900., 1456., 3000.] {
-            let (narrow, middle, wide) = (sheet_width(0., page), sheet_width(1., page), sheet_width(2., page));
-            assert_eq!(narrow, NARROW_W);
-            assert!(middle - narrow > 40. && wide - middle > 40., "{page}: {narrow} {middle} {wide}");
-            assert_eq!(wide, page - 32.);
+            let (own, full) = (sheet_width(0., page), sheet_width(1., page));
+            assert!(own > READ_W && full - own > 40., "{page}: {own} {full}");
+            assert_eq!(full, page - 32.);
         }
     }
 
     #[test]
-    fn middle_stays_a_line_to_read_on_a_big_monitor() {
-        assert_eq!(sheet_width(1., 3000.), super::MIDDLE_MOST);
+    fn its_own_width_stays_a_line_to_read_on_a_big_monitor() {
+        assert_eq!(sheet_width(0., 3000.), SHEET_MOST);
     }
 
     #[test]
     fn a_change_of_width_passes_through_every_width_between() {
         let page = 1456.;
-        let steps: Vec<f32> = (0..=40).map(|i| sheet_width(i as f32 / 20., page)).collect();
+        let steps: Vec<f32> = (0..=20).map(|i| sheet_width(i as f32 / 20., page)).collect();
         assert!(steps.windows(2).all(|w| w[1] > w[0] && w[1] - w[0] < 40.));
     }
 
     #[test]
-    fn with_no_room_every_width_is_narrow() {
+    fn with_no_room_both_widths_are_one() {
         for page in [0., 500., 731.] {
-            assert_eq!(sheet_width(2., page), NARROW_W);
-            assert_eq!(sheet_width(1., page), NARROW_W);
+            assert_eq!(sheet_width(1., page), READ_W);
+            assert_eq!(sheet_width(0., page), READ_W);
         }
     }
 
