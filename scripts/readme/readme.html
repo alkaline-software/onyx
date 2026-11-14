@@ -1,0 +1,378 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Onyx README GIF</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Source+Serif+4:ital,opsz,wght@0,8..60,400;0,8..60,600;1,8..60,400&family=JetBrains+Mono:wght@400;500&display=block">
+<style>
+  body { margin: 0; background: #F3F1EA; }
+  canvas { display: block; width: 100%; height: auto; }
+</style>
+</head>
+<body>
+<canvas id="c" width="1600" height="840"></canvas>
+<script>
+// The README's moving picture (docs/design.md, The README's picture), in the
+// hand of the studio's sites: hairlines on warm paper, each part a pale wash
+// of its color with an edge of it, a serif title and an italic serif line
+// beside a mono one. Onyx's story: a note picked in the sidebar opens in a
+// tab; markdown typed in it is drawn as it reads, a heading's and a bold
+// word's marks hidden once the caret leaves them; a task's box ticked; the
+// source opened beside the note from the strip's left button. Laid out in a
+// 1920 by 1008 box and drawn at the canvas's size. `frame(i)` draws frame i
+// at FPS and returns it as a PNG; `ready` waits for the faces and the icon.
+// scripts/make-readme-gif.sh renders every frame and makes the GIF.
+
+const FPS = 30, LENGTH = 14;   // seconds, looped
+const W = 1920, H = 1008;
+const PAPER = '#F3F1EA', SHEET = '#F8F6F0', INK = '#1F1E1D', MUTED = '#77746B', LINE = '#8E8A80';
+const TEAL = '#277580', GRAPHITE = '#3D3A36', MAUVE = '#986EA2', OCHRE = '#9E793D';
+const SERIF = '"Source Serif 4", "Source Serif Pro", Georgia, serif';
+const MONO = '"JetBrains Mono", Menlo, monospace';
+const NAME = 'Optima, "Avenir Next", "Source Serif 4", serif';
+
+const canvas = document.getElementById('c');
+const ctx = canvas.getContext('2d');
+const icon = new Image();
+// From a file the icon would taint the canvas, and no frame could be read
+// back: the renderer hands it in as data (ICON).
+icon.src = window.ICON || '../../crates/onyx-app/assets/icon/icon-256.png';
+
+window.ready = Promise.all([
+  document.fonts.load(`600 84px ${SERIF}`), document.fonts.load(`400 52px ${SERIF}`),
+  document.fonts.load(`italic 400 28px ${SERIF}`), document.fonts.load(`400 28px ${MONO}`),
+  document.fonts.load(`500 28px ${MONO}`),
+  new Promise(r => { if (icon.complete) r(); else { icon.onload = r; icon.onerror = r; } }),
+]);
+
+// The studio's ease out quint, and an ease in and out for the pointer.
+function bezier(x1, y1, x2, y2) {
+  const a = (p1, p2) => 1 - 3 * p2 + 3 * p1, b = (p1, p2) => 3 * p2 - 6 * p1, c = p1 => 3 * p1;
+  const at = (t, p1, p2) => ((a(p1, p2) * t + b(p1, p2)) * t + c(p1)) * t;
+  const slope = (t, p1, p2) => 3 * a(p1, p2) * t * t + 2 * b(p1, p2) * t + c(p1);
+  return x => {
+    if (x <= 0) return 0; if (x >= 1) return 1;
+    let t = x;
+    for (let i = 0; i < 8; i++) { const s = slope(t, x1, x2); if (Math.abs(s) < 1e-6) break; t -= (at(t, x1, x2) - x) / s; }
+    return at(Math.min(1, Math.max(0, t)), y1, y2);
+  };
+}
+const QUINT = bezier(0.23, 1, 0.32, 1), INOUT = bezier(0.45, 0, 0.25, 1);
+const clamp01 = v => Math.min(1, Math.max(0, v));
+const span = (t, t0, d) => clamp01((t - t0) / d);
+const mix = (a, b, k) => a + (b - a) * k;
+const mixP = (a, b, k) => ({ x: mix(a.x, b.x, k), y: mix(a.y, b.y, k) });
+
+// ---------------------------------------------------------------------------
+// The window: the sidebar on the frame, the card with its strip, the path
+// bar and the note's sheet.
+// ---------------------------------------------------------------------------
+const WIN = { x: 86, y: 322, w: 1180, h: 610, r: 22 };
+const SIDE = 270;
+const CARD = { x: WIN.x + SIDE, y: WIN.y + 10, w: WIN.w - SIDE - 10, h: WIN.h - 20 };
+const STRIP = 50, PATH = 36;
+const PAGE = { x: CARD.x + 16, y: CARD.y + STRIP + PATH, w: CARD.w - 32, h: CARD.h - STRIP - PATH - 16 };
+const SOURCE_BTN = { x: CARD.x + 14, y: CARD.y + 12, w: 28, h: 28 };
+const TERM_BTN = { x: CARD.x + CARD.w - 42, y: CARD.y + 12, w: 28, h: 28 };
+
+// The script, in seconds. Every part's state is worked out from it for any
+// moment, so a frame can be drawn on its own.
+const T = {
+  pick: 1.2,                       // Plans picked in the tree
+  heading: 2.5, headingEnd: 3.9, newline1: 4.3,     // "## This week" typed, then ↩
+  bold: 4.8, boldEnd: 6.6, newline2: 7.0,           // "Ship the **picture**" typed, then ↩
+  tick: 8.1,                       // the task's box
+  sourceOn: 9.2, sourceOff: 10.9,  // the source beside the note
+  dip: 12.2,                       // the window's insides fade out, and in as they began
+};
+const SLIDE = 0.24, DIP = 0.35, BACK = 0.45;
+const HEADING = '## This week', BOLD = 'Ship the **picture**';
+
+const picked = t => t < T.dip + DIP ? QUINT(span(t, T.pick, 0.22)) : 0;
+const typed = (t, from, to, text) => text.slice(0, Math.round(text.length * span(t, from, to - from)));
+const ticked = t => t < T.dip + DIP ? QUINT(span(t, T.tick, 0.2)) : 0;
+const source = t => t < T.sourceOn ? 0 : t < T.sourceOff ? QUINT(span(t, T.sourceOn, SLIDE)) : 1 - QUINT(span(t, T.sourceOff, SLIDE));
+const inside = t => t < T.dip ? 1 : t < T.dip + DIP ? 1 - span(t, T.dip, DIP) : span(t, T.dip + DIP, BACK);
+// Where the caret is: on the line being typed, then the next.
+function caretLine(t) {
+  if (t < T.heading) return -1;
+  if (t < T.newline1) return 0;
+  if (t < T.newline2) return 1;
+  if (t < T.tick - 0.6) return 2;
+  return -1;
+}
+
+// The tree's rows, and the one picked.
+const TREE = [['Journal', 'folder'], ['Ideas', 'note'], ['Plans', 'note'], ['Reading', 'note'], ['Recipes', 'folder'], ['Travel', 'note']];
+const rowY = i => WIN.y + 238 + i * 38;
+
+const P = (x, y) => ({ x, y });
+const REST = P(1296, 948), PLANS = P(WIN.x + 96, rowY(2) - 4);
+const STOPS = [
+  [0, REST], [0.5, REST], [1.1, PLANS], [1.6, PLANS], [2.3, P(1110, 840)], [7.3, P(1110, 840)],
+  [8.0, P(PAGE.x + 96, 0)], [8.6, P(PAGE.x + 96, 0)], [9.1, P(SOURCE_BTN.x + 16, SOURCE_BTN.y + 16)],
+  [10.95, P(SOURCE_BTN.x + 16, SOURCE_BTN.y + 16)], [11.7, REST], [LENGTH, REST],
+];
+function pointer(t) {
+  for (let i = 1; i < STOPS.length; i++) {
+    const [t0, p0] = STOPS[i - 1], [t1, p1] = STOPS[i];
+    if (t <= t1) return mixP(p0, p1, INOUT(span(t, t0, t1 - t0)));
+  }
+  return STOPS[STOPS.length - 1][1];
+}
+const CLICKS = [T.pick, T.tick, T.sourceOn, T.sourceOff];
+const pressing = t => CLICKS.some(c => t >= c - 0.1 && t < c + 0.06);
+
+const ROWS = [
+  { word: 'a note', says: 'opens in a tab', on: [T.pick - 0.3, T.pick + 1.0] },
+  { word: '## and **', says: 'drawn as it reads, as you type', on: [T.heading, T.newline2 + 0.5] },
+  { word: 'a box', says: 'the task is done', on: [T.tick - 0.3, T.tick + 0.9] },
+  { word: 'the source', says: 'the file as written, beside it', on: [T.sourceOn - 0.2, T.sourceOff + 0.2] },
+];
+
+// ---------------------------------------------------------------------------
+// Drawing.
+// ---------------------------------------------------------------------------
+function rr(x, y, w, h, r) {
+  r = Math.max(0, Math.min(r, w / 2, h / 2));
+  ctx.beginPath();
+  ctx.moveTo(x + r, y); ctx.arcTo(x + w, y, x + w, y + h, r); ctx.arcTo(x + w, y + h, x, y + h, r);
+  ctx.arcTo(x, y + h, x, y, r); ctx.arcTo(x, y, x + w, y, r); ctx.closePath();
+}
+function hex(c, a) {
+  const n = parseInt(c.slice(1), 16);
+  return `rgba(${n >> 16}, ${(n >> 8) & 255}, ${n & 255}, ${a})`;
+}
+function hair(x1, y1, x2, y2, color, w = 1.6) {
+  ctx.strokeStyle = color; ctx.lineWidth = w; ctx.lineCap = 'round';
+  ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
+}
+function dot(x, y, r, color) { ctx.fillStyle = color; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill(); }
+function words(text, x, y, font, color, align = 'left') {
+  ctx.font = font; ctx.fillStyle = color; ctx.textAlign = align; ctx.textBaseline = 'alphabetic';
+  ctx.fillText(text, x, y); ctx.textAlign = 'left';
+  return ctx.measureText(text).width;
+}
+function width(text, font) { ctx.font = font; return ctx.measureText(text).width; }
+
+function header() {
+  if (icon.complete && icon.naturalWidth) ctx.drawImage(icon, 78, 66, 84, 84);
+  words('Onyx', 182, 128, `400 54px ${SERIF}`, INK);
+  words('for macOS', W - 86, 120, `400 30px ${MONO}`, TEAL, 'right');
+  words('Notes that read as you write', 82, 262, `600 84px ${SERIF}`, INK);
+}
+
+function sidebar(t) {
+  const x = WIN.x + 22;
+  if (icon.complete && icon.naturalWidth) ctx.drawImage(icon, WIN.x + SIDE - 120, WIN.y + 14, 26, 26);
+  words('Onyx', WIN.x + SIDE - 88, WIN.y + 35, `400 26px ${NAME}`, INK);
+  dot(x + 10, WIN.y + 82, 11, TEAL);
+  hair(x + 5, WIN.y + 82, x + 15, WIN.y + 82, '#fff', 2); hair(x + 10, WIN.y + 77, x + 10, WIN.y + 87, '#fff', 2);
+  words('New Note', x + 32, WIN.y + 89, `400 21px ${SERIF}`, INK);
+  rr(x + 2, WIN.y + 108, 16, 14, 3); ctx.strokeStyle = hex(LINE, 0.8); ctx.lineWidth = 1.5; ctx.stroke();
+  words('New Folder', x + 32, WIN.y + 122, `400 21px ${SERIF}`, MUTED);
+  const card = { x: WIN.x + 12, y: WIN.y + 150, w: SIDE - 24, h: WIN.h - 220 };
+  rr(card.x, card.y, card.w, card.h, 12); ctx.fillStyle = hex(TEAL, 0.05); ctx.fill(); ctx.strokeStyle = hex(TEAL, 0.6); ctx.lineWidth = 1.6; ctx.stroke();
+  words('Notes', card.x + 16, card.y + 34, `400 18px ${SERIF}`, MUTED);
+  const p = picked(t);
+  TREE.forEach(([name, kind], i) => {
+    const y = rowY(i);
+    const lit = i === 1 ? 1 - p : i === 2 ? p : 0;
+    if (lit > 0) { rr(card.x + 8, y - 26, card.w - 16, 36, 9); ctx.fillStyle = hex(TEAL, 0.16 * lit); ctx.fill(); }
+    const ix = card.x + 22;
+    if (kind === 'folder') { hair(ix, y - 12, ix + 5, y - 7, hex(LINE, 0.8)); hair(ix + 5, y - 7, ix, y - 2, hex(LINE, 0.8)); }
+    else { rr(ix - 2, y - 17, 13, 16, 2); ctx.strokeStyle = hex(LINE, 0.8); ctx.lineWidth = 1.4; ctx.stroke(); }
+    words(name, ix + 22, y - 2, `400 21px ${SERIF}`, lit > 0.5 ? INK : MUTED);
+  });
+  dot(x + 12, WIN.y + WIN.h - 34, 12, hex(TEAL, 0.25));
+  words('P', x + 12, WIN.y + WIN.h - 27, `600 16px ${SERIF}`, TEAL, 'center');
+  words('Pingfan', x + 34, WIN.y + WIN.h - 27, `400 20px ${NAME}`, INK);
+  ctx.strokeStyle = hex(LINE, 0.8); ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(WIN.x + SIDE - 36, WIN.y + WIN.h - 34, 8, 0, Math.PI * 2); ctx.stroke();
+}
+
+// The strip: the source's button at the left, the tabs on their pill in the
+// middle with the plate under the one showing, the plus, the terminal's
+// button at the right.
+function strip(t) {
+  const s = source(t), p = picked(t);
+  rr(SOURCE_BTN.x, SOURCE_BTN.y, SOURCE_BTN.w, SOURCE_BTN.h, 7);
+  ctx.fillStyle = hex(TEAL, 0.14 * s); ctx.fill();
+  const c = SOURCE_BTN, ink = s > 0.5 ? INK : MUTED;
+  hair(c.x + 9, c.y + 10, c.x + 5, c.y + 14, ink); hair(c.x + 5, c.y + 14, c.x + 9, c.y + 18, ink);
+  hair(c.x + 19, c.y + 10, c.x + 23, c.y + 14, ink); hair(c.x + 23, c.y + 14, c.x + 19, c.y + 18, ink);
+  if (s > 0) hair(c.x + 14 - 10 * s, c.y + 30, c.x + 14 + 10 * s, c.y + 30, TEAL, 2.4);
+  const tc = TERM_BTN;
+  hair(tc.x + 7, tc.y + 10, tc.x + 12, tc.y + 15, MUTED); hair(tc.x + 12, tc.y + 15, tc.x + 7, tc.y + 20, MUTED); hair(tc.x + 15, tc.y + 20, tc.x + 22, tc.y + 20, MUTED);
+  // The pill: Ideas, and Plans growing in once it is picked.
+  const fIdeas = `400 19px ${SERIF}`;
+  const w1 = width('Ideas', fIdeas) + 54, w2 = (width('Plans', fIdeas) + 54) * p;
+  const total = 34 + w1 + w2 + 8, x0 = CARD.x + CARD.w / 2 - total / 2, y = CARD.y + 11;
+  rr(x0, y, total, 30, 15); ctx.fillStyle = hex(LINE, 0.12); ctx.fill();
+  hair(x0 + 14, y + 10, x0 + 14, y + 20, hex(LINE, 0.8)); hair(x0 + 14, y + 10, x0 + 22, y + 10, hex(LINE, 0.8));
+  const plateX = mix(x0 + 30, x0 + 30 + w1, p), plateW = mix(w1, Math.max(w2, 1), p);
+  rr(plateX, y + 3, plateW, 24, 12); ctx.fillStyle = SHEET; ctx.fill(); ctx.strokeStyle = hex(LINE, 0.4); ctx.lineWidth = 1.2; ctx.stroke();
+  words('Ideas', x0 + 30 + w1 / 2, y + 21, fIdeas, p < 0.5 ? INK : MUTED, 'center');
+  if (p > 0.05) { ctx.save(); ctx.globalAlpha *= p; words('Plans', x0 + 30 + w1 + w2 / 2, y + 21, fIdeas, INK, 'center'); ctx.restore(); }
+  rr(x0 + total + 8, y, 30, 30, 9); ctx.fillStyle = hex(LINE, 0.12); ctx.fill();
+  hair(x0 + total + 17, y + 15, x0 + total + 29, y + 15, MUTED); hair(x0 + total + 23, y + 9, x0 + total + 23, y + 21, MUTED);
+  // The path bar, in code's face.
+  words(p > 0.5 ? 'Notes / Plans.md' : 'Notes / Ideas.md', CARD.x + CARD.w / 2, CARD.y + STRIP + 26, `400 17px ${MONO}`, MUTED, 'center');
+}
+
+// The note's lines: where each stands on the sheet.
+const lineY = i => PAGE.y + 166 + [0, 68, 120, 172, 222][i];
+function sheetRect(t) {
+  const s = source(t);
+  const left = PAGE.x + (PAGE.w / 2 + 8) * s;
+  return { x: left, y: PAGE.y, w: PAGE.x + PAGE.w - left, h: PAGE.h };
+}
+
+// A line drawn as Onyx draws it: marks hidden unless the caret is on it,
+// and muted while they show.
+function caret(x, y, h, t) { if (Math.floor(t * 2.2) % 2 === 0 || t % 1 < 0.6) hair(x, y - h, x, y + 4, TEAL, 2.4); }
+
+function plansNote(t, r) {
+  const x = r.x + 56;
+  words('Plans', x, PAGE.y + 74, `600 44px ${SERIF}`, INK);
+  hair(x, PAGE.y + 96, r.x + r.w - 56, PAGE.y + 96, hex(LINE, 0.35), 1.2);
+  const cl = caretLine(t);
+  const body = `400 28px ${SERIF}`;
+  // The heading being typed.
+  if (t >= T.heading) {
+    const text = t < T.headingEnd ? typed(t, T.heading, T.headingEnd, HEADING) : HEADING;
+    if (cl === 0) {
+      const marks = text.slice(0, Math.min(3, text.length)), rest = text.slice(3);
+      let cx = x + words(marks, x, lineY(0), body, hex(MUTED, 0.85));
+      cx += words(rest, cx, lineY(0), body, INK);
+      caret(cx + 2, lineY(0), 24, t);
+    } else {
+      words(text.slice(3), x, lineY(0), `600 36px ${SERIF}`, INK);
+    }
+  }
+  // The sentence with a bold word.
+  if (t >= T.bold) {
+    const text = t < T.boldEnd ? typed(t, T.bold, T.boldEnd, BOLD) : BOLD;
+    if (cl === 1) {
+      let cx = x;
+      const parts = text.split(/(\*\*)/);
+      let inBold = false;
+      for (const part of parts) {
+        if (part === '**') { cx += words(part, cx, lineY(1), body, hex(MUTED, 0.85)); inBold = !inBold; continue; }
+        cx += words(part, cx, lineY(1), inBold ? `600 28px ${SERIF}` : body, INK);
+      }
+      caret(cx + 2, lineY(1), 22, t);
+    } else {
+      let cx = x + words('Ship the ', x, lineY(1), body, INK);
+      words('picture', cx, lineY(1), `600 28px ${SERIF}`, INK);
+    }
+  }
+  if (cl === 2) caret(x + 2, lineY(2), 22, t);
+  // The task, its box ticked with a press.
+  const k = ticked(t), by = lineY(3);
+  rr(x, by - 20, 22, 22, 5); ctx.fillStyle = hex(TEAL, k); ctx.fill(); ctx.strokeStyle = k > 0.5 ? TEAL : hex(LINE, 0.9); ctx.lineWidth = 1.8; ctx.stroke();
+  if (k > 0) { ctx.save(); ctx.globalAlpha *= k; hair(x + 5, by - 9, x + 9, by - 4, '#fff', 2.4); hair(x + 9, by - 4, x + 17, by - 14, '#fff', 2.4); ctx.restore(); }
+  const tw = words('Write the docs', x + 36, by, body, k > 0.5 ? MUTED : INK);
+  if (k > 0) hair(x + 36, by - 8, x + 36 + tw * k, by - 8, hex(MUTED, 0.9), 1.6);
+  for (const [i, kk] of [[4, 0.7]]) hair(x, lineY(i) - 8, x + (r.w - 112) * kk, lineY(i) - 8, hex(LINE, 0.4));
+}
+
+function ideasNote(r) {
+  const x = r.x + 56;
+  words('Ideas', x, PAGE.y + 74, `600 44px ${SERIF}`, INK);
+  hair(x, PAGE.y + 96, r.x + r.w - 56, PAGE.y + 96, hex(LINE, 0.35), 1.2);
+  let y = PAGE.y + 152;
+  for (const k of [0.92, 0.84, 0.6, 0, 0.88, 0.7]) { if (k) hair(x, y, x + (r.w - 112) * k, y, hex(LINE, 0.4)); y += 32; }
+}
+
+// The source: the file as written, in code's face, a sheet of its own.
+function sourcePane(t) {
+  const s = source(t);
+  if (s < 0.001) return;
+  const r = { x: PAGE.x, y: PAGE.y, w: PAGE.w / 2 - 8, h: PAGE.h };
+  ctx.save(); ctx.globalAlpha *= clamp01(s * 1.4);
+  ctx.translate(-(1 - s) * 40, 0);
+  rr(r.x, r.y, r.w, r.h, 12); ctx.fillStyle = SHEET; ctx.fill(); ctx.strokeStyle = hex(LINE, 0.55); ctx.lineWidth = 1.6; ctx.stroke();
+  const f = `400 21px ${MONO}`, x = r.x + 28;
+  const lines = [['# Plans', MUTED], ['', 0], ['## This week', INK], ['Ship the **picture**', INK], ['- [x] Write the docs', INK]];
+  lines.forEach(([text, c], i) => { if (text) words(text, x, r.y + 52 + i * 38, f, c); });
+  hair(x, r.y + 52 + 5 * 38 - 6, x + r.w * 0.55, r.y + 52 + 5 * 38 - 6, hex(LINE, 0.4));
+  ctx.restore();
+}
+
+function windowDrawn(t) {
+  rr(WIN.x, WIN.y, WIN.w, WIN.h, WIN.r); ctx.fillStyle = hex(GRAPHITE, 0.07); ctx.fill();
+  ctx.strokeStyle = LINE; ctx.lineWidth = 2; ctx.stroke();
+  for (const k of [0, 1, 2]) dot(WIN.x + 26 + k * 18, WIN.y + 26, 5, hex(LINE, 0.95));
+  ctx.save(); rr(WIN.x + 1, WIN.y + 1, WIN.w - 2, WIN.h - 2, WIN.r); ctx.clip();
+  ctx.globalAlpha = inside(t);
+  sidebar(t);
+  rr(CARD.x, CARD.y, CARD.w, CARD.h, 16); ctx.fillStyle = SHEET; ctx.fill(); ctx.strokeStyle = hex(LINE, 0.5); ctx.lineWidth = 1.6; ctx.stroke();
+  ctx.save(); rr(CARD.x, CARD.y + STRIP, CARD.w, CARD.h - STRIP, 16); ctx.clip();
+  ctx.fillStyle = hex(LINE, 0.1); ctx.fillRect(CARD.x, CARD.y + STRIP, CARD.w, CARD.h - STRIP);
+  ctx.restore();
+  hair(CARD.x + 1, CARD.y + STRIP, CARD.x + CARD.w - 1, CARD.y + STRIP, hex(LINE, 0.35), 1.2);
+  strip(t);
+  // The sheet, with the note showing; the source beside it.
+  const r = sheetRect(t), p = picked(t);
+  rr(r.x, r.y, r.w, r.h, 12); ctx.fillStyle = SHEET; ctx.fill(); ctx.strokeStyle = hex(LINE, 0.55); ctx.lineWidth = 1.6; ctx.stroke();
+  ctx.save(); rr(r.x, r.y, r.w, r.h, 12); ctx.clip();
+  if (p < 1) { ctx.save(); ctx.globalAlpha *= 1 - p; ideasNote(r); ctx.restore(); }
+  if (p > 0) { ctx.save(); ctx.globalAlpha *= p; plansNote(t, r); ctx.restore(); }
+  ctx.restore();
+  sourcePane(t);
+  ctx.restore();
+}
+
+function arrow(p, down) {
+  ctx.save(); ctx.translate(p.x - 3, p.y - 3); const k = down ? 2.35 : 2.6; ctx.scale(k, k);
+  ctx.beginPath();
+  ctx.moveTo(1.5, 1.5); ctx.lineTo(1.5, 12.2); ctx.lineTo(4.1, 9.8); ctx.lineTo(6, 14); ctx.lineTo(7.9, 13.2); ctx.lineTo(6.1, 9.1); ctx.lineTo(9.6, 9.1); ctx.closePath();
+  ctx.lineJoin = 'round'; ctx.strokeStyle = '#fff'; ctx.lineWidth = 1.6; ctx.stroke();
+  ctx.fillStyle = '#111'; ctx.fill();
+  ctx.restore();
+}
+
+// The list at the right: each move, lit while it plays, a shade darker once
+// it has.
+function list(t) {
+  const X = 1350;
+  const reset = t >= T.dip ? 1 - span(t, T.dip, 0.6) : 1;
+  ROWS.forEach((row, i) => {
+    const lit = t >= row.on[0] && t < row.on[1];
+    const begun = t >= row.on[0];
+    const alpha = lit ? 1 : begun ? 0.36 + 0.42 * reset : 0.36;
+    const y = 430 + i * 118;
+    ctx.save(); ctx.globalAlpha = alpha;
+    words(row.word, X, y, `400 30px ${MONO}`, lit ? TEAL : INK);
+    words(row.says, X, y + 46, `italic 400 30px ${SERIF}`, lit ? INK : MUTED);
+    ctx.restore();
+  });
+}
+
+function draw(t) {
+  ctx.setTransform(canvas.width / W, 0, 0, canvas.height / H, 0, 0);
+  ctx.fillStyle = PAPER; ctx.fillRect(0, 0, W, H);
+  header();
+  windowDrawn(t);
+  list(t);
+  arrow(pointer(t), pressing(t));
+}
+
+// The task's box stands where the layout puts it: its stop is filled in now.
+STOPS[6][1] = P(PAGE.x + 56 + 13, lineY(3) - 7);
+STOPS[7][1] = STOPS[6][1];
+
+window.frame = i => { draw(i / FPS); return canvas.toDataURL('image/png'); };
+window.FRAMES = FPS * LENGTH;
+window.FPS = FPS;
+window.ready.then(() => {
+  // In a browser, the picture plays; the renderer draws frame by frame.
+  if (!navigator.webdriver && !window.RENDERING) {
+    const start = performance.now();
+    const tick = now => { draw(((now - start) / 1000) % LENGTH); requestAnimationFrame(tick); };
+    requestAnimationFrame(tick);
+  }
+});
+</script>
+</body>
+</html>

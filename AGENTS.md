@@ -107,7 +107,7 @@ crates/onyx-app/           the window
   assets/ themes/ locales/   icons, fonts, the app icon; the palette; the words
   macos/ windows/ linux/     what each system's package needs
 vendor/                    the toolkit, the blocks crate and the terminal's screen model (vt100), each with an UPSTREAM.md
-scripts/                   the dev build, the icon, the release
+scripts/                   the dev build, the icon, the README's picture (make-readme-gif.sh, readme/), the release
 docs/                      how each part works and its traps; release.md; probing.md
 ```
 
