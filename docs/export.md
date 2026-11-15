@@ -31,7 +31,7 @@ A line break in a note is a line break on the page, as the editor shows it. The 
 | A picture missing, at an address, or Typst cannot read it | its alt text |
 | A task | a box, ticked and struck when done; a list under it is not struck |
 | A footnote | at the foot of the page; a second reference points at the first |
-| A table | each column as wide as what stands in it asks, as the canvas sets it, or the widths a person set (`rhythm::shares_of`); the header repeated over a page and no row split |
+| A table | each column as wide as what stands in it asks, as the canvas sets it, or the widths a person set, each a share of the page as on the canvas it is of the room (`rhythm::widths_of`); the header repeated over a page and no row split |
 | Code | the light appearance's inks (`onyx.tmTheme`), a wrapped line standing in from where it began; a long block runs over pages |
 | A tag among the words | as the canvas draws it: `<u>`, `<mark>`, `<kbd>`, `<sub>`, `<sup>`, `<a href>`, a color (`#tag-ink`, off when Color is off); `<br>` is a line break |
 | A block of HTML | written by `html::to_markdown` and walked as the note is (`Walk::html_block`), so it prints as it shows; `align` and `<center>` stand it across the page |

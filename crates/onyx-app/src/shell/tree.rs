@@ -419,6 +419,7 @@ impl Shell {
     /// listen by the new path, its pictures looked for from there), the
     /// note shown, the tabs closed, the folders folded, the rows chosen.
     pub(crate) fn follow_moves(&mut self, moves: &[(PathBuf, PathBuf)], window: &mut Window, cx: &mut Context<Self>) {
+        crate::folder_look::moved(moves, cx);
         let moved = |p: &Path| {
             let to = vault::moved_path(p, moves);
             (to != p).then_some(to)

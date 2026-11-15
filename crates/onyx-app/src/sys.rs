@@ -4,6 +4,13 @@
 
 use crate::i18n::phrase;
 
+#[cfg(target_os = "macos")]
+mod hotkeys;
+#[cfg(target_os = "macos")]
+mod keys;
+#[cfg(target_os = "macos")]
+mod status_item;
+
 /// Open a file or a link with the app the system gives it.
 pub fn open(target: &str) {
     let _ = opener::open(target);
@@ -679,4 +686,216 @@ pub fn user_first_name() -> String {
         Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
         None => String::new(),
     }
+}
+
+// -- the menu bar, the shortcut, login ------------------------------------------
+
+/// A line of the menu bar item's menu: an item (what it is answered by,
+/// its words, the picture before them, and its key equivalent as AppKit
+/// takes it, the character and the modifier flags), or a line between
+/// groups.
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub enum ItemLine {
+    Item { key: String, title: String, icon: &'static [u8], keys: (String, u64) },
+    Gap,
+}
+
+/// What the menu bar item sent: a click that opens or closes the note,
+/// one that shows the menu, or an item of the menu by its key.
+#[derive(Debug, Clone)]
+#[cfg_attr(not(target_os = "macos"), allow(dead_code))]
+pub enum ItemPick {
+    Note,
+    Menu,
+    Line(String),
+}
+
+/// The item in the menu bar, shown or not, and what is chosen from it.
+/// Elsewhere there is no item: Windows and Linux are not published, and
+/// their tray is left for when they are.
+#[cfg(target_os = "macos")]
+pub fn install_menu_bar(shown: bool) -> Option<futures::channel::mpsc::UnboundedReceiver<ItemPick>> {
+    status_item::install(shown)
+}
+#[cfg(not(target_os = "macos"))]
+pub fn install_menu_bar(_shown: bool) -> Option<futures::channel::mpsc::UnboundedReceiver<ItemPick>> {
+    None
+}
+
+#[cfg(target_os = "macos")]
+pub fn set_menu_bar_shown(shown: bool) {
+    status_item::set_shown(shown);
+}
+#[cfg(not(target_os = "macos"))]
+pub fn set_menu_bar_shown(_shown: bool) {}
+
+/// The item's badge filled while the note is open.
+#[cfg(target_os = "macos")]
+pub fn set_menu_bar_open(open: bool) {
+    status_item::set_open(open);
+}
+#[cfg(not(target_os = "macos"))]
+pub fn set_menu_bar_open(_open: bool) {}
+
+/// The menu's lines from now on, built when it is next shown.
+#[cfg(target_os = "macos")]
+pub fn set_menu_bar_lines(lines: Vec<ItemLine>) {
+    status_item::set_lines(lines);
+}
+#[cfg(not(target_os = "macos"))]
+pub fn set_menu_bar_lines(_lines: Vec<ItemLine>) {}
+
+/// Where the item stands, from the top left of the first screen: x, y,
+/// width, height. None while it is hidden, off every screen, or nowhere.
+#[cfg(target_os = "macos")]
+pub fn menu_bar_frame() -> Option<(f32, f32, f32, f32)> {
+    status_item::frame()
+}
+#[cfg(not(target_os = "macos"))]
+pub fn menu_bar_frame() -> Option<(f32, f32, f32, f32)> {
+    None
+}
+
+/// The item put back in sight when a menu bar manager left it off the
+/// screen.
+#[cfg(target_os = "macos")]
+pub fn heal_menu_bar() {
+    status_item::heal();
+}
+#[cfg(not(target_os = "macos"))]
+pub fn heal_menu_bar() {}
+
+/// The handler for the system's hot keys, installed once, and the presses
+/// it hears, each the number its shortcut was held by.
+#[cfg(target_os = "macos")]
+pub fn install_hot_keys() -> Option<futures::channel::mpsc::UnboundedReceiver<u32>> {
+    hotkeys::install()
+}
+#[cfg(not(target_os = "macos"))]
+pub fn install_hot_keys() -> Option<futures::channel::mpsc::UnboundedReceiver<u32>> {
+    None
+}
+
+/// The hot keys held from now on, the old ones given back first; the
+/// numbers of those the system would not take.
+#[cfg(target_os = "macos")]
+pub fn set_hot_keys(keys: &[(u32, onyx_core::shortcut::Shortcut)]) -> Vec<u32> {
+    hotkeys::set(keys)
+}
+#[cfg(not(target_os = "macos"))]
+pub fn set_hot_keys(keys: &[(u32, onyx_core::shortcut::Shortcut)]) -> Vec<u32> {
+    keys.iter().map(|(n, _)| *n).collect()
+}
+
+/// The watch on keys pressed in Onyx's windows while a shortcut is being
+/// recorded, installed once: each as its flags and key code.
+#[cfg(target_os = "macos")]
+pub fn install_key_recorder() -> Option<futures::channel::mpsc::UnboundedReceiver<(u64, u16)>> {
+    Some(keys::install())
+}
+#[cfg(not(target_os = "macos"))]
+pub fn install_key_recorder() -> Option<futures::channel::mpsc::UnboundedReceiver<(u64, u16)>> {
+    None
+}
+
+/// While on, a key pressed in Onyx's windows goes to the recorder alone.
+#[cfg(target_os = "macos")]
+pub fn record_keys(on: bool) {
+    keys::recording(on);
+}
+#[cfg(not(target_os = "macos"))]
+pub fn record_keys(_on: bool) {}
+
+/// The menu bar note's window over every app's, at the floating level:
+/// the panel gpui makes sits at the pop-up menu's, and an input method's
+/// list of candidates, which sits at that level or under it, stood behind
+/// it (MiniNotes' `StatusBarController`). It is made borderless: gpui's
+/// panel is titled, and the system drew a titled window's rim and backing
+/// round the whole of it, the arrow's strip too, with a square shadow.
+/// Borderless, its shape and its shadow are what it draws.
+#[cfg(target_os = "macos")]
+pub fn float_note_window(window: &gpui::Window) {
+    use objc2_app_kit::NSWindowStyleMask;
+    let Some(view) = ns_view(window) else { return };
+    if let Some(native) = view.window() {
+        native.setStyleMask(NSWindowStyleMask::Borderless | NSWindowStyleMask::NonactivatingPanel);
+        native.setLevel(objc2_app_kit::NSFloatingWindowLevel);
+        native.setOpaque(false);
+        native.setHasShadow(true);
+        // A new style mask rebuilds the window's frame and leaves the
+        // window itself answering keys: gpui's view is made the one again,
+        // or no key reaches the note while a click still does.
+        native.makeFirstResponder(Some(view));
+    }
+}
+#[cfg(not(target_os = "macos"))]
+pub fn float_note_window(_window: &gpui::Window) {}
+
+/// The system's shadow cast again from what the window now draws, for a
+/// window of its own shape (the note's, with its arrow).
+#[cfg(target_os = "macos")]
+pub fn reshape_shadow(window: &gpui::Window) {
+    if let Some(native) = ns_view(window).and_then(|v| v.window()) {
+        native.invalidateShadow();
+    }
+}
+#[cfg(not(target_os = "macos"))]
+pub fn reshape_shadow(_window: &gpui::Window) {}
+
+/// Whether Onyx opens when the person logs in, as System Settings' Login
+/// Items has it: the system keeps it, and Onyx never writes it down.
+/// Elsewhere no.
+#[cfg(target_os = "macos")]
+pub fn launches_at_login() -> bool {
+    use objc2_service_management::{SMAppService, SMAppServiceStatus};
+    unsafe { SMAppService::mainAppService().status() == SMAppServiceStatus::Enabled }
+}
+#[cfg(not(target_os = "macos"))]
+pub fn launches_at_login() -> bool {
+    false
+}
+
+#[cfg(target_os = "macos")]
+pub fn set_launch_at_login(on: bool) -> Result<(), String> {
+    use objc2_service_management::SMAppService;
+    let service = unsafe { SMAppService::mainAppService() };
+    let done = unsafe { if on { service.registerAndReturnError() } else { service.unregisterAndReturnError() } };
+    done.map_err(|e| e.localizedDescription().to_string())
+}
+#[cfg(not(target_os = "macos"))]
+pub fn set_launch_at_login(_on: bool) -> Result<(), String> {
+    Err("not on this system".into())
+}
+
+/// Whether this launch is the system's at login: the event that opened
+/// the app says so (`keyAEPropData` is `lgit`). Asked as the app finishes
+/// launching, while that event is still the current one. Such a launch
+/// starts in the menu bar, with no window.
+#[cfg(target_os = "macos")]
+pub fn launched_at_login() -> bool {
+    use objc2::runtime::AnyObject;
+    use objc2::{class, msg_send};
+    const fn four(code: &[u8; 4]) -> u32 {
+        u32::from_be_bytes(*code)
+    }
+    unsafe {
+        let manager: *mut AnyObject = msg_send![class!(NSAppleEventManager), sharedAppleEventManager];
+        if manager.is_null() {
+            return false;
+        }
+        let event: *mut AnyObject = msg_send![manager, currentAppleEvent];
+        if event.is_null() {
+            return false;
+        }
+        let prop: *mut AnyObject = msg_send![event, paramDescriptorForKeyword: four(b"prdt")];
+        if prop.is_null() {
+            return false;
+        }
+        let value: u32 = msg_send![prop, enumCodeValue];
+        value == four(b"lgit")
+    }
+}
+#[cfg(not(target_os = "macos"))]
+pub fn launched_at_login() -> bool {
+    false
 }

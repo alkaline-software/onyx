@@ -129,7 +129,7 @@ pub struct Table {
     /// bars, or an empty range where a cell holds none.
     pub cells: Vec<Vec<Range<usize>>>,
     /// Each column's share of the room in hundredths, when a person has
-    /// set them (`tables::shares_of`).
+    /// set them (`tables::widths_of`).
     pub shares: Option<Vec<f32>>,
 }
 
@@ -405,7 +405,8 @@ pub fn analyze(text: &str) -> Analysis {
                     }
                     lines[l].kind = if l == first { LineKind::TableFirst(ix) } else { LineKind::TableRow(ix) };
                 }
-                let shares = (first < last).then(|| crate::tables::shares_of(line_text(first + 1))).flatten();
+                let others: Vec<&str> = (first..=last).filter(|l| *l != first + 1).map(line_text).collect();
+                let shares = (first < last).then(|| crate::tables::widths_of(line_text(first + 1), &others)).flatten();
                 let aligns = aligns
                     .iter()
                     .map(|al| match al {

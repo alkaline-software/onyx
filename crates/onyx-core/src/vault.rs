@@ -778,3 +778,23 @@ pub fn watch(root: &Path, on_change: impl Fn(Vec<PathBuf>) + Send + 'static) -> 
     watcher.watch(root, notify::RecursiveMode::Recursive).map_err(|e| e.to_string())?;
     Ok(watcher)
 }
+
+/// One folder watched, not what is inside its folders: where a note
+/// outside any vault lives (the menu bar note's), which may be a folder
+/// as big as the home folder. A note is written by a rename (`write`),
+/// which the system reports as a change of the folder, so the note's own
+/// file is not enough to watch.
+pub fn watch_folder(dir: &Path, on_change: impl Fn(Vec<PathBuf>) + Send + 'static) -> Result<Watcher, String> {
+    use notify::Watcher as _;
+    let mut watcher = notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
+        if let Ok(ev) = res {
+            if matches!(ev.kind, notify::EventKind::Access(_)) {
+                return;
+            }
+            on_change(ev.paths);
+        }
+    })
+    .map_err(|e| e.to_string())?;
+    watcher.watch(dir, notify::RecursiveMode::NonRecursive).map_err(|e| e.to_string())?;
+    Ok(watcher)
+}

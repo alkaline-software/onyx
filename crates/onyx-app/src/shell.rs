@@ -13,7 +13,7 @@
 //! note follow what another app does there.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -29,7 +29,7 @@ use onyx_core::config::Config;
 use onyx_core::{update, vault};
 
 use crate::ambient::Ambient;
-use crate::editor::{CellAt, Editor, EditorEvent, Look, MenuAt, MenuIssue, MenuLink, Scope, TableFacts, Words};
+use crate::editor::{Editor, EditorEvent, Look, MenuAt, MenuIssue, Words};
 use crate::source::SourcePane;
 use crate::terminal::{TermEvent, TermPanel};
 use crate::i18n::{t, tf};
@@ -239,6 +239,8 @@ pub struct Shell {
     /// A press on the strip that a tab or a button took first, so the
     /// window is not moved by it; and the press that is the window's.
     pub(crate) press_taken: bool,
+    /// A folder's icon and color being chosen (`folder_look.rs`).
+    folder_look: Option<(Entity<crate::folder_look::Picker>, Subscription)>,
     win_move: bool,
     /// What every editor is set in, and how every note is shown.
     pub(crate) look: Look,
@@ -309,22 +311,13 @@ pub struct Shell {
     /// The last change of view: the view left, and when.
     side_moved: Option<(SideView, Instant)>,
     library: Library,
-    /// The text a menu was opened on, and the link, for what is chosen.
+    /// The field a text field's menu was opened on, for what is chosen.
     pub(crate) menu_focus: Option<FocusHandle>,
-    menu_link: Option<MenuLink>,
-    /// The line of the picture a canvas menu was opened on.
-    menu_picture: Option<usize>,
-    /// The line of the picture or frame a menu's Delete takes out.
-    menu_remove: Option<usize>,
-    /// The link a menu can show another way.
-    menu_layout: Option<crate::editor::LayoutAt>,
     /// A file a bar renamed in place, renamed at the next draw, where
     /// the window is to hand (`Shell::rename_entry`).
     pending_rename: Option<(PathBuf, String)>,
-    /// What the canvas's menu was opened on: the mark, the cell, the editor.
-    menu_issue: Option<MenuIssue>,
-    menu_cell: Option<CellAt>,
-    menu_editor: Option<Entity<Editor>>,
+    /// What a note's menu was opened on (`note_menu.rs`).
+    canvas: crate::note_menu::NoteMenu,
     /// The words the person has settled with the check.
     words: Rc<Words>,
     /// A rename under way: the entry, and the field for its name. Or a
@@ -350,11 +343,26 @@ pub struct Shell {
     bounds_saved: Option<Instant>,
     pub(crate) settings: Option<AnyWindowHandle>,
     pub(crate) settings_section: &'static str,
-    /// Text's page: `fonts` or `size`.
-    pub(crate) settings_page: &'static str,
-    /// The fields an installed font is named in, made with the settings
-    /// window: the words', code's and Chinese's.
-    pub(crate) font_inputs: Option<[Entity<InputState>; 3]>,
+    /// Settings, Menu Bar: the shortcut being recorded, what the row says
+    /// of the last keys pressed, and whether Onyx opens at login, read from
+    /// the system as the section shows.
+    pub(crate) recording: bool,
+    pub(crate) record_said: Option<SharedString>,
+    pub(crate) at_login: bool,
+    /// The list of the system's faces a Custom tile opens (Settings,
+    /// Fonts): its search field, made with the settings window; which
+    /// tile it is open for and the row ↑ and ↓ are on; the families once
+    /// read, and whether they are being read; each Custom tile's place,
+    /// for the list to hang from; the list's scroll and its box.
+    pub(crate) font_query: Option<Entity<InputState>>,
+    pub(crate) font_list: Option<(crate::fonts::Slot, usize)>,
+    pub(crate) font_families: Option<Rc<crate::fonts::Families>>,
+    pub(crate) font_families_reading: bool,
+    pub(crate) font_tiles: Rc<RefCell<HashMap<crate::fonts::Slot, Bounds<Pixels>>>>,
+    pub(crate) font_scroll: ScrollHandle,
+    pub(crate) font_list_box: Rc<Cell<Bounds<Pixels>>>,
+    /// The settings window's own focus, given back when its list closes.
+    pub(crate) settings_focus: Option<FocusHandle>,
     pub(crate) settings_scroll: ScrollHandle,
     pub(crate) lang_serial: u32,
     pub(crate) update: UpdateRow,
@@ -544,6 +552,7 @@ impl Shell {
             closed_tabs: Vec::new(),
             tabs_row: Tabs::default(),
             press_taken: false,
+            folder_look: None,
             win_move: false,
             ground: Cell::new(None),
             home_fig: Rc::default(),
@@ -559,14 +568,8 @@ impl Shell {
             name_input: None,
             pressed: None,
             menu_focus: None,
-            menu_link: None,
-            menu_picture: None,
-            menu_remove: None,
-            menu_layout: None,
             pending_rename: None,
-            menu_issue: None,
-            menu_cell: None,
-            menu_editor: None,
+            canvas: Default::default(),
             words: Rc::new(Words::load()),
             rename: None,
             making: None,
@@ -581,9 +584,18 @@ impl Shell {
             viewer_focus: cx.focus_handle(),
             bounds_saved: None,
             settings: None,
-            settings_section: crate::settings::section_named(ui.settings_section.as_deref().unwrap_or("appearance")),
-            settings_page: "fonts",
-            font_inputs: None,
+            settings_section: crate::settings::section_named(ui.settings_section.as_deref().unwrap_or("general")),
+            recording: false,
+            record_said: None,
+            at_login: false,
+            font_query: None,
+            font_list: None,
+            font_families: None,
+            font_families_reading: false,
+            font_tiles: Rc::default(),
+            font_scroll: ScrollHandle::new(),
+            font_list_box: Rc::default(),
+            settings_focus: None,
             settings_scroll: ScrollHandle::new(),
             lang_serial: 0,
             update: UpdateRow::default(),
@@ -614,6 +626,7 @@ impl Shell {
         if shell.cfg.app.check_updates {
             shell.check_updates_later(cx);
         }
+        shell.read_at_login(cx);
         shell
     }
 
@@ -658,11 +671,14 @@ impl Shell {
     }
 
     /// The faces and size the editors are set in, from the settings.
-    fn look_of(e: &onyx_core::config::EditorConfig) -> Look {
+    pub(crate) fn look_of(e: &onyx_core::config::EditorConfig) -> Look {
         let sizes = e.text_sizes();
         let (text_family, mono_family) = (crate::fonts::text_family(&e.text_face, &e.text_custom), crate::fonts::mono_family(&e.mono_face, &e.mono_custom));
         let (text_fallbacks, mono_fallbacks) = (Some(crate::fonts::cjk_fallbacks(&text_family, &e.cjk_face, &e.cjk_custom)), Some(crate::fonts::cjk_fallbacks(&mono_family, &e.cjk_face, &e.cjk_custom)));
-        Look { text_family, mono_family, text_px: sizes.note, mono_px: sizes.code, text_fallbacks, mono_fallbacks }
+        let cjk_family = crate::fonts::cjk_text_family(&e.cjk_face, &e.cjk_custom, &text_family);
+        let cjk_fallbacks = Some(crate::fonts::cjk_behind(&text_family));
+        crate::fonts::set_fields_cjk(cjk_family.clone(), cjk_fallbacks.clone());
+        Look { text_family, mono_family, text_px: sizes.note, mono_px: sizes.code, text_fallbacks, mono_fallbacks, cjk_family, cjk_fallbacks }
     }
 
     /// The settings changed: every editor takes the faces and size.
@@ -679,6 +695,7 @@ impl Shell {
             let cfg = self.cfg.terminal.clone();
             term.update(cx, |t, cx| t.set_look(cfg, look.mono_family.clone(), cx));
         }
+        crate::menubar::push_look(look, cx);
     }
 
     // -- the vault ------------------------------------------------------------
@@ -705,6 +722,7 @@ impl Shell {
             }
         };
         let tree = vault::tree(&root);
+        crate::folder_look::ensure(&root, cx);
         self.vault = Some(Vault { root: root.clone(), tree, folded, _watcher: watcher, changes: Rc::new(rx) });
         let mut ui = ui;
         ui.remember_vault(&root);
@@ -796,18 +814,13 @@ impl Shell {
         let base = std::mem::replace(&mut tab.saved, text.clone());
         if !tab.dirty {
             tab.editor.update(cx, |e, cx| e.replace_text_quietly(&text, cx));
+            crate::menubar::follow(path, text, cx);
             return;
         }
         let mine = tab.editor.read(cx).text();
         let (merged, _) = onyx_core::merge::merge(&base, &mine, &text);
-        if merged != mine {
-            // One edit, the stretch between what the two share at the
-            // start and at the end, so the caret and the undo stay.
-            let head = mine.bytes().zip(merged.bytes()).take_while(|(a, b)| a == b).count();
-            let head = (0..=head).rev().find(|&i| mine.is_char_boundary(i) && merged.is_char_boundary(i)).unwrap_or(0);
-            let tail = mine[head..].bytes().rev().zip(merged[head..].bytes().rev()).take_while(|(a, b)| a == b).count();
-            let tail = (0..=tail).rev().find(|&i| mine.is_char_boundary(mine.len() - i) && merged.is_char_boundary(merged.len() - i)).unwrap_or(0);
-            let edit = (head..mine.len() - tail, merged[head..merged.len() - tail].to_string());
+        // One edit, so the caret and the undo stay.
+        if let Some(edit) = crate::editor::one_edit(&mine, &merged) {
             tab.editor.update(cx, |e, cx| e.apply_edits(vec![edit], cx));
         }
         let name = vault::title(path);
@@ -826,9 +839,24 @@ impl Shell {
         vault::is_note(path) || path.is_dir() || (!path.exists() && path.extension().is_none())
     }
 
+    /// A folder's icon and color, chosen on a sheet of their own.
+    fn open_folder_look(&mut self, folder: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(root) = self.vault_root().map(Path::to_path_buf) else { return };
+        let picker = cx.new(|cx| crate::folder_look::Picker::new(root, folder, 90., 0., window, cx));
+        let sub = cx.subscribe_in(&picker, window, |this, _, _: &crate::folder_look::Dismissed, window, cx| {
+            this.folder_look = None;
+            this.focus_editor_or_shell(window, cx);
+            cx.notify();
+        });
+        self.folder_look = Some((picker, sub));
+        cx.notify();
+    }
+
     fn reread_tree(&mut self, cx: &mut Context<Self>) {
         if let Some(v) = self.vault.as_mut() {
             v.tree = vault::tree(&v.root);
+            let root = v.root.clone();
+            crate::folder_look::ensure(&root, cx);
         }
         cx.notify();
     }
@@ -990,6 +1018,9 @@ impl Shell {
         let name = vault::title(path);
         let title = cx.new(|cx| {
             let mut field = TextareaState::new(window, cx).auto_grow(1, TITLE_ROWS).soft_wrap(true).submit_on_enter(true).placeholder(t("Untitled").to_string());
+            // Its Chinese, Japanese and Korean in the note's CJK face, as
+            // the words under it.
+            field.set_split_runs(Some(Rc::new(crate::fonts::split_for_fields)));
             field.set_value(name, window, cx);
             field
         });
@@ -1178,6 +1209,17 @@ impl Shell {
     /// a write every two seconds, never one a keystroke, and never more
     /// than two seconds of words that only the window holds.
     fn note_changed(&mut self, path: &Path, cx: &mut Context<Self>) {
+        self.mark_changed(path, cx);
+        // The menu bar note, when it is this one, follows as it is typed.
+        if crate::menubar::holds(path, cx) {
+            if let Some(text) = self.text_of_tab(path, cx) {
+                crate::menubar::follow(path, text, cx);
+            }
+        }
+    }
+
+    /// A tab's note has changes: it is written `SAVE_AFTER` on.
+    fn mark_changed(&mut self, path: &Path, cx: &mut Context<Self>) {
         let Some(tab) = self.tabs.iter_mut().find(|t| t.path == path && t.asset.is_none()) else { return };
         tab.dirty = true;
         if tab.save_due.is_none() {
@@ -1212,7 +1254,9 @@ impl Shell {
         match vault::write(&tab.path, &text) {
             Ok(()) => {
                 tab.dirty = false;
-                tab.saved = text;
+                tab.saved = text.clone();
+                let path = tab.path.clone();
+                crate::menubar::written(&path, text, cx);
             }
             Err(e) => {
                 let why = e.to_string();
@@ -1228,6 +1272,67 @@ impl Shell {
         for ix in 0..self.tabs.len() {
             self.save_tab(ix, cx);
         }
+    }
+
+    // -- the menu bar note (`menubar.rs`) ---------------------------------------
+
+    /// Whether a note is open here in a tab, which then writes it.
+    pub(crate) fn has_note(&self, path: &Path) -> bool {
+        self.tabs.iter().any(|t| t.path == path && t.asset.is_none())
+    }
+
+    /// Typed in the menu bar note: the tab takes it, and writes it on its
+    /// own clock, as if typed here.
+    pub(crate) fn follow_from_menu(&mut self, path: &Path, text: &str, cx: &mut Context<Self>) {
+        let Some(tab) = self.tabs.iter().find(|t| t.path == path && t.asset.is_none()) else { return };
+        tab.editor.update(cx, |e, cx| e.follow_text(text, cx));
+        self.mark_changed(path, cx);
+    }
+
+    /// A tab's note written now, when it has changes: as the menu bar note
+    /// closes over it.
+    pub(crate) fn save_note_now(&mut self, path: &Path, cx: &mut Context<Self>) {
+        if let Some(ix) = self.tabs.iter().position(|t| t.path == path && t.asset.is_none()) {
+            self.save_tab(ix, cx);
+        }
+    }
+
+    /// A file renamed from a bar in the menu bar note: as one here is, its
+    /// links followed through the vault, at the next drawing.
+    pub(crate) fn ask_rename(&mut self, file: PathBuf, name: String, cx: &mut Context<Self>) {
+        self.pending_rename = Some((file, name));
+        cx.notify();
+    }
+
+    /// Open in Onyx, from the menu bar note: the note's vault open here
+    /// (the one open when it holds the note), the note in a tab, and a link
+    /// of it followed when one was pressed.
+    pub(crate) fn show_from_menu(&mut self, path: PathBuf, link: Option<crate::menubar::Link>, window: &mut Window, cx: &mut Context<Self>) {
+        let inside = self.vault_root().is_some_and(|r| path.starts_with(r));
+        if !inside {
+            if let Some(root) = crate::menubar::vault_of(&path) {
+                self.open_vault(root, window, cx);
+            }
+        }
+        self.open_note(path, window, cx);
+        match link {
+            Some(crate::menubar::Link::Path(url)) => self.open_link(&url, cx),
+            Some(crate::menubar::Link::Note(name)) => self.open_wikilink(&name, cx),
+            Some(crate::menubar::Link::File(what, file)) => self.asset_pick(&what, file, window, cx),
+            Some(crate::menubar::Link::Export) => {
+                if let Some(p) = self.shown.clone() {
+                    self.open_export(p, window, cx);
+                }
+            }
+            Some(crate::menubar::Link::Print) => {
+                if let Some(p) = self.shown.clone() {
+                    self.print_note(p, window, cx);
+                }
+            }
+            None => {}
+        }
+        window.activate_window();
+        cx.notify();
     }
 
     /// A new note in `dir`: its name asked first on the name sheet,
@@ -1448,6 +1553,8 @@ impl Shell {
             eprintln!("trash {}", path.display());
         } else if let Err(e) = vault::trash(&path) {
             self.say(tf("It was not moved to the trash: {why}", &[("why", &e)]), cx);
+        } else {
+            crate::folder_look::removed(&path, cx);
         }
         self.reread_tree(cx);
         self.save_ui(window);
@@ -1466,6 +1573,7 @@ impl Shell {
         if path.is_dir() {
             items.push(Entry::choice("new-note", "icons/file-plus.svg", t("New Note")));
             items.push(Entry::choice("new-folder", "icons/folder-plus.svg", t("New Folder")));
+            items.push(Entry::choice("folder-look", "tabler/palette.svg", t("Icon and Color…")));
             items.push(Entry::Rule);
             copies(&mut items);
             items.push(Entry::Rule);
@@ -1600,238 +1708,12 @@ impl Shell {
     /// clipboard; anywhere else what a text offers, in a note that takes
     /// no change only what leaves it as it is.
     fn canvas_menu(&mut self, editor: Entity<Editor>, at: Point<Pixels>, what: MenuAt, cx: &mut Context<Self>) {
-        // A frame's words: copied, never changed, and only the frame's.
-        if let Some(frame) = what.frame {
-            self.menu_focus = Some(frame.focus);
-            self.menu_picture = None;
-            self.menu_link = None;
-            self.menu_issue = None;
-            self.menu_cell = None;
-            self.menu_editor = Some(editor);
-            self.menus.show("canvas", at, crate::menu::edit_entries(frame.selection, false, true));
-            cx.notify();
-            return;
+        let (items, file) = self.canvas.entries(editor, what, self.shown.is_some(), cx);
+        if file.is_some() {
+            self.pressed = file;
         }
-        let (selection, locked, focus) = {
-            let e = editor.read(cx);
-            (e.has_selection(), e.locked(), e.focus_handle(cx))
-        };
-        let mut items = Vec::new();
-        // How a piece's link shows, first: a card's size, the whole file.
-        // Then a picture's size and place, as its bar has them: a row each.
-        let mut rows = Vec::new();
-        // A piece (a card, a frame) has it first; a link among words, after
-        // the link's own choices.
-        let piece = what.remove.is_some();
-        if let Some(l) = what.layout.as_ref().filter(|_| !locked && (piece || what.link.is_none())) {
-            rows.extend(Self::layout_entries(l));
-        }
-        // A file of the vault, a picture or a link's: what the sidebar's
-        // asset menu offers first.
-        // A picture's size and place, as its bar has them, and the viewer.
-        if let Some((_, across, asked)) = what.picture {
-            use crate::menu::Tool;
-            use onyx_core::html::{Across, Width};
-            let full = asked == Some(Width::Share(100));
-            // The viewer is a picture's; a file has its frame.
-            if !what.file.as_deref().is_some_and(crate::layout::is_framed) {
-                items.push(Entry::choice("pic-view", "icons/maximize.svg", t("View")));
-                items.push(Entry::Rule);
-            }
-            rows.push(Entry::Icons { label: t("Size").into(), items: vec![Tool::new("pic-auto", "icons/image.svg", t("Original Size"), asked.is_none()), Tool::new("pic-full", "icons/picture-full.svg", t("Full Width"), full)] });
-            if !full {
-                rows.push(Entry::Icons { label: t("Align").into(), items: vec![Tool::new("pic-left", "icons/align-left.svg", t("Align Left"), across == Across::Start), Tool::new("pic-center", "icons/align-center.svg", t("Align Center"), across == Across::Center), Tool::new("pic-right", "icons/align-right.svg", t("Align Right"), across == Across::End)] });
-            }
-        }
-        if !rows.is_empty() {
-            items.extend(rows);
-            items.push(Entry::Rule);
-        }
-        if let Some(file) = &what.file {
-            items.push(Entry::choice("file-rename", "icons/pencil-simple.svg", t("Rename")));
-            if what.link.is_none() {
-                items.push(Entry::Rule);
-                items.push(Entry::choice("file-open", "icons/eye.svg", t("Open")));
-                items.push(Entry::choice("file-open-app", "icons/external-link.svg", t("Open with Default App")));
-            }
-            items.push(Entry::choice("file-reveal", "icons/folder-open.svg", t(crate::sys::REVEAL_LABEL)));
-            items.push(Entry::Rule);
-            if what.link.is_none() {
-                items.push(Entry::choice("file-copy-path", "icons/link.svg", t("Copy Path")));
-            }
-            self.pressed = Some(file.clone());
-        }
-        if let Some(link) = &what.link {
-            items.push(Entry::choice("open-link", "icons/external-link.svg", if link.note.is_some() { t("Open Note") } else { t("Open Link") }));
-            items.push(Entry::Rule);
-            if link.url.is_some() {
-                items.push(Entry::choice("copy-link", "icons/link.svg", t("Copy Link")));
-            }
-            if !link.words.trim().is_empty() {
-                items.push(Entry::choice("copy-text", "icons/typography.svg", t("Copy Text")));
-            }
-            if !link.raw.trim().is_empty() {
-                items.push(Entry::choice("copy-markdown", "icons/markdown.svg", t("Copy Markdown")));
-            }
-            if let Some(l) = what.layout.as_ref().filter(|_| !locked && !piece) {
-                items.push(Entry::Rule);
-                items.extend(Self::layout_entries(l));
-            }
-        } else if what.file.is_none() {
-            if let Some(issue) = &what.issue {
-                items.extend(Self::issue_entries(issue));
-                items.push(Entry::Rule);
-            }
-            let scope = what.table.as_ref().map(|(_, scope, _)| *scope);
-            if !matches!(scope, Some(Scope::Row | Scope::Column)) {
-                items.extend(crate::menu::edit_entries(selection, cx.read_from_clipboard().is_some(), locked));
-            }
-            if let Some((_, scope, facts)) = what.table.as_ref().filter(|_| !locked) {
-                if !items.is_empty() {
-                    items.push(Entry::Rule);
-                }
-                let at = what.table.as_ref().map_or(0, |(cell, _, _)| cell.row);
-                let col = what.table.as_ref().map_or(0, |(cell, _, _)| cell.col);
-                items.extend(Self::table_entries(*scope, facts, at, col));
-            } else if what.blank && !locked {
-                items.push(Entry::Rule);
-                items.push(Entry::choice("table-new", "icons/table.svg", t("Insert Table")));
-            }
-            if self.shown.is_some() && what.table.as_ref().is_none_or(|(_, s, _)| *s == Scope::Cell) {
-                items.push(Entry::Rule);
-                items.push(Entry::choice("canvas-export", "icons/file-export.svg", t("Export…")));
-                items.push(Entry::choice("canvas-print", "icons/printer.svg", t("Print…")));
-            }
-        }
-        // Delete, last, for a picture or a frame: out of the note, the
-        // file left where it is.
-        if let Some(line) = what.remove.filter(|_| !locked) {
-            if !items.is_empty() && !matches!(items.last(), Some(Entry::Rule)) {
-                items.push(Entry::Rule);
-            }
-            items.push(Entry::danger("remove", "icons/trash.svg", t("Delete")));
-            self.menu_remove = Some(line);
-        } else {
-            self.menu_remove = None;
-        }
-        self.menu_layout = what.layout.filter(|_| !locked);
-        self.menu_focus = Some(focus);
-        self.menu_picture = what.picture.map(|(line, _, _)| line);
-        self.menu_link = what.link;
-        self.menu_issue = what.issue;
-        self.menu_cell = what.table.map(|(cell, _, _)| cell);
-        self.menu_editor = Some(editor);
         self.menus.show("canvas", at, items);
         cx.notify();
-    }
-
-    /// How a link can show: among words, as a card of a size, or for a
-    /// file a frame shows, whole; the way it shows now ticked.
-    fn layout_entries(l: &crate::editor::LayoutAt) -> Vec<Entry> {
-        use crate::editor::Layout;
-        use crate::menu::Tool;
-        use onyx_core::html::CardSize;
-        let mut tools = Vec::new();
-        if l.preview {
-            tools.push(Tool::new("layout-preview", "icons/card-preview.svg", t("Preview"), l.now == Layout::Preview));
-        }
-        tools.push(Tool::new("layout-large", "icons/card-large.svg", t("Large Card"), l.now == Layout::Card(CardSize::Large)));
-        tools.push(Tool::new("layout-medium", "icons/card-medium.svg", t("Medium Card"), l.now == Layout::Card(CardSize::Medium)));
-        tools.push(Tool::new("layout-small", "icons/card-small.svg", t("Small Card"), l.now == Layout::Card(CardSize::Small)));
-        tools.push(Tool::new("layout-link", "icons/link.svg", t("Link"), l.now == Layout::Link));
-        let mut items = vec![Entry::Icons { label: t("Show As").into(), items: tools }];
-        // A large card, narrower than the words, stands where it is placed.
-        if let Some(across) = l.across {
-            use onyx_core::html::Across;
-            items.push(Entry::Icons { label: t("Align").into(), items: vec![Tool::new("layout-left", "icons/align-left.svg", t("Align Left"), across == Across::Start), Tool::new("layout-center", "icons/align-center.svg", t("Align Center"), across == Across::Center), Tool::new("layout-right", "icons/align-right.svg", t("Align Right"), across == Across::End)] });
-        }
-        items
-    }
-
-    /// A mark's menu: what could stand there, and what settles the word.
-    fn issue_entries(issue: &MenuIssue) -> Vec<Entry> {
-        let mut items: Vec<Entry> = issue.fixes.iter().take(5).enumerate().map(|(i, fix)| Entry::choice(format!("fix-{i}"), "icons/replace.svg", fix.clone())).collect();
-        if issue.fixes.is_empty() {
-            items.push(Entry::choice("no-fix", "icons/replace.svg", t("No spelling found")));
-        }
-        items.push(Entry::Rule);
-        if issue.spelling {
-            items.push(Entry::choice("learn-word", "icons/book-open.svg", t("Learn Spelling")));
-        }
-        items.push(Entry::choice("ignore-word", "icons/eye-off.svg", t("Ignore")));
-        items
-    }
-
-    /// A table's menu. On a cell, what it most often wants; on a row's or
-    /// a column's handle, all that row or column can do. What takes the
-    /// table apart comes last, after a line of its own.
-    fn table_entries(scope: Scope, facts: &TableFacts, row: usize, col: usize) -> Vec<Entry> {
-        use crate::markdown::Align;
-        let aligns = |items: &mut Vec<Entry>| {
-            let choice = |id: &'static str, icon: &'static str, word: &'static str, on: bool| Entry::Choice { id: id.into(), icon, label: word.into(), picture: false, chosen: on };
-            items.push(choice("align-left", "icons/align-left.svg", t("Align Left"), facts.align == Align::Left));
-            items.push(choice("align-center", "icons/align-center.svg", t("Align Center"), facts.align == Align::Center));
-            items.push(choice("align-right", "icons/align-right.svg", t("Align Right"), facts.align == Align::Right));
-        };
-        let sorts = |items: &mut Vec<Entry>| {
-            items.push(Entry::choice("sort-up", "icons/sort-ascending.svg", t("Sort A to Z")));
-            items.push(Entry::choice("sort-down", "icons/sort-descending.svg", t("Sort Z to A")));
-        };
-        let mut items = Vec::new();
-        match scope {
-            Scope::Cell => {
-                items.push(Entry::choice("row-above", "icons/row-insert-top.svg", t("Insert Row Above")));
-                items.push(Entry::choice("row-below", "icons/row-insert-bottom.svg", t("Insert Row Below")));
-                items.push(Entry::choice("col-left", "icons/column-insert-left.svg", t("Insert Column Left")));
-                items.push(Entry::choice("col-right", "icons/column-insert-right.svg", t("Insert Column Right")));
-                items.push(Entry::Rule);
-                aligns(&mut items);
-                items.push(Entry::Rule);
-                if row > 0 {
-                    items.push(Entry::choice("row-delete", "icons/row-remove.svg", t("Delete Row")));
-                }
-                items.push(Entry::choice("col-delete", "icons/column-remove.svg", t("Delete Column")));
-                items.push(Entry::choice("table-delete", "icons/trash.svg", t("Delete Table")));
-            }
-            Scope::Row => {
-                items.push(Entry::choice("row-above", "icons/row-insert-top.svg", t("Insert Row Above")));
-                items.push(Entry::choice("row-below", "icons/row-insert-bottom.svg", t("Insert Row Below")));
-                items.push(Entry::choice("row-duplicate", "icons/copy.svg", t("Duplicate Row")));
-                if facts.rows > 1 {
-                    items.push(Entry::Rule);
-                    if row > 0 {
-                        items.push(Entry::choice("row-up", "icons/arrow-up.svg", t("Move Row Up")));
-                    }
-                    if row + 1 < facts.rows {
-                        items.push(Entry::choice("row-down", "icons/arrow-down.svg", t("Move Row Down")));
-                    }
-                }
-                if row > 0 {
-                    items.push(Entry::Rule);
-                    items.push(Entry::choice("row-delete", "icons/row-remove.svg", t("Delete Row")));
-                }
-            }
-            Scope::Column => {
-                items.push(Entry::choice("col-left", "icons/column-insert-left.svg", t("Insert Column Left")));
-                items.push(Entry::choice("col-right", "icons/column-insert-right.svg", t("Insert Column Right")));
-                if facts.columns > 1 {
-                    items.push(Entry::Rule);
-                    if col > 0 {
-                        items.push(Entry::choice("col-move-left", "icons/arrow-left.svg", t("Move Column Left")));
-                    }
-                    if col + 1 < facts.columns {
-                        items.push(Entry::choice("col-move-right", "icons/arrow-right.svg", t("Move Column Right")));
-                    }
-                }
-                items.push(Entry::Rule);
-                aligns(&mut items);
-                items.push(Entry::Rule);
-                sorts(&mut items);
-                items.push(Entry::Rule);
-                items.push(Entry::choice("col-delete", "icons/column-remove.svg", t("Delete Column")));
-            }
-        }
-        items
     }
 
     /// The language a note is checked in, while the check is on.
@@ -1844,6 +1726,27 @@ impl Shell {
         let (writing, words) = (self.writing_language(), self.words.clone());
         for tab in self.tabs.iter().filter(|t| t.asset.is_none()) {
             tab.editor.update(cx, |e, cx| e.set_writing(writing.clone(), words.clone(), cx));
+        }
+        crate::menubar::push_writing(writing, words, cx);
+    }
+
+    /// A marked word learned for every note, or let be: a spelling for
+    /// as long as the app runs, a grammar's rule for good.
+    pub(crate) fn settle_issue(&mut self, issue: MenuIssue, learn: bool, cx: &mut Context<Self>) {
+        if learn {
+            if let Err(e) = onyx_core::check::learn(&issue.words) {
+                eprintln!("onyx: the word was not kept: {e}");
+            }
+            self.settle_word(|w| w.learned = onyx_core::check::learned(), cx);
+        } else if issue.spelling {
+            self.settle_word(|w| {
+                w.passed.insert(issue.words.to_lowercase());
+            }, cx);
+        } else {
+            if let Err(e) = onyx_core::check::ignore(&issue.rule, &issue.words) {
+                eprintln!("onyx: the word was not kept: {e}");
+            }
+            self.settle_word(|w| w.ignored = onyx_core::check::ignored(), cx);
         }
     }
 
@@ -1893,6 +1796,11 @@ impl Shell {
             ("entry", "open") => {
                 if let Some(p) = pressed {
                     self.open_note(p, window, cx);
+                }
+            }
+            ("entry", "folder-look") => {
+                if let Some(p) = pressed {
+                    self.open_folder_look(p, window, cx);
                 }
             }
             ("entry", "reveal") => {
@@ -1969,110 +1877,39 @@ impl Shell {
                     self.open_vault(p, window, cx);
                 }
             }
-            ("canvas", "remove") => {
-                if let (Some(line), Some(editor)) = (self.menu_remove.take(), self.menu_editor.clone()) {
-                    editor.update(cx, |e, cx| e.remove_object(line, cx));
-                }
-            }
-            ("canvas", id) if id.starts_with("layout-") => {
-                if let (Some(at), Some(editor)) = (self.menu_layout.take(), self.menu_editor.clone()) {
-                    let what = id["layout-".len()..].to_string();
-                    editor.update(cx, |e, cx| e.layout_choice(at.line, at.at, &what, cx));
-                }
-            }
-            ("canvas", id) if id.starts_with("pic-") => {
-                if let (Some(line), Some(editor)) = (self.menu_picture.take(), self.menu_editor.clone()) {
-                    let what = id["pic-".len()..].to_string();
-                    editor.update(cx, |e, cx| e.picture_choice(line, &what, cx));
-                }
-            }
-            ("canvas", id) if id.starts_with("file-") => {
-                if let Some(p) = pressed {
-                    self.asset_pick(&id["file-".len()..], p, window, cx);
-                }
-            }
-            ("canvas", "open-link") => {
-                if let Some(link) = self.menu_link.take() {
+            ("canvas", id) => match self.canvas.pick(id, window, cx) {
+                crate::note_menu::Asked::Done => {}
+                crate::note_menu::Asked::Link(link) => {
                     if let Some(url) = &link.url {
                         self.open_link(url, cx);
                     } else if let Some(note) = &link.note {
                         self.open_wikilink(note, cx);
                     }
                 }
-            }
-            ("canvas", "copy-link") => {
-                if let Some(url) = self.menu_link.take().and_then(|l| l.url) {
-                    Self::copy_text(url, cx);
-                }
-            }
-            ("canvas", "copy-text") => {
-                if let Some(link) = self.menu_link.take() {
-                    Self::copy_text(link.words, cx);
-                }
-            }
-            ("canvas", "copy-markdown") => {
-                if let Some(link) = self.menu_link.take() {
-                    Self::copy_text(link.raw, cx);
-                }
-            }
-            ("canvas", "canvas-export") => {
-                if let Some(p) = self.shown.clone() {
-                    self.open_export(p, window, cx);
-                }
-            }
-            ("canvas", "canvas-print") => {
-                if let Some(p) = self.shown.clone() {
-                    self.print_note(p, window, cx);
-                }
-            }
-            ("canvas", "table-new") => {
-                if let Some(editor) = self.menu_editor.clone() {
-                    editor.update(cx, |e, cx| e.insert_table(cx));
-                }
-            }
-            ("canvas", "no-fix") => {}
-            ("canvas", "learn-word") => {
-                if let Some(issue) = self.menu_issue.take() {
-                    if let Err(e) = onyx_core::check::learn(&issue.words) {
-                        eprintln!("onyx: the word was not kept: {e}");
-                    }
-                    self.settle_word(|w| w.learned = onyx_core::check::learned(), cx);
-                }
-            }
-            ("canvas", "ignore-word") => {
-                if let Some(issue) = self.menu_issue.take() {
-                    if issue.spelling {
-                        self.settle_word(|w| {
-                            w.passed.insert(issue.words.to_lowercase());
-                        }, cx);
-                    } else {
-                        if let Err(e) = onyx_core::check::ignore(&issue.rule, &issue.words) {
-                            eprintln!("onyx: the word was not kept: {e}");
-                        }
-                        self.settle_word(|w| w.ignored = onyx_core::check::ignored(), cx);
+                crate::note_menu::Asked::File(what) => {
+                    if let Some(p) = pressed {
+                        self.asset_pick(&what, p, window, cx);
                     }
                 }
-            }
-            ("canvas", id) if id.starts_with("fix-") => {
-                let fix = id["fix-".len()..].parse::<usize>().ok();
-                if let (Some(issue), Some(editor), Some(fix)) = (self.menu_issue.take(), self.menu_editor.clone(), fix) {
-                    if let Some(with) = issue.fixes.get(fix) {
-                        editor.update(cx, |e, cx| e.fix_issue(issue.range.clone(), with, cx));
+                crate::note_menu::Asked::Export => {
+                    if let Some(p) = self.shown.clone() {
+                        self.open_export(p, window, cx);
                     }
                 }
-            }
-            ("canvas", id) if self.menu_cell.is_some() && !matches!(id, "cut" | "copy" | "paste" | "select-all") => {
-                if let (Some(cell), Some(editor)) = (self.menu_cell.take(), self.menu_editor.clone()) {
-                    let id = id.to_string();
-                    editor.update(cx, |e, cx| e.table_do(&id, cell, cx));
+                crate::note_menu::Asked::Print => {
+                    if let Some(p) = self.shown.clone() {
+                        self.print_note(p, window, cx);
+                    }
                 }
-            }
+                crate::note_menu::Asked::Learn(issue) => self.settle_issue(issue, true, cx),
+                crate::note_menu::Asked::Ignore(issue) => self.settle_issue(issue, false, cx),
+            },
             ("terminal", id) => {
                 if let Some(term) = self.terminal.clone() {
                     term.update(cx, |t, cx| t.menu_do(id, window, cx));
                 }
             }
-            ("canvas" | "edit", id) => {
+            ("edit", id) => {
                 if let Some(focus) = self.menu_focus.take() {
                     crate::menu::do_edit(id, &focus, window, cx);
                 }
@@ -2376,7 +2213,9 @@ impl Shell {
         let cut = self.choice.cut.iter().any(|c| c == &e.path);
         let into = if e.dir { e.path.clone() } else { e.path.parent().map(Path::to_path_buf).unwrap_or_default() };
         let wash = theme.primary.opacity(0.22);
-        let icon = crate::file_icons::path(&if e.dir { e.name.clone() } else { format!("{}.md", e.name) }, e.dir, is_open_folder, dark);
+        // A folder's icon; a note has none, every one being markdown, and
+        // its name stands where a folder's icon would.
+        let icon = e.dir.then(|| crate::folder_look::icon(&e.path, &e.name, is_open_folder, dark, theme, cx));
         let id = ElementId::Name(SharedString::from(format!("entry-{}", e.path.display())));
         let menu_path = path.clone();
             // The row keeps its height and takes the press and the drag;
@@ -2397,7 +2236,7 @@ impl Shell {
                 .when(!chosen, |d| d.group_hover("tree-row", move |s| s.bg(hover_bg)))
                 .when(self.pressed.as_ref() == Some(&e.path), |d| d.bg(theme.foreground.opacity(0.1)))
                 .child(div().w(px(12.)).flex_shrink_0().flex().justify_center().when(e.dir, |d| d.child(Icon::default().path(if is_open_folder { "icons/chevron-down.svg" } else { "icons/chevron-right.svg" }).with_size(px(12.)).text_color(theme.muted_foreground))))
-                .child(img(icon).size(px(16.)).flex_shrink_0())
+                .children(icon)
                 .child(div().flex_1().min_w_0().truncate().child(e.name.clone()));
             let row = div()
                 .id(id)
@@ -2500,7 +2339,7 @@ impl Shell {
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(|this, _, window, cx| {
                         swallow_click(window, cx);
-                        this.open_settings(Some("appearance"), window, cx);
+                        this.open_settings(Some("general"), window, cx);
                     })),
             )
             .child(
@@ -2746,7 +2585,7 @@ impl Shell {
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, _| this.press_taken = true))
                 .on_click(cx.listener(|this, _, window, cx| {
                     swallow_click(window, cx);
-                    this.open_settings(Some("appearance"), window, cx);
+                    this.open_settings(Some("general"), window, cx);
                 })),
         );
         Some(rail.into_any_element())
@@ -3513,20 +3352,7 @@ impl Shell {
                 let issue = (editor.read(cx).text() == text).then(|| editor.read(cx).issue_at(offset)).flatten();
                 let clipboard = cx.read_from_clipboard().is_some();
                 let _ = this.update(cx, |this, cx| {
-                    // On a marked word the corrections are the menu, and
-                    // nothing else.
-                    let items = match &issue {
-                        Some(issue) => Self::issue_entries(issue),
-                        None => crate::menu::edit_entries(selection, clipboard, false),
-                    };
-                    this.menu_focus = Some(focus);
-                    this.menu_issue = issue;
-                    this.menu_editor = Some(editor);
-                    this.menu_picture = None;
-                    this.menu_link = None;
-                    this.menu_cell = None;
-                    this.menu_remove = None;
-                    this.menu_layout = None;
+                    let items = this.canvas.for_source(editor, focus, issue, selection, clipboard);
                     this.menus.show("canvas", at, items);
                     cx.notify();
                 });
@@ -3948,7 +3774,7 @@ impl Shell {
             .justify_center()
             .pb(px(48.))
             .gap(px(26.))
-            .child(v_flex().items_center().gap(px(12.)).child(self.home_figure(&theme, cx)).child(div().text_size(px(34.)).font_family(face).child(greeting(&self.user_name))))
+            .child(v_flex().items_center().gap(px(12.)).child(Self::home_figure(&self.home_fig, &theme, cx.entity_id())).child(div().text_size(px(34.)).font_family(face).child(greeting(&self.user_name))))
             .child(
                 v_flex()
                     .gap(px(8.))
@@ -3993,12 +3819,15 @@ impl Shell {
     /// the picture and rounded to half a degree: gpui turns a picture
     /// after it is rasterized, and a line turned that way blurs. Each
     /// tilt is rasterized once and kept by its text's hash (`svg().data`).
-    fn home_figure(&self, theme: &gpui_component::Theme, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Drawn by the vault's page and by the menu bar note's landing page
+    /// (`menubar.rs`), each with its own spring, and `view` redrawn as the
+    /// pointer moves it.
+    pub(crate) fn home_figure(home_fig: &Rc<RefCell<Fig>>, theme: &gpui_component::Theme, view: EntityId) -> impl IntoElement {
         const W: f32 = 220.;
         const H: f32 = 124.;
         const PEN: f32 = 64.;
         let (wind, lift, near, moving) = {
-            let mut fig = self.home_fig.borrow_mut();
+            let mut fig = home_fig.borrow_mut();
             let moving = fig.step();
             let (wind, lift, near) = fig.at();
             (wind, lift, near, moving)
@@ -4034,23 +3863,24 @@ impl Shell {
         let (rest_x, rest_y) = (152. + 3. * wind, 0. + 6. * lift);
         let (pen_x, pen_y) = (rest_x + (write_x - rest_x) * near, rest_y + (write_y - rest_y) * near);
         let pen_part = move |path: &'static str, color: Hsla| svg().path(path).absolute().left(px(pen_x)).top(px(pen_y)).size(px(PEN)).text_color(color);
-        let fig = self.home_fig.clone();
+        let fig = home_fig.clone();
+        let (moved, left) = (home_fig.clone(), home_fig.clone());
         div()
             .id("home-fig")
             .relative()
             .w(px(W))
             .h(px(H))
             .flex_shrink_0()
-            .on_mouse_move(cx.listener(|this, e: &MouseMoveEvent, _, cx| {
-                this.home_fig.borrow_mut().ask(Some(e.position));
-                cx.notify();
-            }))
-            .on_hover(cx.listener(|this, over: &bool, _, cx| {
+            .on_mouse_move(move |e: &MouseMoveEvent, _, cx| {
+                moved.borrow_mut().ask(Some(e.position));
+                cx.notify(view);
+            })
+            .on_hover(move |over: &bool, _, cx| {
                 if !*over {
-                    this.home_fig.borrow_mut().ask(None);
-                    cx.notify();
+                    left.borrow_mut().ask(None);
+                    cx.notify(view);
                 }
-            }))
+            })
             // Where it is, for the pointer's place on it; and the next
             // frame, while the spring has not settled.
             .child(
@@ -4579,7 +4409,41 @@ async fn futures_lite_select<T: 'static>(task: Task<T>, ticker: impl std::future
 
 /// The greeting over the vault's page, by the hour and the name, as emaki
 /// says it.
-fn greeting(name: &str) -> String {
+impl crate::tabs::TabHost for Shell {
+    fn tabs_row(&mut self) -> &mut crate::tabs::Tabs {
+        &mut self.tabs_row
+    }
+
+    fn tab_press(&mut self) {
+        self.press_taken = true;
+    }
+
+    fn tabs_reorder(&mut self, order: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
+        self.reorder_tabs(order, window, cx);
+    }
+
+    fn tab_show(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        self.show_tab(path, window, cx);
+    }
+
+    fn tab_close(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>) {
+        self.close_tab(path, window, cx);
+    }
+
+    fn tab_menu(&mut self, path: PathBuf, at: Point<Pixels>, cx: &mut Context<Self>) {
+        self.show_entry_menu(path, at, cx);
+    }
+
+    fn pill_menu(&mut self, folder: PathBuf, at: Point<Pixels>, cx: &mut Context<Self>) {
+        self.show_pill_menu(folder, at, cx);
+    }
+
+    fn tab_plus(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.new_note(&NewNote, window, cx);
+    }
+}
+
+pub(crate) fn greeting(name: &str) -> String {
     use chrono::Timelike as _;
     let hour = chrono::Local::now().hour();
     let part = if hour < 5 { t("Still up") } else if hour < 12 { t("Good morning") } else if hour < 18 { t("Good afternoon") } else { t("Good evening") };
@@ -4593,6 +4457,10 @@ impl Render for Shell {
         }
         crate::editor::stamp("shell render begins");
         self.scrollers.begin();
+        // The router is the window's being drawn: the menu bar note's
+        // window has scrollers of its own (`menubar.rs`), and a frame names
+        // itself to whichever window draws it.
+        cx.set_global(crate::scroll::Router(self.scrollers.clone()));
         let theme = cx.theme().clone();
         let frame = theme.title_bar;
         if self.ground.get() != Some(frame) {
@@ -4685,10 +4553,13 @@ impl Render for Shell {
             cx.notify();
         });
         // The settings window's are drawn there.
-        let ours = |m: &crate::menu::Menu| m.what != "language" && m.what != SETTINGS_EDIT;
+        let ours = |m: &crate::menu::Menu| !crate::settings::menu_is_ours(m.what);
         // Over the window nothing under it scrolls (`scroll.rs`).
         if self.menus.open.as_ref().is_some_and(ours) || self.new_vault.is_some() || self.rename.is_some() || self.export.is_some() || self.search_open || self.viewer.is_some() {
             self.scrollers.over();
+        }
+        if let Some((picker, _)) = &self.folder_look {
+            self.scrollers.name_over(&picker.read(cx).scroll);
         }
         let menu = if self.menus.open.as_ref().is_some_and(ours) || self.menus.gone.as_ref().is_some_and(|(m, _)| ours(m)) { self.menus.render(pick, close, cx) } else { None };
         let sheet = self.render_new_vault(cx).or_else(|| self.render_rename(cx)).or_else(|| self.render_export(window, cx));
@@ -4842,6 +4713,7 @@ impl Render for Shell {
             .child(strip)
             .children(crate::csd::chrome(window, px(1.) + FRAME / 2. + TITLEBAR_H / 2. - px(12.), |window, _| window.remove_window(), cx))
             .children(sheet)
+            .children(self.folder_look.as_ref().map(|(p, _)| p.clone()))
             .children(search)
             .children(menu)
             .children(viewer)
@@ -4858,7 +4730,10 @@ impl Shell {
             cx.background_executor().timer(Duration::from_millis(wait)).await;
             let settings = this.update(cx, |s, _| s.settings).ok().flatten();
             let _ = cx.update(|window, cx| {
+                // `ONYX_SHOT_OF=menunote`: the menu bar note's window.
+                let of_note = std::env::var("ONYX_SHOT_OF").is_ok_and(|v| v == "menunote");
                 let shot = match settings {
+                    _ if of_note => crate::menubar::shoot(&path, cx),
                     Some(h) => h.update(cx, |_, w, _| crate::sys::shoot_window(w, &path)).unwrap_or_else(|e| Err(e.to_string())),
                     None => crate::sys::shoot_window(window, &path),
                 };
@@ -4924,12 +4799,16 @@ impl Shell {
                         .detach();
                     }
                 }
-                s if s.starts_with("press=") || s.starts_with("rpress=") || s.starts_with("drag=") => {
+                s if s.starts_with("press=") || s.starts_with("rpress=") || s.starts_with("drag=") || s.starts_with("altdrag=") || s.starts_with("hold=") => {
                     // `press=x,y` or `press=x,y,clicks`; `rpress=x,y`, the
-                    // right button; `drag=x,y,to_x,to_y`.
+                    // right button; `drag=x,y,to_x,to_y`; `altdrag=` the
+                    // same with ⌥ held; `hold=` the same with the button
+                    // still down, for a picture mid-drag.
                     // Once the frame it aims at is drawn, into this window
                     // alone: nothing reaches the screen.
-                    let dragging = s.starts_with("drag=");
+                    let holding = s.starts_with("hold=");
+                    let alt = s.starts_with("altdrag=");
+                    let dragging = s.starts_with("drag=") || alt || holding;
                     let right = s.starts_with("rpress=");
                     let n: Vec<f32> = s.split_once('=').map(|(_, v)| v.split(',').filter_map(|n| n.parse().ok()).collect()).unwrap_or_default();
                     if n.len() >= 2 {
@@ -4941,13 +4820,15 @@ impl Shell {
                         cx.spawn_in(window, async move |_, cx| {
                             cx.background_executor().timer(Duration::from_millis(wait)).await;
                             let _ = cx.update(|window, cx| {
-                                let (button, modifiers) = (if right { MouseButton::Right } else { MouseButton::Left }, Modifiers::default());
+                                let (button, modifiers) = (if right { MouseButton::Right } else { MouseButton::Left }, Modifiers { alt, ..Modifiers::default() });
                                 window.dispatch_event(PlatformInput::MouseMove(MouseMoveEvent { position, pressed_button: None, modifiers }), cx);
                                 window.dispatch_event(PlatformInput::MouseDown(MouseDownEvent { button, position, modifiers, click_count, first_mouse: false }), cx);
                                 if dragging {
                                     window.dispatch_event(PlatformInput::MouseMove(MouseMoveEvent { position: to, pressed_button: Some(button), modifiers }), cx);
                                 }
-                                window.dispatch_event(PlatformInput::MouseUp(MouseUpEvent { button, position: to, modifiers, click_count }), cx);
+                                if !holding {
+                                    window.dispatch_event(PlatformInput::MouseUp(MouseUpEvent { button, position: to, modifiers, click_count }), cx);
+                                }
                             });
                         })
                         .detach();
@@ -5279,6 +5160,45 @@ impl Shell {
                     }
                 }
                 "close" => self.close_nearest(window, cx),
+                // The CJK face changed as its tile changes it, a moment on,
+                // the note open: `cjkface=<key>`.
+                s if s.starts_with("cjkface=") => {
+                    let key = s["cjkface=".len()..].to_string();
+                    let wait = later + 300;
+                    later += GO_STEP;
+                    cx.spawn_in(window, async move |this, cx| {
+                        cx.background_executor().timer(Duration::from_millis(wait)).await;
+                        let _ = this.update(cx, |s, cx| s.probe_cjk_face(key, cx));
+                    })
+                    .detach();
+                }
+                // The list of the system's faces a Custom tile opens, in the
+                // settings window: `fontlist=english`, `cjk` or `mono`, and
+                // `fontlist=cjk:<words>` with words in its search.
+                s if s.starts_with("fontlist=") => {
+                    let rest = s["fontlist=".len()..].to_string();
+                    let (which, words) = rest.split_once(':').map(|(a, b)| (a.to_string(), b.to_string())).unwrap_or((rest.clone(), String::new()));
+                    let slot = match which.as_str() {
+                        "cjk" => crate::fonts::Slot::Cjk,
+                        "mono" => crate::fonts::Slot::Mono,
+                        _ => crate::fonts::Slot::English,
+                    };
+                    let wait = later + 600;
+                    later += GO_STEP;
+                    cx.spawn_in(window, async move |this, cx| {
+                        cx.background_executor().timer(Duration::from_millis(wait)).await;
+                        let _ = cx.update(|_, cx| {
+                            let Some(shell) = this.upgrade() else { return };
+                            let Some(handle) = shell.read(cx).settings else { return };
+                            let _ = cx.update_window(handle, |_, window, cx| {
+                                shell.update(cx, |s, cx| {
+                                    s.probe_font_list(slot, &words, window, cx);
+                                })
+                            });
+                        });
+                    })
+                    .detach();
+                }
                 // A newer version waits, as a check finding one says: the
                 // gear's and About's dots. Nothing is fetched.
                 "updatefound" => self.update.found = Some("9.9.9".into()),
@@ -5325,6 +5245,17 @@ impl Shell {
                     }
                 }
                 "term" => self.toggle_terminal(window, cx),
+                // The menu bar note, in its turn (`menubar::probe`).
+                s if s.starts_with("menunote") => {
+                    let step = s.to_string();
+                    let wait = later;
+                    later += GO_STEP;
+                    cx.spawn_in(window, async move |_, cx| {
+                        cx.background_executor().timer(Duration::from_millis(wait)).await;
+                        let _ = cx.update(|_, cx| crate::menubar::probe(&step, cx));
+                    })
+                    .detach();
+                }
                 // The pause before what comes next, in milliseconds.
                 s if s.starts_with("wait=") => later += s["wait=".len()..].parse::<u64>().unwrap_or(0),
                 // On the terminal's screen once it is drawn, in its turn.

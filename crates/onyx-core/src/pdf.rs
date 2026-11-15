@@ -681,10 +681,11 @@ impl<'a> Walk<'a> {
                         _ => "left",
                     })
                     .collect();
-                // The widths a person set, or each column as its words
+                // The widths a person set, each a share of the page as the
+                // canvas's is of the room, or each column as its words
                 // ask, as the canvas sets them.
                 let columns: Vec<String> = match shares {
-                    Some(shares) => shares.iter().map(|s| format!("{s}fr")).collect(),
+                    Some(shares) => shares.iter().map(|s| format!("{s}%")).collect(),
                     None => vec!["auto".to_string(); aligns.len()],
                 };
                 let head_cells = cells[..head].join(",");
@@ -819,7 +820,11 @@ fn walk(note: &Note, breaks: bool, bad: &Bad, attached: &[attach::Attached], par
             Parser::new_ext(&note.text[part], options()).into_offset_iter().map(move |(ev, r)| (ev, r.start + at..r.end + at))
         })
         .filter_map(|(ev, r)| match ev {
-            Event::Start(Tag::Table(_)) => Some(note.text[r].lines().nth(1).and_then(rhythm::shares_of)),
+            Event::Start(Tag::Table(_)) => {
+                let lines: Vec<&str> = note.text[r].lines().collect();
+                let rows: Vec<&str> = lines.iter().enumerate().filter(|(i, _)| *i != 1).map(|(_, l)| *l).collect();
+                Some(lines.get(1).and_then(|sep| rhythm::widths_of(sep, &rows)))
+            }
             _ => None,
         })
         .collect();

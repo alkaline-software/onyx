@@ -10,6 +10,7 @@ mod embed;
 mod export;
 #[allow(dead_code)]
 mod file_icons;
+mod folder_look;
 mod fonts;
 mod i18n;
 mod langs;
@@ -19,6 +20,8 @@ mod look;
 mod markdown;
 mod media;
 mod menu;
+mod menubar;
+mod note_menu;
 mod scroll;
 mod settings;
 mod shell;
@@ -166,7 +169,7 @@ pub(crate) fn app_menus() -> Vec<Menu> {
 }
 
 /// The main window's view, for an action that reaches no view.
-struct MainShell(WeakEntity<Shell>, AnyWindowHandle);
+pub(crate) struct MainShell(pub(crate) WeakEntity<Shell>, pub(crate) AnyWindowHandle);
 
 impl Global for MainShell {}
 
@@ -203,7 +206,7 @@ fn remembered_bounds(cx: &App) -> Option<Bounds<Pixels>> {
     Some(Bounds::from_corners(point(l, tp), point(r2, bt)))
 }
 
-fn open_main_window(cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
+pub(crate) fn open_main_window(cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
     let bounds = remembered_bounds(cx).unwrap_or_else(|| Bounds::centered(None, size(px(1080.), px(720.)), cx));
     let titlebar = if cfg!(target_os = "macos") {
         TitlebarOptions { title: None, appears_transparent: true, traffic_light_position: Some(point(px(sys::LIGHTS_ROW.0), px(sys::LIGHTS_ROW.1))) }
@@ -253,11 +256,7 @@ fn open_main_window(cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
                     s.go(steps, window, cx);
                 }
                 if let Some(section) = section.as_deref() {
-                    // `size` is Text's Size page.
-                    if section == "size" || section == "spelling" {
-                        s.settings_page = if section == "size" { "size" } else { "spelling" };
-                    }
-                    s.open_settings(Some(settings::section_named(if section == "size" || section == "spelling" { "text" } else { section })), window, cx);
+                    s.open_settings(Some(settings::section_named(section)), window, cx);
                 }
                 if let Some(path) = shot {
                     s.shoot_later(path.into(), window, cx);
@@ -268,6 +267,142 @@ fn open_main_window(cx: &mut App) -> anyhow::Result<WindowHandle<Root>> {
     )
 }
 
+/// The main window, opened when it is shut, with Onyx in front.
+fn main_window(cx: &mut App) -> Option<(Entity<Shell>, AnyWindowHandle)> {
+    let open = cx.try_global::<MainShell>().and_then(|m| Some((m.0.upgrade()?, m.1))).filter(|(_, h)| cx.windows().contains(h));
+    let found = match open {
+        Some(found) => Some(found),
+        None => {
+            if let Err(e) = open_main_window(cx) {
+                eprintln!("onyx: could not open a window: {e}");
+            }
+            cx.try_global::<MainShell>().and_then(|m| Some((m.0.upgrade()?, m.1)))
+        }
+    };
+    cx.activate(true);
+    found
+}
+
+/// Onyx's main window in front, from the menu bar: with a note of the
+/// menu bar note's in a tab (`Shell::show_from_menu`), and a link of it
+/// followed.
+pub(crate) fn show_in_main(note: Option<std::path::PathBuf>, link: Option<menubar::Link>, cx: &mut App) {
+    let Some((shell, handle)) = main_window(cx) else { return };
+    let _ = handle.update(cx, |_, window, cx| {
+        window.activate_window();
+        if let Some(note) = note {
+            shell.update(cx, |s, cx| s.show_from_menu(note, link, window, cx));
+        }
+    });
+}
+
+/// The settings, from the menu bar: they are the main window's, which
+/// opens first when it is shut; `about` opens them on About and looks for
+/// a newer version.
+fn settings_from_menu(about: bool, cx: &mut App) {
+    let Some((shell, _)) = main_window(cx) else { return };
+    let weak = shell.downgrade();
+    shell.update(cx, |s, cx| {
+        if about {
+            s.settings_section = settings::section_named("about");
+            s.check_updates(cx);
+        }
+    });
+    cx.defer(move |cx| settings::open(weak, cx));
+}
+
+/// The menu bar item's menu, in the window's language: named again when
+/// the language changes (`settings.rs`).
+pub(crate) fn menu_bar_lines() {
+    use sys::ItemLine;
+    let line = |key: &str, title: String, icon: &'static [u8], keys: (&str, u64)| ItemLine::Item { key: key.into(), title, icon, keys: (keys.0.into(), keys.1) };
+    const CMD: u64 = onyx_core::shortcut::CMD;
+    sys::set_menu_bar_lines(vec![
+        line("open", t("Open Onyx").to_string(), include_bytes!("../assets/icons/app-window.svg"), ("", 0)),
+        ItemLine::Gap,
+        line("settings", t("Settings…").to_string(), include_bytes!("../assets/icons/settings.svg"), (",", CMD)),
+        line("updates", t("Check for Updates…").to_string(), include_bytes!("../assets/icons/refresh.svg"), ("", 0)),
+        ItemLine::Gap,
+        line("quit", t("Quit Onyx").to_string(), include_bytes!("../assets/icons/close.svg"), ("q", CMD)),
+    ]);
+}
+
+/// The shortcut that opens and closes the menu bar note from any app, as
+/// the settings have it; none when it is empty or cannot be read. Whether
+/// the system took it.
+pub(crate) fn hold_menu_bar_shortcut(cfg: &onyx_core::config::MenuBarConfig) -> bool {
+    match onyx_core::shortcut::Shortcut::from_config(&cfg.shortcut) {
+        Some(s) => sys::set_hot_keys(&[(1, s)]).is_empty(),
+        None => {
+            sys::set_hot_keys(&[]);
+            true
+        }
+    }
+}
+
+/// The note in the menu bar, its item, its shortcut, and what the item's
+/// menu does.
+fn install_menu_bar(cx: &mut App) {
+    let cfg = Config::load();
+    let note = cx.new(menubar::MenuNote::new);
+    let held = note.read(cx).held_paths.clone();
+    cx.set_global(menubar::MenuBarNote(note.clone(), held));
+    if let Some(mut picks) = sys::install_menu_bar(cfg.menu_bar.shown) {
+        menu_bar_lines();
+        let note = note.clone();
+        cx.spawn(async move |cx| {
+            use futures::StreamExt as _;
+            while let Some(pick) = picks.next().await {
+                let note = note.clone();
+                let _ = cx.update(|cx| match pick {
+                    sys::ItemPick::Note => note.update(cx, |n, cx| n.toggle(true, cx)),
+                    sys::ItemPick::Menu => note.update(cx, |n, cx| n.close(cx)),
+                    sys::ItemPick::Line(key) => match key.as_str() {
+                        "open" => show_in_main(None, None, cx),
+                        "settings" => settings_from_menu(false, cx),
+                        "updates" => settings_from_menu(true, cx),
+                        "quit" => cx.quit(),
+                        _ => {}
+                    },
+                });
+            }
+        })
+        .detach();
+        // A menu bar manager may have left the item out of sight: once the
+        // bar has settled, it is put back.
+        cx.spawn(async move |cx| {
+            cx.background_executor().timer(std::time::Duration::from_secs(2)).await;
+            let _ = cx.update(|_| sys::heal_menu_bar());
+        })
+        .detach();
+    }
+    // The keys pressed while Settings, Menu Bar records the shortcut.
+    if let Some(mut pressed) = sys::install_key_recorder() {
+        cx.spawn(async move |cx| {
+            use futures::StreamExt as _;
+            while let Some((flags, key)) = pressed.next().await {
+                let _ = cx.update(|cx| {
+                    if let Some(shell) = cx.try_global::<MainShell>().and_then(|m| m.0.upgrade()) {
+                        shell.update(cx, |s, cx| s.recorded(flags, key, cx));
+                    }
+                });
+            }
+        })
+        .detach();
+    }
+    if let Some(mut presses) = sys::install_hot_keys() {
+        hold_menu_bar_shortcut(&cfg.menu_bar);
+        cx.spawn(async move |cx| {
+            use futures::StreamExt as _;
+            while presses.next().await.is_some() {
+                let note = note.clone();
+                let _ = cx.update(|cx| note.update(cx, |n, cx| n.toggle(false, cx)));
+            }
+        })
+        .detach();
+    }
+}
+
 fn main() {
     // Velopack's installer runs the app with a hook to answer before
     // anything else.
@@ -276,6 +411,9 @@ fn main() {
     let app = gpui_platform::application().with_assets(assets::Assets);
     // The app stays running with no window; a Dock click opens one.
     app.on_reopen(|cx| {
+        // Opened again while running: also the way back to an item a menu
+        // bar manager hid.
+        sys::heal_menu_bar();
         let main = cx.try_global::<MainShell>().map(|m| m.1);
         if !main.is_some_and(|h| cx.windows().contains(&h)) {
             if let Err(e) = open_main_window(cx) {
@@ -314,10 +452,16 @@ fn main() {
         cx.bind_keys(key_bindings());
         cx.set_menus(app_menus());
 
-        if let Err(e) = open_main_window(cx) {
-            eprintln!("onyx: could not open a window: {e}");
-            std::process::exit(1);
+        // Opened by the system at login: in the menu bar alone, as
+        // MiniNotes was; the Dock or the item's menu opens the window.
+        let at_login = sys::launched_at_login() && std::env::var_os("ONYX_GO").is_none();
+        install_menu_bar(cx);
+        if !at_login {
+            if let Err(e) = open_main_window(cx) {
+                eprintln!("onyx: could not open a window: {e}");
+                std::process::exit(1);
+            }
+            cx.activate(true);
         }
-        cx.activate(true);
     });
 }

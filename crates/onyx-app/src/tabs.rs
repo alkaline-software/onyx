@@ -15,7 +15,9 @@
 //! and ⌘ held shows the number that goes to each tab.
 //!
 //! The tabs themselves (which notes are open, which shows) are the
-//! shell's (`Shell::tabs`); this is their drawing and their motion.
+//! window's: the main window's (`Shell::tabs`) and the menu bar note's
+//! (`MenuNote::tabs`), each a `TabHost`; this is their drawing and their
+//! motion, the same in both.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -27,8 +29,25 @@ use gpui_component::tooltip::ManagedTooltipExt as _;
 use gpui_component::{h_flex, ActiveTheme as _, Icon, IconName, Sizable as _};
 
 use crate::i18n::t;
-use crate::shell::Shell;
 use crate::widgets::{swallow_click, tip};
+
+/// A window with a row of tabs: what the row asks of it. Its tabs are
+/// kept in the row's order (`Tabs::order`), each folder's together.
+pub trait TabHost: Sized + 'static {
+    fn tabs_row(&mut self) -> &mut Tabs;
+    /// A press on the row is the row's, not the start of a drag of the
+    /// window by its top.
+    fn tab_press(&mut self) {}
+    /// A drag gave the tabs this order.
+    fn tabs_reorder(&mut self, order: &[PathBuf], window: &mut Window, cx: &mut Context<Self>);
+    fn tab_show(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>);
+    fn tab_close(&mut self, path: &Path, window: &mut Window, cx: &mut Context<Self>);
+    /// A right click on a tab, and on a pill's folder mark.
+    fn tab_menu(&mut self, _path: PathBuf, _at: Point<Pixels>, _cx: &mut Context<Self>) {}
+    fn pill_menu(&mut self, _folder: PathBuf, _at: Point<Pixels>, _cx: &mut Context<Self>) {}
+    /// The plus after the last pill: a new note.
+    fn tab_plus(&mut self, window: &mut Window, cx: &mut Context<Self>);
+}
 
 /// A tab's width is its name's and no more: the title in the tab's type
 /// plus `TAB_ROOM`, the edges and the close button, never under
@@ -475,7 +494,7 @@ impl Tabs {
     /// let go or another modifier joins it. A quick ⌘C never sees them.
     /// The wait is a timer from the press, answered only if that press is
     /// still the one held.
-    pub fn modifiers_changed(&mut self, m: &Modifiers, cx: &mut Context<Shell>) {
+    pub fn modifiers_changed<H: TabHost>(&mut self, m: &Modifiers, cx: &mut Context<H>) {
         let alone = m.secondary() && m.number_of_modifiers() == 1;
         if alone == self.hint_press.is_some() {
             return;
@@ -493,8 +512,9 @@ impl Tabs {
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(HINT_HOLD).await;
             let _ = this.update(cx, |this, cx| {
-                if this.tabs_row.hint_press == Some(press) && !this.tabs_row.groups.is_empty() {
-                    this.tabs_row.hints = true;
+                let row = this.tabs_row();
+                if row.hint_press == Some(press) && !row.groups.is_empty() {
+                    row.hints = true;
                     cx.notify();
                 }
             });
@@ -505,7 +525,7 @@ impl Tabs {
     /// The row: the pills at their widths, `lead` in from its left, in
     /// the middle while they fit and from the left with the row scrolling
     /// once they do not.
-    pub fn render(&self, items: &[Item], shown: Option<&Path>, root: Option<&Path>, cx: &mut Context<Shell>) -> AnyElement {
+    pub fn render<H: TabHost>(&self, items: &[Item], shown: Option<&Path>, root: Option<&Path>, cx: &mut Context<H>) -> AnyElement {
         let theme = cx.theme().clone();
         let dark = theme.mode.is_dark();
         let track_bg = if dark { theme.tab_bar_segmented } else { theme.muted };
@@ -525,14 +545,14 @@ impl Tabs {
             .track_scroll(&self.scroll)
             .on_drag_move::<DragTab>(cx.listener(|this, e: &DragMoveEvent<DragTab>, window, cx| {
                 let key = e.drag(cx).0.clone();
-                if let Some(order) = this.tabs_row.drag_tab_to(&key, e.event.position.x, e.bounds) {
-                    this.reorder_tabs(&order, window, cx);
+                if let Some(order) = this.tabs_row().drag_tab_to(&key, e.event.position.x, e.bounds) {
+                    this.tabs_reorder(&order, window, cx);
                 }
             }))
             .on_drag_move::<DragPill>(cx.listener(|this, e: &DragMoveEvent<DragPill>, window, cx| {
                 let folder = e.drag(cx).0.clone();
-                if let Some(order) = this.tabs_row.drag_pill_to(&folder, e.event.position.x, e.bounds) {
-                    this.reorder_tabs(&order, window, cx);
+                if let Some(order) = this.tabs_row().drag_pill_to(&folder, e.event.position.x, e.bounds) {
+                    this.tabs_reorder(&order, window, cx);
                 }
             }));
         let live = self.plate.at.is_some_and(|at| at.elapsed() < TAB_ANIM + Duration::from_millis(80));
@@ -584,17 +604,17 @@ impl Tabs {
                 .cursor_grab()
                 .text_color(theme.muted_foreground)
                 .hover(|s| s.text_color(theme.foreground))
-                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, _| this.press_taken = true))
+                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, _| this.tab_press()))
                 .on_mouse_down(MouseButton::Right, cx.listener({
                     let folder = folder.clone();
                     move |this, ev: &MouseDownEvent, window, cx| {
                         swallow_click(window, cx);
-                        this.show_pill_menu(folder.clone(), ev.position, cx);
+                        this.pill_menu(folder.clone(), ev.position, cx);
                     }
                 }))
                 .on_drag(DragPill(folder.clone()), move |_, _, _, cx| cx.new(|_| Ghost(ghost.clone())))
                 .managed_tooltip(move |window, cx| tip(name.clone(), window, cx))
-                .child(Icon::new(IconName::Folder).with_size(px(13.)));
+                .child(crate::folder_look::mark(folder, cx));
             let born = self.born.get(folder).is_some_and(|at| at.elapsed() < TAB_ANIM);
             let mut pill = h_flex()
                 .relative()
@@ -633,18 +653,18 @@ impl Tabs {
                     .overflow_hidden()
                     .when(!active, |d| d.hover(move |s| s.bg(hover_bg)))
                     .when(dragged, |d| d.opacity(0.45))
-                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, _| this.press_taken = true))
+                    .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, _| this.tab_press()))
                     .on_mouse_down(MouseButton::Right, cx.listener({
                         let key = key.clone();
                         move |this, ev: &MouseDownEvent, window, cx| {
                             swallow_click(window, cx);
-                            this.show_entry_menu(key.clone(), ev.position, cx);
+                            this.tab_menu(key.clone(), ev.position, cx);
                         }
                     }))
                     .on_drag(DragTab(key.clone()), move |_, _, _, cx| cx.new(|_| Ghost(ghost.clone())))
                     .on_click(cx.listener(move |this, _, window, cx| {
                         swallow_click(window, cx);
-                        this.show_tab(&open_key, window, cx)
+                        this.tab_show(&open_key, window, cx)
                     }))
                     .child(div().flex_1().min_w_0().truncate().text_size(px(TAB_TEXT)).font_weight(if active { FontWeight::MEDIUM } else { FontWeight::NORMAL }).text_color(if active { theme.foreground } else { theme.muted_foreground }).child(title))
                     // The close button. A note is written on its own
@@ -663,7 +683,7 @@ impl Tabs {
                             .managed_tooltip(|window, cx| tip(t("Close Tab (⌘W)"), window, cx))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 swallow_click(window, cx);
-                                this.close_tab(&close_key, window, cx);
+                                this.tab_close(&close_key, window, cx);
                             }))
                             .child(Icon::new(IconName::Close).xsmall().text_color(theme.muted_foreground)),
                     );
@@ -712,11 +732,11 @@ impl Tabs {
                 .rounded(px(9.))
                 .bg(track_bg)
                 .cursor_pointer()
-                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, _| this.press_taken = true))
+                .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, _| this.tab_press()))
                 .managed_tooltip(|window, cx| tip(t("New Note (⌘N)"), window, cx))
                 .on_click(cx.listener(|this, _, window, cx| {
                     swallow_click(window, cx);
-                    this.new_note(&crate::shell::NewNote, window, cx)
+                    this.tab_plus(window, cx)
                 }))
                 .child(
                     div()

@@ -52,6 +52,13 @@ pub struct UiState {
     /// The folder the last PDF went to, where the next save panel opens.
     /// One since moved or gone is passed over for the note's own.
     pub export_folder: Option<PathBuf>,
+    /// The menu bar note's tabs (`menubar.rs`) and the one showing, the
+    /// vault its tree showed last, and whether the tree stands beside the
+    /// note.
+    pub menu_tabs: Vec<PathBuf>,
+    pub menu_note: Option<PathBuf>,
+    pub menu_vault: Option<PathBuf>,
+    pub menu_tree: Option<bool>,
     /// Which card the sidebar has open: `notes` or `assets`.
     #[serde(default)]
     pub side_view: Option<String>,

@@ -24,20 +24,24 @@ pub struct Accent {
     pub link: [&'static str; 2],
 }
 
-/// Seven hues of one lightness and chroma in OKLCH: 0.52 and 0.13 in the
-/// light appearance, 0.74 and 0.105 in the dark, the chroma eased for the
-/// hues that are loud at it and amber's light shade a little lighter,
-/// where an orange at 0.52 is brown. They go round the wheel in even
-/// steps and leave out two places: the red-orange around hue 40, and the
-/// blues between teal and periwinkle.
+/// Seven stones, teal first and the default: onyx's sheen. The rest go
+/// round the wheel from it in steps of 40 to 80 degrees, cool to warm and
+/// back, so the row reads as one band: sapphire, amethyst, rose quartz,
+/// carnelian, amber and jade. Each is one lightness in OKLCH, 0.52 in the
+/// light appearance (amber's 0.555, where an orange at 0.52 is brown) and
+/// 0.74 in the dark, at a chroma near teal's, 0.095 to 0.12 and 0.085 to
+/// 0.095, so none is louder than the default: teal is the most the gamut
+/// gives its hue at that lightness. Hover is 0.021 darker in the light and
+/// 0.039 lighter in the dark; pressed is 0.059 and 0.041 darker. White on
+/// every light base and the ink on every dark base are 4.8 to 1 or more.
 pub const ACCENTS: &[Accent] = &[
-    Accent { key: "periwinkle", name: phrase("Periwinkle"), light: ["#5061B3", "#4A5BAC", "#4050A0"], dark: ["#94A7ED", "#A0B3FB", "#879AE0"], link: ["#4A5BAC", "#94A7ED"] },
-    Accent { key: "orchid", name: phrase("Orchid"), light: ["#845293", "#7E4C8D", "#724181"], dark: ["#C498D2", "#D1A4DF", "#B78BC4"], link: ["#7E4C8D", "#C498D2"] },
-    Accent { key: "rose", name: phrase("Rose"), light: ["#9C4A66", "#954360", "#893856"], dark: ["#DA93A9", "#E79FB5", "#CC879C"], link: ["#954360", "#DA93A9"] },
-    Accent { key: "amber", name: phrase("Amber"), light: ["#A86003", "#A05B00", "#905203"], dark: ["#DD9B5F", "#EAA76B", "#CF8E52"], link: ["#A05B00", "#DD9B5F"] },
-    Accent { key: "moss", name: phrase("Moss"), light: ["#5A723A", "#556C34", "#4A6129"], dark: ["#9CB67C", "#A7C288", "#8FA86F"], link: ["#556C34", "#9CB67C"] },
-    Accent { key: "jade", name: phrase("Jade"), light: ["#327860", "#2B725A", "#1E6750"], dark: ["#77BCA1", "#83C8AD", "#6AAE95"], link: ["#2B725A", "#77BCA1"] },
     Accent { key: "teal", name: phrase("Teal"), light: ["#277580", "#1F6F79", "#0E646E"], dark: ["#6FB9C4", "#7BC5D0", "#61ACB7"], link: ["#1F6F79", "#6FB9C4"] },
+    Accent { key: "sapphire", name: phrase("Sapphire"), light: ["#376AAA", "#3164A3", "#265997"], dark: ["#83AEE4", "#8FBAF1", "#77A1D7"], link: ["#3164A3", "#83AEE4"] },
+    Accent { key: "amethyst", name: phrase("Amethyst"), light: ["#73599E", "#6D5398", "#62488C"], dark: ["#B39EDC", "#C0AAE9", "#A791CE"], link: ["#6D5398", "#B39EDC"] },
+    Accent { key: "rose", name: phrase("Rose"), light: ["#984C70", "#914669", "#853B5F"], dark: ["#D794B1", "#E4A0BD", "#C987A4"], link: ["#914669", "#D794B1"] },
+    Accent { key: "carnelian", name: phrase("Carnelian"), light: ["#A24B3B", "#9B4435", "#8F392A"], dark: ["#DF9586", "#ECA192", "#D1897A"], link: ["#9B4435", "#DF9586"] },
+    Accent { key: "amber", name: phrase("Amber"), light: ["#9A6718", "#94610D", "#875601"], dark: ["#D0A165", "#DDAD72", "#C39459"], link: ["#94610D", "#D0A165"] },
+    Accent { key: "jade", name: phrase("Jade"), light: ["#3C784B", "#367245", "#2A673B"], dark: ["#84BA8F", "#90C79A", "#77AD82"], link: ["#367245", "#84BA8F"] },
 ];
 
 /// What is drawn on an accent: white on the light appearance's shade,
@@ -47,6 +51,13 @@ const ON_DARK: &str = "#1F1E1D";
 
 /// The accent by its key; an unknown key is the first.
 pub fn accent(key: &str) -> &'static Accent {
+    // The accents of before the stones, by the stone nearest each.
+    let key = match key {
+        "periwinkle" => "sapphire",
+        "orchid" => "amethyst",
+        "moss" => "jade",
+        k => k,
+    };
     ACCENTS.iter().find(|a| a.key == key).unwrap_or(&ACCENTS[0])
 }
 

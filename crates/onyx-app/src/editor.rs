@@ -181,6 +181,21 @@ impl Render for AssetDrag {
 /// drawn alone: gpui blends a border into its fill in plain color as it
 /// nears the fill, so a fill of clear black darkens the soft inside of a
 /// round corner into a second, darker line.
+/// The one edit that turns `mine` into `theirs`: the stretch between what
+/// the two share at the start and at the end, at characters' boundaries,
+/// so a caret before or after it stays where it is. None when they are
+/// the same.
+pub(crate) fn one_edit(mine: &str, theirs: &str) -> Option<(std::ops::Range<usize>, String)> {
+    if mine == theirs {
+        return None;
+    }
+    let head = mine.bytes().zip(theirs.bytes()).take_while(|(a, b)| a == b).count();
+    let head = (0..=head).rev().find(|&i| mine.is_char_boundary(i) && theirs.is_char_boundary(i)).unwrap_or(0);
+    let tail = mine[head..].bytes().rev().zip(theirs[head..].bytes().rev()).take_while(|(a, b)| a == b).count();
+    let tail = (0..=tail).rev().find(|&i| mine.is_char_boundary(mine.len() - i) && theirs.is_char_boundary(theirs.len() - i)).unwrap_or(0);
+    Some((head..mine.len() - tail, theirs[head..theirs.len() - tail].to_string()))
+}
+
 pub(crate) fn clear_of(line: Hsla) -> Hsla {
     line.opacity(0.)
 }
@@ -217,11 +232,15 @@ pub struct Look {
     /// The faces behind each, for the characters it lacks (`fonts::cjk_fallbacks`).
     pub text_fallbacks: Option<FontFallbacks>,
     pub mono_fallbacks: Option<FontFallbacks>,
+    /// The face Chinese, Japanese and Korean are set in, wherever they
+    /// stand, and the faces behind it (`fonts::split_cjk`).
+    pub cjk_family: SharedString,
+    pub cjk_fallbacks: Option<FontFallbacks>,
 }
 
 impl Default for Look {
     fn default() -> Self {
-        Self { text_family: "Inter".into(), mono_family: "JetBrains Mono".into(), text_px: 16., mono_px: 14., text_fallbacks: None, mono_fallbacks: None }
+        Self { text_family: "Inter".into(), mono_family: "JetBrains Mono".into(), text_px: 16., mono_px: 14., text_fallbacks: None, mono_fallbacks: None, cjk_family: "Noto Sans SC".into(), cjk_fallbacks: None }
     }
 }
 
@@ -305,6 +324,11 @@ pub struct Editor {
     /// Where the pointer is in a table, and a drag of its edges or handles.
     hover: Option<cells::Hover>,
     table_drag: Option<cells::TableDrag>,
+    /// A row's or a column's move as it shows, the one just let go as it
+    /// settles, and how far the card stood from its slot (`cells.rs`).
+    move_show: Option<cells::MoveShow>,
+    settle: Option<cells::Settle>,
+    card_from: f32,
     /// A table's columns as a drag has them: its first line, and each width.
     hold: Option<(usize, Vec<f32>)>,
     /// The picture the pointer is over, a drag of its side, and its width
@@ -393,6 +417,9 @@ impl Editor {
             writing: writing::Writing::default(),
             hover: None,
             table_drag: None,
+            move_show: None,
+            settle: None,
+            card_from: 0.,
             hold: None,
             pic_hover: None,
             pic_drag: None,
@@ -1171,6 +1198,24 @@ impl Editor {
         cx.notify();
     }
 
+    /// The same note's text as another view of it has it (the main
+    /// window's tab and the menu bar note, `menubar.rs`): the stretch that
+    /// differs taken as one step of undo, the caret kept, and nothing
+    /// said, since the change is the other view's, which writes it.
+    pub fn follow_text(&mut self, text: &str, cx: &mut Context<Self>) {
+        let mine = self.doc.text();
+        let Some((range, with)) = one_edit(&mine, text) else { return };
+        let before = self.sel;
+        let change = (self.doc.pos_of(range.start), self.doc.pos_of(range.end), with);
+        self.doc.replace_many(vec![change], before, before);
+        self.doc.end_step();
+        self.sel = Sel { anchor: self.doc.clamp(before.anchor), head: self.doc.clamp(before.head) };
+        self.marked = None;
+        self.reanalyze();
+        self.text_changed(cx);
+        cx.notify();
+    }
+
     /// For a probe: files brought in as a paste of them would.
     pub fn attach_files(&mut self, files: Vec<PathBuf>, cx: &mut Context<Self>) {
         self.attach(files, None, cx);
@@ -1585,6 +1630,10 @@ impl Editor {
                 let flow = t.cells.get(t.column_of(p.col))?;
                 (top + t.cell_y, top + t.cell_y + flow.height)
             }
+            // The words alone, not the space a heading has above them or a
+            // block below: ↑ from a heading's first row aimed into its own
+            // space above and stayed on the line.
+            Row::Text(r) => (top + r.top_pad, top + r.top_pad + r.flow.height),
             // A caption's rows, so ↑ from its first leaves the line.
             Row::Picture(pic) => match &pic.source {
                 Some(r) => (top + r.top_pad, top + r.top_pad + r.flow.height),
@@ -1908,8 +1957,8 @@ struct PaintInfo {
     controls: Option<Controls>,
     /// The bar and the handles of the picture the pointer is over.
     picture: Option<picture::PicPaint>,
-    /// Where a dragged row or column would go: a line, from the element's top left.
-    drop_line: Option<Bounds<Pixels>>,
+    /// A row's or a column's move under way or settling (`cells::move_paint`).
+    table_move: Option<cells::MovePaint>,
 }
 
 impl IntoElement for EditorElement {
@@ -1990,6 +2039,64 @@ fn paint_plate(left: f32, top: f32, width: f32, height: f32, head: f32, theme: &
     let corners = Corners { top_left: r, top_right: r, bottom_left: px(0.), bottom_right: px(0.) };
     window.paint_quad(quad(Bounds::new(point(px(left), px(top)), size(px(width), px(head))), corners, theme.muted.opacity(0.7), px(0.), theme.transparent, BorderStyle::default()));
     window.paint_quad(quad(Bounds::new(point(px(left), px(top)), size(px(width), px(height))), r, clear_of(theme.border), px(1.), theme.border, BorderStyle::default()));
+}
+
+/// A table's row with each column shifted along it by `shift`, the one a
+/// move carries left out: a column's move as it shows.
+#[allow(clippy::too_many_arguments)]
+fn paint_table_shifted(t: &crate::layout::TableRow, ox: f32, oy: f32, shift: &[f32], carried: Option<usize>, line: Option<usize>, info: &PaintInfo, theme: &gpui_component::Theme, window: &mut Window, cx: &mut App) {
+    let left = ox + t.inset;
+    if !t.head {
+        window.paint_quad(fill(Bounds::new(point(px(left), px(oy)), size(px(t.grid.width), px(1.))), theme.border));
+    }
+    for (c, flow) in t.cells.iter().enumerate() {
+        if carried == Some(c) {
+            continue;
+        }
+        let x = left + t.grid.xs[c] + shift.get(c).copied().unwrap_or(0.);
+        if x > left + 0.5 {
+            window.paint_quad(fill(Bounds::new(point(px(x), px(oy)), size(px(1.), px(t.height))), theme.border));
+        }
+        paint_flow(flow, point(px(x + crate::layout::CELL_X), px(oy + t.cell_y)), line, false, info, theme, window, cx);
+    }
+}
+
+/// The card a moved row or column rides under the pointer: lifted on a
+/// soft shadow, a little see-through, edged in the accent, holding the
+/// words it carries.
+#[allow(clippy::too_many_arguments)]
+fn paint_move_card(m: &cells::MovePaint, card: Bounds<Pixels>, carried: usize, cache: &crate::layout::Cache, ox: f32, oy: f32, info: &PaintInfo, theme: &gpui_component::Theme, window: &mut Window, cx: &mut App) {
+    let b = Bounds::new(point(px(ox) + card.origin.x, px(oy) + card.origin.y), card.size);
+    // A shadow gpui would draw for an element, drawn here as rings that
+    // thin out.
+    for (spread, alpha) in [(6., 0.025), (4., 0.04), (2., 0.06)] {
+        let s = Bounds::new(point(b.origin.x - px(spread), b.origin.y - px(spread) + px(2.)), size(b.size.width + px(spread * 2.), b.size.height + px(spread * 2.)));
+        window.paint_quad(quad(s, px(6. + spread), gpui::black().opacity(alpha), px(0.), theme.transparent, BorderStyle::default()));
+    }
+    window.paint_quad(quad(b, px(6.), theme.background.opacity(0.9), px(0.), theme.transparent, BorderStyle::default()));
+    window.with_content_mask(Some(ContentMask { bounds: b }), |window| {
+        for line in m.first..=m.last {
+            let (Some(entry), Some(top)) = (cache.entries.get(line), cache.tops.get(line)) else { continue };
+            let Row::Table(t) = &*entry.row else { continue };
+            if m.column {
+                let y = oy + top;
+                if t.head {
+                    window.paint_quad(fill(Bounds::new(point(b.origin.x, px(y)), size(b.size.width, px(t.height))), theme.muted.opacity(0.7)));
+                } else {
+                    window.paint_quad(fill(Bounds::new(point(b.origin.x, px(y)), size(b.size.width, px(1.))), theme.border));
+                }
+                if let Some(flow) = t.cells.get(carried) {
+                    paint_flow(flow, point(b.origin.x + px(crate::layout::CELL_X), px(y + t.cell_y)), None, false, info, theme, window, cx);
+                }
+            } else if line == if carried == 0 { m.first } else { m.first + carried + 1 } {
+                if t.head {
+                    window.paint_quad(fill(b, theme.muted.opacity(0.7)));
+                }
+                paint_table_shifted(t, ox, f32::from(b.origin.y), &[], None, None, info, theme, window, cx);
+            }
+        }
+    });
+    window.paint_quad(quad(b, px(6.), clear_of(theme.primary), px(1.), theme.primary.opacity(0.8), BorderStyle::default()));
 }
 
 /// One row at a place on the page. `line` is the text's line, or none
@@ -2286,6 +2393,11 @@ impl Element for EditorElement {
             }
         }
 
+        // The slot a carried row or column would land in, under the words.
+        if let Some(b) = info.table_move.as_ref().and_then(|m| m.slot) {
+            let b = Bounds::new(point(px(ox) + b.origin.x + px(2.), px(oy) + b.origin.y + px(2.)), size(b.size.width - px(4.), b.size.height - px(4.)));
+            window.paint_quad(quad(b, px(4.), theme.primary.opacity(0.07), px(1.), theme.primary.opacity(0.35), BorderStyle::default()));
+        }
         let mut rings: Vec<Bounds<Pixels>> = Vec::new();
         for line in first..cache.entries.len() {
             let entry = &cache.entries[line];
@@ -2296,13 +2408,32 @@ impl Element for EditorElement {
             if entry.height <= 0. || !visible(top, entry.height) {
                 continue;
             }
-            paint_row(&entry.row, ox, oy + top, entry.height, bounds.size.width, Some(line), &info, &theme, window, cx);
+            match (&info.table_move, &*entry.row) {
+                (Some(m), Row::Table(t)) if (m.first..=m.last).contains(&line) => {
+                    let row = if line == m.first { 0 } else { line - m.first - 1 };
+                    if m.column {
+                        paint_table_shifted(t, ox, oy + top, &m.shift, m.carried, Some(line), &info, &theme, window, cx);
+                    } else if m.carried != Some(row) {
+                        let dy = m.shift.get(row).copied().unwrap_or(0.);
+                        paint_row(&entry.row, ox, oy + top + dy, entry.height, bounds.size.width, Some(line), &info, &theme, window, cx);
+                    }
+                }
+                _ => paint_row(&entry.row, ox, oy + top, entry.height, bounds.size.width, Some(line), &info, &theme, window, cx),
+            }
             // A frame's ring goes on after the frame, which covers what
             // is past its round corners in the sheet's color.
             if let Row::Picture(p) = &*entry.row {
                 if p.embed && p.source.is_none() && covers(&info.sel, line) {
                     rings.push(Bounds::new(point(px(ox + p.x), px(oy + top + p.pad)), size(px(p.w), px(p.h))));
                 }
+            }
+        }
+        if let Some(m) = &info.table_move {
+            if let (Some(card), Some(carried)) = (m.card, m.carried) {
+                paint_move_card(m, card, carried, &cache, ox, oy, &info, &theme, window, cx);
+            }
+            if m.moving {
+                window.request_animation_frame();
             }
         }
         drop(cache);
@@ -2314,9 +2445,6 @@ impl Element for EditorElement {
             if c.opacity < 1. {
                 window.request_animation_frame();
             }
-        }
-        if let Some(b) = info.drop_line {
-            window.paint_quad(fill(Bounds::new(point(px(ox) + b.origin.x, px(oy) + b.origin.y), b.size), theme.primary));
         }
         if let Some(b) = info.caret {
             window.paint_quad(fill(b, theme.caret));
@@ -2332,7 +2460,7 @@ impl Element for EditorElement {
                 return;
             }
             let (x, y) = (f32::from(ev.position.x - bounds.origin.x), f32::from(ev.position.y - bounds.origin.y));
-            let taken = ed.update(cx, |e, cx| e.press_control(x, y, ev.position, cx) || e.press_picture(x, y, ev.click_count, ev.modifiers.shift, window, cx));
+            let taken = ed.update(cx, |e, cx| e.press_control(x, y, ev.position, ev.click_count, cx) || e.press_picture(x, y, ev.click_count, ev.modifiers.shift, window, cx));
             if taken {
                 cx.stop_propagation();
                 crate::widgets::swallow_click(window, cx);
@@ -2426,7 +2554,11 @@ impl Element for EditorElement {
             }
             let (x, y) = (f32::from(ev.position.x - bounds.origin.x), f32::from(ev.position.y - bounds.origin.y));
             ed.update(cx, |e, cx| {
-                if ev.pressed_button == Some(MouseButton::Left) && (e.drag_control(x, y, cx) || e.drag_picture(x, y, cx)) {
+                if ev.pressed_button == Some(MouseButton::Left) && e.table_drag.is_some() {
+                    // A move's card follows the pointer.
+                    e.pointer_at = (x, y);
+                }
+                if ev.pressed_button == Some(MouseButton::Left) && (e.drag_control(x, y, ev.modifiers.alt, cx) || e.drag_picture(x, y, cx)) {
                     return;
                 }
                 if let (Some((grain, a, b)), Some(MouseButton::Left)) = (e.drag, ev.pressed_button) {
@@ -2533,13 +2665,17 @@ impl Editor {
             let p = self.pointer_at;
             drop(cache);
             control_on = self.control_at(p.0, p.1);
+            // The edge being dragged stays lit, the pointer on it or not.
+            if let Some(cells::TableDrag::Width { col, .. }) = &self.table_drag {
+                control_on = Some(cells::Control::Edge(*col));
+            }
             return self.finish_info(sa, caret, cell, control_on, hover_row);
         }
         drop(cache);
         self.finish_info(sa, caret, cell, control_on, hover_row)
     }
 
-    fn finish_info(&self, _: Pos, caret: Option<Bounds<Pixels>>, cell: Option<Bounds<Pixels>>, on: Option<cells::Control>, hover_row: Option<(f32, f32)>) -> PaintInfo {
+    fn finish_info(&mut self, _: Pos, caret: Option<Bounds<Pixels>>, cell: Option<Bounds<Pixels>>, on: Option<cells::Control>, hover_row: Option<(f32, f32)>) -> PaintInfo {
         let origin = point(self.origin.x, self.origin.y);
         let shift = |b: Bounds<Pixels>| Bounds::new(point(origin.x + b.origin.x, origin.y + b.origin.y), b.size);
         let cache = self.cache.borrow();
@@ -2548,21 +2684,8 @@ impl Editor {
             let opacity = (h.since.elapsed().as_secs_f32() / 0.12).min(1.);
             Some(Controls { table, row: hover_row?, col: h.col, on, opacity })
         });
-        let drop_line = self.table_drag.as_ref().and_then(|d| match d {
-            cells::TableDrag::Row { first, row, to, moved: true, .. } => {
-                let t = self.table(*first)?;
-                let b = cells::table_box(t, &cache)?;
-                let line = t.line_of(*to);
-                let y = if to > row { cache.tops[line] + cache.entries.get(line)?.height } else { cache.tops[line] };
-                Some(Bounds::new(point(px(b.left), px(y - 1.)), size(px(b.right - b.left), px(2.))))
-            }
-            cells::TableDrag::Column { first, col, to, moved: true, .. } => {
-                let b = cells::table_box(self.table(*first)?, &cache)?;
-                let x = b.left + b.grid.xs.get(*to)? + if to > col { *b.grid.cols.get(*to)? } else { 0. };
-                Some(Bounds::new(point(px(x - 1.), px(b.top)), size(px(2.), px(b.bottom - b.top))))
-            }
-            _ => None,
-        });
+        drop(cache);
+        let table_move = self.move_paint();
         PaintInfo {
             focus: self.focus.clone(),
             pointer: self.pointer,
@@ -2577,7 +2700,7 @@ impl Editor {
             cell,
             controls,
             picture: self.picture_paint(),
-            drop_line,
+            table_move,
         }
     }
 
@@ -2717,5 +2840,27 @@ impl Editor {
                 None => (Pos::new(p.line, 0), if p.line + 1 < self.doc.line_count() { Pos::new(p.line + 1, 0) } else { self.doc.end() }),
             },
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::one_edit;
+
+    fn apply(mine: &str, theirs: &str) -> String {
+        match one_edit(mine, theirs) {
+            Some((range, with)) => format!("{}{}{}", &mine[..range.start], with, &mine[range.end..]),
+            None => mine.to_string(),
+        }
+    }
+
+    #[test]
+    fn one_edit_turns_one_text_into_the_other() {
+        for (a, b) in [("abc", "abc"), ("abc", "aXc"), ("", "new"), ("gone", ""), ("世界", "世间界"), ("é", "e\u{301}"), ("aaa", "aaaa"), ("line\nline\n", "line\n")] {
+            assert_eq!(apply(a, b), b, "{a:?} to {b:?}");
+        }
+        assert_eq!(one_edit("same", "same"), None);
+        // Only the stretch that differs, so a caret before or after it stays.
+        assert_eq!(one_edit("hello world", "hello, world"), Some((5..5, ",".to_string())));
     }
 }

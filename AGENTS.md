@@ -2,7 +2,7 @@
 
 ## What this is
 
-**Onyx** is a note-taking app: a folder of plain markdown files, a vault, shown in a sidebar, and a note drawn as it reads while you write it, as Obsidian's live preview does. Rust and GPUI, built to the Alkaline Software constitution; it took the place of MiniNotes, a Swift menu bar app, at v0.5.0. **Only the Mac version is published.** The code keeps the constitution's Windows and Linux paths, but no release is cut for them and nothing is checked there; iOS and iPadOS are wanted later, and nothing is done for them yet.
+**Onyx** is a note-taking app: a folder of plain markdown files, a vault, shown in a sidebar, and a note drawn as it reads while you write it, as Obsidian's live preview does. Rust and GPUI, built to the Alkaline Software constitution; it took the place of MiniNotes, a Swift menu bar app, at v0.5.0, and MiniNotes lives on in it as the note in the menu bar (`menubar.rs`). **Only the Mac version is published.** The code keeps the constitution's Windows and Linux paths, but no release is cut for them and nothing is checked there; iOS and iPadOS are wanted later, and nothing is done for them yet.
 
 ## The one idea
 
@@ -41,9 +41,9 @@ Each is here because breaking it loses data or brings back a fixed bug. The doc 
 | You are about to touch | Read first |
 |---|---|
 | `editor.rs`, `editor/`, `embed.rs`, `viewer.rs`, `layout.rs`, `lines.rs`, `markdown.rs`, `tables.rs`, `source.rs`, `sublime.rs`; `onyx-core/src/rhythm.rs`, `html.rs`, `check.rs`: the live preview, the source pane, spacing, the caret, the keys, tables, HTML, pictures, spelling | `docs/editor.md` |
-| `shell.rs`, `shell/library.rs`, `tabs.rs`, `terminal.rs`, `ui_state.rs`, `main.rs`: the sidebar, the vault, a note's life, the tabs, the strip, the terminal, the landing page, the menus; `onyx-core/src/vault.rs`, `pty.rs`, `shell_marks.rs` | `docs/window.md` |
+| `shell.rs`, `shell/library.rs`, `tabs.rs`, `terminal.rs`, `menubar.rs`, `note_menu.rs`, `folder_look.rs`, `ui_state.rs`, `main.rs`: the sidebar, the vault, a note's life, the tabs, the strip, the terminal, the menu bar note, the landing page, the menus; `onyx-core/src/vault.rs`, `pty.rs`, `shell_marks.rs`, `shortcut.rs` | `docs/window.md` |
 | `settings.rs`, `look.rs`, `fonts.rs`, `assets.rs`, `themes/onyx.json`, `scripts/icon/`; anything a person sees, new or changed | `docs/design.md`, then the doc of the part it is in |
-| `sys.rs`, `csd.rs`, `update.rs`, `process.rs`, `vendor/`, `Cargo.toml`, `.github/workflows/`, any `cfg` for an OS | `docs/platform.md` |
+| `sys.rs`, `sys/`, `csd.rs`, `update.rs`, `process.rs`, `vendor/`, `Cargo.toml`, `.github/workflows/`, any `cfg` for an OS | `docs/platform.md` |
 | `export.rs`, `onyx-core/src/pdf.rs`, `docx.rs`, `web.rs`, `reading.rs`, `pdf/template.typ`: Export (PDF, image, Word, web page), printing, its sheet, how a note looks on paper | `docs/export.md` |
 | Checking a change in the window from a script | `docs/probing.md` |
 | Bumping the version and cutting a release | `docs/release.md` |
@@ -61,6 +61,7 @@ crates/onyx-core/          everything without a window
   src/process.rs             every child process, with no console window on Windows
   src/pty.rs                 the terminal's shell on a pty, and its screen model (vt100)
   src/shell_marks.rs         the shell started so its prompt marks itself (OSC 133)
+  src/shortcut.rs            a shortcut as keys and as the config's text, Mado's
   src/pdf.rs                 a note set as a PDF or an image by Typst; pdf/ holds its template, code theme and math
   src/docx.rs, src/web.rs    a note as a Word document and as a web page, from reading.rs's tree of its blocks
   src/rhythm.rs              the note's vertical measures, for the canvas and the page
@@ -74,7 +75,7 @@ crates/onyx-app/           the window
   src/main.rs                menus, key bindings, the main window, the probe's variables
   src/shell.rs               the frame, the sidebar (the vault's tree), the strip, the landing page, a note's life, the tabs
   src/shell/library.rs       the vault's assets: the sidebar's stack of cards, the Assets card, an asset's tab, a rename that follows its links
-  src/tabs.rs                the tabs' drawing and motion: a folder's on one pill, the plate, the widths
+  src/tabs.rs                the tabs' drawing and motion, for either window (TabHost): a folder's on one pill, the plate, the widths
   src/export.rs              Export: the sheet, its formats, its preview, the file; printing
   src/media.rs               a video or a sound in the preview, played by the system's web view
   src/viewer.rs              a note's picture over the window, grown from where it stands
@@ -84,6 +85,9 @@ crates/onyx-app/           the window
   src/source.rs              the note's source in a pane beside it, a code editor that follows the note and is followed
   src/sublime.rs             Sublime Text's keys in the source pane, as Emaki's editor has them
   src/terminal.rs            the terminal at the page's right: the vault's shells, a tab each, as Emaki's shell terminal
+  src/menubar.rs             the note in the menu bar: MiniNotes' window under Onyx's item, one file, Onyx's editor
+  src/note_menu.rs           a note's right-click menu, for the main window and the menu bar note
+  src/folder_look.rs         a folder's Tabler icon and color: the sheet, the vault's .onyx/folders.json, the drawing
   src/card.rs                a link alone on its line as a card, small, medium or large: a file's, a web page's
   src/editor/cards.rs        a link shown as a link, a card or the whole file: its line written again
   src/editor/writing.rs      a note's spelling and grammar, off the window's thread
@@ -91,7 +95,7 @@ crates/onyx-app/           the window
   src/tables.rs              a table's lines changed as a whole, as text
   src/lines.rs               a note's text as lines: places, graphemes, edits, undo
   src/markdown.rs            what each line is and every inline span with its marks
-  src/settings.rs            the settings window: Appearance, Editor, About
+  src/settings.rs            the settings window: General, Font, Terminal, Menu Bar, About
   src/widgets.rs             the shared drawing: choice_pill, key_text, tip, page_in, Motion
   src/menu.rs                the app's own menu, in and out in motion
   src/scroll.rs              a gesture stays in the scroller it began in
@@ -101,13 +105,13 @@ crates/onyx-app/           the window
   src/assets.rs              the icons and pictures built in
   src/file_icons.rs          Catppuccin's file icons for the tree
   src/i18n.rs                the window's words in eight languages
-  src/sys.rs                 per-system calls
+  src/sys.rs                 per-system calls; sys/: the menu bar item, the hot key, the shortcut's recorder (Mado's)
   src/csd.rs                 the window's own buttons where the system draws none
-  src/ui_state.rs            what the window remembers: bounds, sidebar, vault, tabs, note, source, widths, recent vaults
-  assets/ themes/ locales/   icons, fonts, the app icon; the palette; the words
+  src/ui_state.rs            what the window remembers: bounds, sidebar, vault, tabs, note, source, widths, recent vaults, the menu bar note
+  assets/ themes/ locales/   icons (tabler/: Tabler's whole outline set as one file), fonts, the app icon; the palette; the words
   macos/ windows/ linux/     what each system's package needs
 vendor/                    the toolkit, the blocks crate and the terminal's screen model (vt100), each with an UPSTREAM.md
-scripts/                   the dev build, the icon, the README's picture (make-readme-gif.sh, readme/), the release
+scripts/                   the dev build, the icon, the README's picture (make-readme-gif.sh, readme/), Tabler's icons (tabler.py), the release
 docs/                      how each part works and its traps; release.md; probing.md
 ```
 

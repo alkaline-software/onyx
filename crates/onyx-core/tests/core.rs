@@ -462,13 +462,30 @@ mod html_on_paper {
 }
 
 mod writing {
-    use onyx_core::rhythm::shares_of;
+    use onyx_core::rhythm::widths_of;
 
     #[test]
     fn a_separator_of_a_hundred_dashes_says_widths() {
-        assert_eq!(shares_of(&format!("|{}|{}|", "-".repeat(40), "-".repeat(60))), Some(vec![40., 60.]));
-        assert_eq!(shares_of(&format!("> | :{}: | {}: |", "-".repeat(40), "-".repeat(60))), Some(vec![40., 60.]));
-        assert_eq!(shares_of("|---|---|"), None);
+        assert_eq!(widths_of(&format!("|{}|{}|", "-".repeat(40), "-".repeat(60)), &[]), Some(vec![40., 60.]));
+        assert_eq!(widths_of(&format!("> | :{}: | {}: |", "-".repeat(40), "-".repeat(60)), &[]), Some(vec![40., 60.]));
+        assert_eq!(widths_of("|---|---|", &[]), None);
+    }
+
+    #[test]
+    fn fewer_dashes_say_a_narrower_table_only_where_no_hand_wrote_them() {
+        let rows = ["| Name | Age |", "| Ann | 7 |"];
+        // A table Onyx narrowed: a share each, adding up to less than 100.
+        assert_eq!(widths_of(&format!("| {} | {} |", "-".repeat(30), "-".repeat(12)), &rows), Some(vec![30., 12.]));
+        // Typed: the same dashes in every column, or too few to be shares.
+        assert_eq!(widths_of("| ------ | ------ |", &rows), None);
+        assert_eq!(widths_of("| --- | ---- |", &rows), None);
+        // Padded by a formatter: every row as long as the separator.
+        let padded = ["| Name  | Age |", "| Ann   | 7   |"];
+        assert_eq!(widths_of("| ----- | --- |", &padded), None);
+        let padded = ["| 名字 | Age    |", "| Ann  | 7      |"];
+        assert_eq!(widths_of("| ---- | ------ |", &padded), None);
+        // More than the room says nothing.
+        assert_eq!(widths_of(&format!("| {} | {} |", "-".repeat(70), "-".repeat(50)), &rows), None);
     }
 }
 

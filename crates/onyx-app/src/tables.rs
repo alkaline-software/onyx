@@ -7,10 +7,11 @@
 //! out by hand in the file stays as it was laid, and only what a change
 //! touches changes.
 //!
-//! A table's widths are kept in the file, in its separator row. A
-//! person's widths are written as dashes that add up to 100, each
-//! column's share of the room: a legal table to every other reader, and
-//! Pandoc reads the same dashes the same way.
+//! A table's widths are kept in the file, in its separator row: each
+//! column's share of the room in hundredths, as dashes. Adding up to 100
+//! the table spans the room, and Pandoc reads the same dashes the same
+//! way; less, it stands narrower (`rhythm::widths_of`). Either way it is
+//! a legal table to every other reader.
 
 use std::cmp::Ordering;
 
@@ -18,8 +19,8 @@ use crate::lines::quote_line;
 use crate::markdown::Align;
 
 /// A column's least share, in dashes: fewer is not a separator to some
-/// readers.
-const LEAST_SHARE: u32 = 3;
+/// readers, nor read as a width (`rhythm::widths_of`).
+const LEAST_SHARE: u32 = onyx_core::rhythm::LEAST_WIDTH;
 
 /// Where a row begins in its line: past a quote's marks and the indent.
 pub fn body_start(line: &str) -> usize {
@@ -27,8 +28,8 @@ pub fn body_start(line: &str) -> usize {
     at + (line[at..].len() - line[at..].trim_start().len())
 }
 
-/// A separator row's shares, when they say a person set them.
-pub use onyx_core::rhythm::shares_of;
+/// A separator row's widths, when they say a person set them.
+pub use onyx_core::rhythm::widths_of;
 
 /// What stands between a line's bars, spaces and all.
 fn segments(row: &str) -> Vec<String> {
@@ -149,10 +150,11 @@ impl Sheet {
         }
     }
 
-    /// An empty column, standing at `at`. Shares make room for it.
+    /// An empty column, standing at `at`, as wide as the others are on
+    /// the whole; past the room, every column gives way in proportion.
     pub fn insert_col(&mut self, at: usize) {
         let at = at.min(self.columns());
-        let shares = self.shares();
+        let shares = self.widths();
         for row in &mut self.rows {
             row.insert(at, "  ".to_string());
         }
@@ -160,7 +162,11 @@ impl Sheet {
         if let Some(mut s) = shares {
             let fresh = s.iter().sum::<f32>() / s.len() as f32;
             s.insert(at, fresh);
-            self.set_shares(&s);
+            let total: f32 = s.iter().sum();
+            if total > 100. {
+                s.iter_mut().for_each(|w| *w *= 100. / total);
+            }
+            self.put(s);
         }
     }
 
@@ -169,14 +175,15 @@ impl Sheet {
         if self.columns() < 2 || at >= self.columns() {
             return false;
         }
-        let shares = self.shares();
+        let shares = self.widths();
         for row in &mut self.rows {
             row.remove(at);
         }
         self.separator.remove(at);
+        // The others keep their widths; the table is the narrower.
         if let Some(mut s) = shares {
             s.remove(at);
-            self.set_shares(&s);
+            self.put(s);
         }
         true
     }
@@ -209,31 +216,61 @@ impl Sheet {
         *mark = dressed(dashes, &align);
     }
 
-    fn shares(&self) -> Option<Vec<f32>> {
-        shares_of(&format!("|{}|", self.separator.join("|")))
+    /// The widths a person set, each column's share of the room in
+    /// hundredths, as the editor reads them.
+    pub fn widths(&self) -> Option<Vec<f32>> {
+        let lines = self.write();
+        let rows: Vec<&str> = lines.iter().enumerate().filter(|(i, _)| *i != 1).map(|(_, l)| l.as_str()).collect();
+        widths_of(lines.get(1)?, &rows)
     }
 
-    /// The columns' widths, as dashes adding up to 100.
-    pub fn set_shares(&mut self, widths: &[f32]) {
-        let n = self.columns();
-        if widths.len() != n || n == 0 {
+    /// The columns' widths in points, in `room`: each written as its
+    /// share of the room.
+    pub fn set_widths(&mut self, widths: &[f32], room: f32) {
+        if widths.len() != self.columns() || room <= 0. {
             return;
         }
-        let total: f32 = widths.iter().sum();
-        if total <= 0. {
+        self.put(widths.iter().map(|w| w / room * 100.).collect());
+    }
+
+    /// Every column as wide as its words ask again: the dashes a table is
+    /// typed with.
+    pub fn clear_widths(&mut self) {
+        for col in 0..self.columns() {
+            let align = self.align_of(col);
+            self.separator[col] = dressed(3, &align);
+        }
+    }
+
+    /// Shares in hundredths as dashes. A table within a hundredth of the
+    /// room is written spanning it, the shares adding up to exactly 100,
+    /// the rounding put right on the widest. A narrower one keeps each
+    /// column's own share, rounded up and none under `LEAST_SHARE`; where they all came
+    /// out the same, the last takes a hundredth more, since one count of
+    /// dashes in every column is how a table is typed and says nothing.
+    fn put(&mut self, shares: Vec<f32>) {
+        if shares.len() != self.columns() || shares.is_empty() {
             return;
         }
-        let mut dashes: Vec<u32> = widths.iter().map(|w| ((w / total * 100.).round() as u32).max(LEAST_SHARE)).collect();
-        // Rounding is put right on the widest, so they add up to 100.
-        while dashes.iter().sum::<u32>() != 100 {
-            let widest = dashes.iter().enumerate().max_by_key(|(_, d)| **d).map_or(0, |(i, _)| i);
-            if dashes.iter().sum::<u32>() > 100 {
-                if dashes[widest] <= LEAST_SHARE {
-                    break;
+        let near: f32 = shares.iter().sum();
+        // Up to the next hundredth below the room, so no column comes out
+        // narrower than it was laid and breaks a word it held.
+        let mut dashes: Vec<u32> = shares.iter().map(|w| (if near >= 99. { w.max(0.).round() } else { (w.max(0.) - 0.01).ceil() }) as u32).map(|d| d.max(LEAST_SHARE)).collect();
+        if near >= 99. || dashes.iter().sum::<u32>() >= 100 {
+            while dashes.iter().sum::<u32>() != 100 {
+                let widest = dashes.iter().enumerate().max_by_key(|(_, d)| **d).map_or(0, |(i, _)| i);
+                if dashes.iter().sum::<u32>() > 100 {
+                    if dashes[widest] <= LEAST_SHARE {
+                        break;
+                    }
+                    dashes[widest] -= 1;
+                } else {
+                    dashes[widest] += 1;
                 }
-                dashes[widest] -= 1;
-            } else {
-                dashes[widest] += 1;
+            }
+        } else if dashes.iter().all(|d| *d == dashes[0]) {
+            if let Some(last) = dashes.last_mut() {
+                *last += 1;
             }
         }
         for (col, d) in dashes.iter().enumerate() {
@@ -389,23 +426,34 @@ mod tests {
     }
 
     #[test]
-    fn a_persons_widths_are_dashes_adding_to_a_hundred() {
+    fn a_persons_widths_are_each_columns_share_of_the_room() {
+        let dashes = |s: &Sheet| s.write()[1].chars().filter(|c| *c == '-').count();
         let mut s = sheet(T);
         s.align(1, Align::Center);
-        s.set_shares(&[300., 100.]);
-        let sep = s.write()[1].clone();
-        assert_eq!(sep.chars().filter(|c| *c == '-').count(), 100);
+        // Spanning the room: dashes adding up to 100.
+        s.set_widths(&[600., 200.], 800.);
+        assert_eq!(dashes(&s), 100);
         assert_eq!(s.align_of(1), Align::Center);
-        assert_eq!(shares_of(&sep), Some(vec![75., 25.]));
-        // Three columns at a third each still add up.
+        assert_eq!(s.widths(), Some(vec![75., 25.]));
+        // Narrower: each its own share, the table the rest of the room short.
+        s.set_widths(&[240., 160.], 800.);
+        assert_eq!(s.widths(), Some(vec![30., 20.]));
+        // A column that goes leaves the others as they were.
         let mut t = sheet("| a | b | c |\n|---|---|---|");
-        t.set_shares(&[1., 1., 1.]);
-        assert_eq!(t.write()[1].chars().filter(|c| *c == '-').count(), 100);
-        // A column that comes makes room; the rest keep their proportion.
-        s.insert_col(1);
-        assert_eq!(s.write()[1].chars().filter(|c| *c == '-').count(), 100);
-        assert_eq!(shares_of("|---|---|"), None);
-        assert_eq!(shares_of("| a |"), None);
+        t.set_widths(&[200., 160., 120.], 800.);
+        assert!(t.delete_col(1));
+        assert_eq!(t.widths(), Some(vec![25., 15.]));
+        // One that comes past the room makes the others give way.
+        t.set_widths(&[400., 400.], 800.);
+        t.insert_col(1);
+        assert_eq!(dashes(&t), 100);
+        // Shares all the same are written so they still say widths.
+        t.set_widths(&[160., 160., 160.], 800.);
+        assert_eq!(t.widths().map(|w| w.iter().sum::<f32>()), Some(61.));
+        t.clear_widths();
+        assert_eq!(t.widths(), None);
+        assert_eq!(widths_of("|---|---|", &[]), None);
+        assert_eq!(widths_of("| a |", &[]), None);
     }
 
     #[test]

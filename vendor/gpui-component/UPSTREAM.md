@@ -357,6 +357,8 @@ upstream revision finds them.
 
 71. `crates/base/src/input/base/state.rs` (`scroll_wheel`): a wheel's event given to an editor from outside it, as over it. The app's scroll router keeps a gesture in the scroller it began in, momentum included; an editor scrolls by its own offset, not by a handle the router moves, so a gesture carried off it is handed here.
 
+72. `crates/base/src/input/base/state.rs` (`SplitRuns`, `set_split_runs`), `crates/base/src/input/base/element.rs` (`layout_lines`): a field may be given a function that cuts each line's runs again before it is shaped. Onyx sets a note's Chinese, Japanese and Korean in one face and the rest in another, and its title field draws its name as the note draws its words.
+
 ## Updating
 
 Check out the new upstream revision, copy the four crates over these, re-apply

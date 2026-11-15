@@ -17,6 +17,7 @@ mod reading;
 pub mod rhythm;
 pub mod search;
 pub mod shell_marks;
+pub mod shortcut;
 pub mod update;
 pub mod vault;
 pub mod web;

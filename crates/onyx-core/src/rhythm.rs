@@ -46,15 +46,47 @@ pub const HEADINGS: [Heading; 6] = [
     Heading { scale: 1.0, line: 1.5, above: 0.2 },
 ];
 
-/// A table's widths, as a person set them: each column's dashes in its
-/// separator row, adding up to 100. Any other separator says nothing, and
-/// the columns go by their words.
-pub fn shares_of(separator: &str) -> Option<Vec<f32>> {
+/// The fewest dashes a column of a table narrower than the room is
+/// written with, so a table typed by hand (`| --- |`) is not read as one.
+pub const LEAST_WIDTH: u32 = 5;
+
+/// A table's widths, as a person set them: each column's share of the
+/// room in hundredths, its dashes in the separator row. Adding up to 100,
+/// the table spans the room; less, it stands that much of it, each column
+/// its own share.
+///
+/// Under 100 a separator says widths only where no hand or formatter
+/// would have written it so: every column has `LEAST_WIDTH` dashes or
+/// more, not all the same count (a table typed gives each column the same
+/// dashes), and the rows do not line up with it (`rows`, the table's
+/// other lines: a formatter pads every row and the separator to one
+/// length, the dashes being its columns' letters). Anything else says
+/// nothing, and the columns go by their words.
+pub fn widths_of(separator: &str, rows: &[&str]) -> Option<Vec<f32>> {
     let row = separator.trim_start_matches(|c: char| c == '>' || c.is_whitespace()).trim_end();
     let row = row.strip_prefix('|').unwrap_or(row);
     let row = row.strip_suffix('|').unwrap_or(row);
     let dashes: Vec<u32> = row.split('|').map(|c| c.chars().filter(|c| *c == '-').count() as u32).collect();
-    (dashes.len() > 1 && dashes.iter().sum::<u32>() == 100).then(|| dashes.iter().map(|d| *d as f32).collect())
+    if dashes.len() < 2 {
+        return None;
+    }
+    let sum: u32 = dashes.iter().sum();
+    let set = sum == 100 || (sum < 100 && dashes.iter().all(|d| *d >= LEAST_WIDTH) && dashes.iter().any(|d| *d != dashes[0]) && !lined_up(separator, rows));
+    set.then(|| dashes.iter().map(|d| *d as f32).collect())
+}
+
+/// Whether every row is as long as the separator, as a monospace screen
+/// shows them: a table a formatter padded.
+fn lined_up(separator: &str, rows: &[&str]) -> bool {
+    let long = |line: &str| line.trim_end().chars().map(|c| if wide(c) { 2 } else { 1 }).sum::<usize>();
+    let at = long(separator);
+    !rows.is_empty() && rows.iter().all(|r| long(r) == at)
+}
+
+/// A character a monospace screen gives two columns: CJK, full-width
+/// forms and emoji, as a formatter counts them.
+fn wide(c: char) -> bool {
+    matches!(c as u32, 0x1100..=0x115F | 0x2E80..=0xA4CF | 0xAC00..=0xD7A3 | 0xF900..=0xFAFF | 0xFE30..=0xFE4F | 0xFF00..=0xFF60 | 0xFFE0..=0xFFE6 | 0x1F300..=0x1FAFF | 0x20000..=0x3FFFD)
 }
 
 #[cfg(test)]

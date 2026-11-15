@@ -312,9 +312,17 @@ pub(crate) fn init(cx: &mut App) {
 /// public: an alias is only as usable as the type behind it, so hiding this
 /// would leave `InputState` unable to do anything. Prefer naming the aliases
 /// — write `InputState`, not `InputBaseState<InputMode>`.
+/// A field's runs cut again before they are shaped, given a line's text
+/// and the runs over it. (Studio addition.)
+pub type SplitRuns = Rc<dyn Fn(&str, Vec<gpui::TextRun>) -> Vec<gpui::TextRun>>;
+
 pub struct InputBaseState<M: InputModeKind> {
     /// State only this mode needs. See [`InputModeKind::Extras`].
     pub(crate) extras: M::Extras,
+    /// Cuts each line's runs before it is shaped, where set: an app that
+    /// sets one script in one face and another in another. (Studio
+    /// addition.)
+    pub(crate) split_runs: Option<SplitRuns>,
     pub(super) focus_handle: FocusHandle,
     pub(super) mode: LayoutMode,
     pub(super) text: Rope,
@@ -641,6 +649,7 @@ impl<M: InputModeKind> InputBaseState<M> {
 
         Self {
             extras: M::Extras::default(),
+            split_runs: None,
             focus_handle: focus_handle.clone(),
             text: "".into(),
             display_map: DisplayMap::new(text_style.font(), window.rem_size(), None),
@@ -707,6 +716,12 @@ impl<M: InputModeKind> InputBaseState<M> {
             cursor_line_end_affinity: false,
             auto_scroll: AutoScroll::default(),
         }
+    }
+
+    /// Each line's runs cut again before it is shaped, as `f` gives them.
+    /// (Studio addition.)
+    pub fn set_split_runs(&mut self, f: Option<SplitRuns>) {
+        self.split_runs = f;
     }
 
     /// Sets whether the context menu that shows on right-click is enabled.

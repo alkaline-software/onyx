@@ -1365,10 +1365,18 @@ impl<M: InputModeKind> TextElement<M> {
         window: &mut Window,
     ) -> Vec<LineLayout> {
         let is_single_line = state.is_single_line();
+        // The app's own cut of each line's runs, where it set one. (Studio
+        // addition.)
+        let split = |text: &str, runs: Vec<TextRun>| match &state.split_runs {
+            Some(f) => f(text, runs),
+            None => runs,
+        };
 
         if is_single_line {
+            let text = display_text.to_string();
+            let runs = split(&text, runs.to_vec());
             let shaped_line = window.text_system().shape_line(
-                display_text.to_string().into(),
+                text.into(),
                 font_size,
                 &runs,
                 None,
@@ -1386,6 +1394,7 @@ impl<M: InputModeKind> TextElement<M> {
             let mut placeholder_lines = SmallVec::new();
 
             for (line, line_runs) in placeholder_line_runs(&placeholder_text, runs) {
+                let line_runs = split(line, line_runs);
                 let shaped_line = window.text_system().shape_line(
                     line.to_string().into(),
                     font_size,
@@ -1432,6 +1441,7 @@ impl<M: InputModeKind> TextElement<M> {
                 };
 
                 let sub_line: SharedString = line_text[range.clone()].to_string().into();
+                let line_runs = split(&sub_line, line_runs);
                 let shaped_line = window
                     .text_system()
                     .shape_line(sub_line, font_size, &line_runs, None);

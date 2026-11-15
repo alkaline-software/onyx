@@ -7,8 +7,10 @@
 //! - `icons/`: Tabler's outline icons (MIT, `TABLER-LICENSE` beside them),
 //!   each under the name the toolkit asks for (`close.svg` is Tabler's
 //!   `x`), so the icons the toolkit draws by itself are Tabler's too; the
-//!   ones drawn here in Tabler's hand (`file-plus.svg`, the flags); and
-//!   nothing else.
+//!   ones drawn here in Tabler's hand (`file-plus.svg`, `menu-bar.svg`,
+//!   the flags); and the menu bar item's picture, the app icon in one ink, filled while
+//!   its note is open (`menubar-note.svg`, `menubar-note-open.svg`,
+//!   `sys/status_item.rs`).
 //! - `icon/`: the app's own icon at each size `scripts/make-icon.sh` writes.
 //! - `catppuccin/`: a file tree's icons (`file_icons.rs`).
 //!
@@ -30,6 +32,9 @@ pub struct Assets;
 
 impl AssetSource for Assets {
     fn load(&self, path: &str) -> Result<Option<Cow<'static, [u8]>>> {
+        if path.starts_with("tabler/") {
+            return Ok(crate::folder_look::svg(path).map(Cow::Owned));
+        }
         if let Some(f) = Own::get(path) {
             return Ok(Some(f.data));
         }
@@ -51,7 +56,7 @@ mod tests {
     /// draws nothing, and nothing says so.
     #[test]
     fn every_named_icon_is_carried() {
-        let sources = [include_str!("main.rs"), include_str!("widgets.rs"), include_str!("shell.rs"), include_str!("settings.rs"), include_str!("menu.rs"), include_str!("i18n.rs"), include_str!("editor.rs"), include_str!("tabs.rs"), include_str!("langs.rs")];
+        let sources = [include_str!("main.rs"), include_str!("widgets.rs"), include_str!("shell.rs"), include_str!("settings.rs"), include_str!("menu.rs"), include_str!("i18n.rs"), include_str!("editor.rs"), include_str!("tabs.rs"), include_str!("langs.rs"), include_str!("menubar.rs"), include_str!("note_menu.rs"), include_str!("folder_look.rs")];
         let mut missing = Vec::new();
         for src in sources {
             for (at, _) in src.match_indices("\"icons/") {

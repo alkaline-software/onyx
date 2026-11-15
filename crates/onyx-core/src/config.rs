@@ -26,11 +26,14 @@ pub struct AppConfig {
     /// The person's picture: the path of the copy kept under the app's
     /// own folder, or empty for their initial on the accent.
     pub avatar: String,
+    /// The colors the person made for folders, as `#rrggbb`, offered
+    /// after the app's own in every vault.
+    pub folder_colors: Vec<String>,
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
-        Self { appearance: "system".into(), accent: "teal".into(), language: "system".into(), check_updates: true, user_name: String::new(), avatar: String::new() }
+        Self { appearance: "system".into(), accent: "teal".into(), language: "system".into(), check_updates: true, user_name: String::new(), avatar: String::new(), folder_colors: Vec::new() }
     }
 }
 
@@ -38,21 +41,28 @@ impl Default for AppConfig {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct EditorConfig {
-    /// The face a note's words are set in, by its key in the app's
-    /// `fonts::SERIFS` or `fonts::SANS`.
+    /// The face a note's English (every script but Chinese, Japanese and
+    /// Korean) is set in, by its key in the app's `fonts::SERIFS` or
+    /// `fonts::SANS`, or `custom` for `text_custom`.
     pub text_face: String,
-    /// The face code is set in, by its key in `fonts::MONOS`.
+    /// The face code is set in, by its key in `fonts::MONOS`, or `custom`.
     pub mono_face: String,
-    /// The face Chinese, Japanese and Korean are set in behind the Latin
-    /// faces, by its key in `fonts::CJK`: `auto` matches the note's face
-    /// (a serif behind a serif), else a carried face.
+    /// The face Chinese, Japanese and Korean are set in, by its key in
+    /// `fonts::CJK` (`auto` matches the English face, a serif behind a
+    /// serif), or `custom`.
     pub cjk_face: String,
-    /// A font installed on the machine, by its family name, in place of
-    /// the chosen face; empty, the chosen face. One for the words, one
-    /// for code, one for Chinese.
+    /// A font installed on the machine, by its family name, for each of
+    /// the three: the face its `custom` stands for, kept while a carried
+    /// face is chosen so the Custom tile still shows it.
     pub text_custom: String,
     pub mono_custom: String,
     pub cjk_custom: String,
+    /// Whether `custom` is a key of its own. Before it was, a name in a
+    /// custom field stood over the chosen face; such a file is read so
+    /// (`Config::load`). Missing from a file, it is false: the struct's
+    /// own default, a new install's, is true.
+    #[serde(default)]
+    pub custom_keyed: bool,
     /// `small`, `medium`, `large` or `custom`: a preset for every place
     /// at once, or the person's own sizes (`sizes`).
     pub text_size: String,
@@ -65,9 +75,25 @@ pub struct EditorConfig {
     pub writing_language: String,
 }
 
+impl EditorConfig {
+    /// A file from before `custom` was a key: a name in a custom field
+    /// stood over the chosen face, so its key is `custom` now.
+    pub fn key_custom(&mut self) {
+        if self.custom_keyed {
+            return;
+        }
+        for (key, name) in [(&mut self.text_face, &self.text_custom), (&mut self.mono_face, &self.mono_custom), (&mut self.cjk_face, &self.cjk_custom)] {
+            if !name.trim().is_empty() {
+                *key = "custom".into();
+            }
+        }
+        self.custom_keyed = true;
+    }
+}
+
 impl Default for EditorConfig {
     fn default() -> Self {
-        Self { text_face: "inter".into(), mono_face: "jetbrains".into(), cjk_face: "auto".into(), text_custom: String::new(), mono_custom: String::new(), cjk_custom: String::new(), text_size: "medium".into(), sizes: None, check_writing: true, writing_language: "en-US".into() }
+        Self { text_face: "inter".into(), mono_face: "jetbrains".into(), cjk_face: "auto".into(), text_custom: String::new(), mono_custom: String::new(), cjk_custom: String::new(), custom_keyed: true, text_size: "medium".into(), sizes: None, check_writing: true, writing_language: "en-US".into() }
     }
 }
 
@@ -184,6 +210,23 @@ pub struct Config {
     pub editor: EditorConfig,
     pub pdf: PdfConfig,
     pub terminal: TerminalConfig,
+    pub menu_bar: MenuBarConfig,
+}
+
+/// The note in the menu bar, as Settings, Menu Bar changes it: whether
+/// the item is there, and the shortcut that opens and closes the note from
+/// any app (`Shortcut::to_config`'s text; empty for none).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct MenuBarConfig {
+    pub shown: bool,
+    pub shortcut: String,
+}
+
+impl Default for MenuBarConfig {
+    fn default() -> Self {
+        Self { shown: true, shortcut: "ctrl-alt-cmd-o".into() }
+    }
 }
 
 /// The terminal beside a note, as Settings, Terminal changes it. The look
@@ -216,6 +259,7 @@ impl Config {
     /// environment's overrides (`ONYX_APPEARANCE` for a probe).
     pub fn load() -> Config {
         let mut cfg = Self::on_disk();
+        cfg.editor.key_custom();
         if let Ok(v) = std::env::var("ONYX_APPEARANCE") {
             if !v.is_empty() {
                 cfg.app.appearance = v;
@@ -225,7 +269,9 @@ impl Config {
     }
 
     fn on_disk() -> Config {
-        paths::read_json(&paths::config_file()).and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default()
+        let mut cfg: Config = paths::read_json(&paths::config_file()).and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+        cfg.editor.key_custom();
+        cfg
     }
 
     /// Change the file on disk. It starts from the file, not from `load`,
@@ -235,5 +281,24 @@ impl Config {
         change(&mut cfg);
         paths::ensure_dirs()?;
         paths::write_json(&paths::config_file(), &serde_json::to_value(&cfg)?)
+    }
+}
+
+#[cfg(test)]
+mod custom_key_tests {
+    use super::*;
+
+    #[test]
+    fn a_name_typed_before_custom_was_a_key_is_custom_now() {
+        let old: EditorConfig = serde_json::from_value(serde_json::json!({ "text_face": "inter", "cjk_face": "auto", "cjk_custom": "TsangerJinKai02" })).unwrap();
+        let mut e = old;
+        e.key_custom();
+        assert_eq!((e.text_face.as_str(), e.cjk_face.as_str()), ("inter", "custom"));
+        // A file written since keeps a carried face chosen beside a kept name.
+        let new: EditorConfig = serde_json::from_value(serde_json::json!({ "cjk_face": "wenkai", "cjk_custom": "TsangerJinKai02", "custom_keyed": true })).unwrap();
+        let mut e = new;
+        e.key_custom();
+        assert_eq!(e.cjk_face, "wenkai");
+        assert!(EditorConfig::default().custom_keyed);
     }
 }

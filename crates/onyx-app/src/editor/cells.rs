@@ -25,7 +25,11 @@ pub(super) const GRIP_SHORT: f32 = 12.;
 pub(super) const ADD: f32 = 16.;
 pub(super) const ADD_GAP: f32 = 5.;
 /// How far from a column's edge a press takes the edge.
-const EDGE: f32 = 3.;
+const EDGE: f32 = 4.;
+/// How near a dragged edge comes to where it would stand of itself, the
+/// column fit to its words or the table across the room, before it
+/// stands there.
+const SNAP: f32 = 6.;
 /// How far a handle is dragged before it is a move and not a press.
 const DRAG_FROM: f32 = 4.;
 const LEAST_COLUMN: f32 = 48.;
@@ -52,6 +56,8 @@ pub struct TableFacts {
     pub rows: usize,
     pub columns: usize,
     pub align: Align,
+    /// Whether a person set the columns' widths.
+    pub sized: bool,
 }
 
 /// Where the pointer is in a table, and since when it has been there.
@@ -74,7 +80,9 @@ pub(super) enum Control {
 }
 
 pub(super) enum TableDrag {
-    Width { first: usize, col: usize, x0: f32, cols: Vec<f32> },
+    /// A column's right edge: its widths as the drag began, each column
+    /// fit to its words, and the room.
+    Width { first: usize, col: usize, x0: f32, cols: Vec<f32>, fit: Vec<f32>, room: f32 },
     Row { first: usize, row: usize, y0: f32, to: usize, moved: bool, at: Point<Pixels> },
     Column { first: usize, col: usize, x0: f32, to: usize, moved: bool, at: Point<Pixels> },
 }
@@ -313,7 +321,7 @@ impl Editor {
 
     pub(crate) fn table_facts(&self, at: CellAt) -> Option<TableFacts> {
         let t = self.table(at.table)?;
-        Some(TableFacts { rows: t.rows.len(), columns: t.columns(), align: t.aligns.get(at.col).cloned().unwrap_or(Align::None) })
+        Some(TableFacts { rows: t.rows.len(), columns: t.columns(), align: t.aligns.get(at.col).cloned().unwrap_or(Align::None), sized: t.shares.is_some() })
     }
 
     /// A choice from a table's menu, or a press on its handles, as one
@@ -384,6 +392,27 @@ impl Editor {
             "align-right" => s.align(col, Align::Right),
             "sort-up" => s.sort(col, false),
             "sort-down" => s.sort(col, true),
+            "table-fit" => s.clear_widths(),
+            "col-fit" | "table-even" | "table-full" => {
+                let Some(grid) = table_box(t, &self.cache.borrow()).map(|b| b.grid) else { return };
+                let mut now = grid.cols.clone();
+                let n = now.len().max(1) as f32;
+                let total: f32 = now.iter().sum();
+                match what {
+                    // The column as its words ask, as far as the room goes.
+                    "col-fit" => {
+                        let others = total - now.get(col).copied().unwrap_or(0.);
+                        if let (Some(w), Some(f)) = (now.get_mut(col), grid.fit.get(col)) {
+                            *w = f.min(grid.room - others).max(LEAST_COLUMN);
+                        }
+                    }
+                    // One width each, the table as wide as it was.
+                    "table-even" => now.iter_mut().for_each(|w| *w = total / n),
+                    // Across the room, each column keeping its proportion.
+                    _ => now.iter_mut().for_each(|w| *w *= grid.room / total.max(1.)),
+                }
+                s.set_widths(&now, grid.room);
+            }
             "table-delete" => return self.table_gone(first, last, cx),
             _ => return,
         }
@@ -503,18 +532,21 @@ impl Editor {
         None
     }
 
-    /// A press on a handle or an edge. False when it was on neither.
-    pub(super) fn press_control(&mut self, x: f32, y: f32, at: Point<Pixels>, cx: &mut Context<Self>) -> bool {
+    /// A press on a handle or an edge. False when it was on neither. A
+    /// double click on an edge gives every column the width its words ask
+    /// again, as a spreadsheet fits a column.
+    pub(super) fn press_control(&mut self, x: f32, y: f32, at: Point<Pixels>, clicks: usize, cx: &mut Context<Self>) -> bool {
         let Some(control) = self.control_at(x, y) else { return false };
         let Some(hover) = self.hover else { return false };
         let cell = CellAt { table: hover.first, row: hover.row, col: hover.col };
         match control {
             Control::AddRow => self.table_do("row-end", cell, cx),
             Control::AddColumn => self.table_do("col-end", cell, cx),
+            Control::Edge(_) if clicks == 2 => self.table_do("table-fit", cell, cx),
             Control::Edge(col) => {
-                let cols = self.table(hover.first).and_then(|t| Some(table_box(t, &self.cache.borrow())?.grid.cols.clone())).unwrap_or_default();
-                self.hold = Some((hover.first, cols.clone()));
-                self.table_drag = Some(TableDrag::Width { first: hover.first, col, x0: x, cols });
+                let Some(grid) = self.table(hover.first).and_then(|t| Some(table_box(t, &self.cache.borrow())?.grid)) else { return true };
+                self.hold = Some((hover.first, grid.cols.clone()));
+                self.table_drag = Some(TableDrag::Width { first: hover.first, col, x0: x, cols: grid.cols.clone(), fit: grid.fit.clone(), room: grid.room });
             }
             Control::RowGrip(row) => self.table_drag = Some(TableDrag::Row { first: hover.first, row, y0: y, to: row, moved: false, at }),
             Control::ColumnGrip(col) => self.table_drag = Some(TableDrag::Column { first: hover.first, col, x0: x, to: col, moved: false, at }),
@@ -523,9 +555,12 @@ impl Editor {
         true
     }
 
-    /// A drag under way. True when there was one.
-    pub(super) fn drag_control(&mut self, x: f32, y: f32, cx: &mut Context<Self>) -> bool {
-        let room = self.cache.borrow().width;
+    /// A drag under way. True when there was one. A column's edge moves
+    /// that column alone, the table growing or giving way with it, as far
+    /// as the room; with ⌥ an inner edge trades with the column after it,
+    /// the table as wide as it was. Near the width its words ask, or the
+    /// table near the room's edge, it stands there.
+    pub(super) fn drag_control(&mut self, x: f32, y: f32, trade: bool, cx: &mut Context<Self>) -> bool {
         let Some(first) = self.table_drag.as_ref().map(|d| match d {
             TableDrag::Width { first, .. } | TableDrag::Row { first, .. } | TableDrag::Column { first, .. } => *first,
         }) else {
@@ -539,18 +574,31 @@ impl Editor {
             (row.unwrap_or(0), col.unwrap_or(0))
         };
         match self.table_drag.as_mut() {
-            Some(TableDrag::Width { col, x0, cols, .. }) => {
+            Some(TableDrag::Width { col, x0, cols, fit, room, .. }) => {
                 let mut now = cols.clone();
                 let col = *col;
                 let d = x - *x0;
-                if col + 1 < now.len() {
-                    // The edge between two: what one gains the other gives.
-                    let total = now[col] + now[col + 1];
-                    now[col] = (now[col] + d).clamp(LEAST_COLUMN, (total - LEAST_COLUMN).max(LEAST_COLUMN));
-                    now[col + 1] = total - now[col];
+                let fit = fit.get(col).copied().unwrap_or(0.);
+                if trade && col + 1 < now.len() {
+                    // What one gains the other gives.
+                    let pair = now[col] + now[col + 1];
+                    let most = (pair - LEAST_COLUMN).max(LEAST_COLUMN);
+                    let mut w = (now[col] + d).clamp(LEAST_COLUMN, most);
+                    if (w - fit).abs() <= SNAP && fit <= most {
+                        w = fit;
+                    }
+                    now[col] = w;
+                    now[col + 1] = pair - w;
                 } else {
-                    let others: f32 = now[..col].iter().sum();
-                    now[col] = (now[col] + d).clamp(LEAST_COLUMN, (room - others).max(LEAST_COLUMN));
+                    let others: f32 = now.iter().sum::<f32>() - now[col];
+                    let most = (*room - others).max(LEAST_COLUMN);
+                    let mut w = (now[col] + d).clamp(LEAST_COLUMN, most);
+                    if (w - fit).abs() <= SNAP && fit <= most {
+                        w = fit;
+                    } else if most - w <= SNAP {
+                        w = most;
+                    }
+                    now[col] = w;
                 }
                 self.hold = Some((first, now));
             }
@@ -572,14 +620,14 @@ impl Editor {
     pub(super) fn drop_control(&mut self, cx: &mut Context<Self>) -> bool {
         let Some(drag) = self.table_drag.take() else { return false };
         match drag {
-            TableDrag::Width { first, cols, .. } => {
+            TableDrag::Width { first, cols, room, .. } => {
                 let now = self.hold.take().map(|(_, c)| c).unwrap_or_default();
                 if now != cols {
                     if let Some(t) = self.table(first) {
                         let last = t.last;
                         let lines: Vec<String> = (first..=last).map(|l| self.doc.line(l).to_string()).collect();
                         let mut s = Sheet::read(&lines);
-                        s.set_shares(&now);
+                        s.set_widths(&now, room);
                         let cell = self.cell_of(self.sel.head).filter(|c| c.table == first);
                         self.write_sheet(first, last, &s, cell.map_or(0, |c| c.row), cell.map_or(0, |c| c.col), cx);
                     }
@@ -588,6 +636,7 @@ impl Editor {
             TableDrag::Row { first, row, to, moved, at, .. } => {
                 if moved && to != row {
                     self.table_moved(first, row, to, false, cx);
+                    self.settle_at(first, false, to);
                 } else if !moved {
                     self.grip_menu(CellAt { table: first, row, col: 0 }, Scope::Row, at, cx);
                 }
@@ -595,6 +644,7 @@ impl Editor {
             TableDrag::Column { first, col, to, moved, at, .. } => {
                 if moved && to != col {
                     self.table_moved(first, col, to, true, cx);
+                    self.settle_at(first, true, to);
                 } else if !moved {
                     self.grip_menu(CellAt { table: first, row: 0, col }, Scope::Column, at, cx);
                 }
@@ -631,5 +681,170 @@ impl Editor {
         if let Some(facts) = self.table_facts(cell) {
             cx.emit(super::EditorEvent::Menu(at, super::MenuAt { table: Some((cell, scope, facts)), ..Default::default() }));
         }
+    }
+}
+
+/// How long the rows or columns of a move take to slide to where the
+/// dragged one would leave them, and the dragged one to settle at its
+/// place once let go.
+const MOVE_ANIM: f32 = 0.16;
+
+/// A row's or a column's move as it shows: the slot each stands in,
+/// sliding from where it last stood when the landing changed.
+pub(super) struct MoveShow {
+    first: usize,
+    column: bool,
+    to: usize,
+    start: Vec<f32>,
+    since: Instant,
+}
+
+/// A row or a column just moved: its words glide from where the card
+/// was let go to their place.
+pub(super) struct Settle {
+    first: usize,
+    column: bool,
+    at: usize,
+    from: f32,
+    since: Instant,
+}
+
+/// What paint draws of a move, from the element's top left: each row's or
+/// column's shift, the one carried (left out where it stood), the card
+/// carrying it and the slot it would land in. While a move settles there
+/// is only the moved one's shift.
+pub(super) struct MovePaint {
+    pub first: usize,
+    pub last: usize,
+    pub column: bool,
+    pub carried: Option<usize>,
+    pub shift: Vec<f32>,
+    /// The card's box, and the slot under it.
+    pub card: Option<Bounds<Pixels>>,
+    pub slot: Option<Bounds<Pixels>>,
+    pub moving: bool,
+}
+
+/// Eased toward its end: quick at first, slow as it lands.
+fn eased(since: Instant) -> f32 {
+    let t = (since.elapsed().as_secs_f32() / MOVE_ANIM).min(1.);
+    1. - (1. - t).powi(3)
+}
+
+impl Editor {
+    /// A row's or a column's move as it is to be painted: the others slide
+    /// to where the drop would leave them, the one carried rides a card
+    /// under the pointer over the slot it would land in, and once let go
+    /// it glides from the card to its place.
+    pub(super) fn move_paint(&mut self) -> Option<MovePaint> {
+        let drag = match &self.table_drag {
+            Some(TableDrag::Row { first, row, y0, to, moved: true, .. }) => Some((*first, false, *row, *y0, *to)),
+            Some(TableDrag::Column { first, col, x0, to, moved: true, .. }) => Some((*first, true, *col, *x0, *to)),
+            _ => None,
+        };
+        let Some((first, column, from, grab, to)) = drag else {
+            self.move_show = None;
+            return self.settle_paint();
+        };
+        self.settle = None;
+        let t = self.table(first)?;
+        let last = t.last;
+        let cache = self.cache.borrow();
+        let b = table_box(t, &cache)?;
+        // Each one's start and size along the move, in the table's order.
+        let spans: Vec<(f32, f32)> = if column {
+            b.grid.xs.iter().zip(&b.grid.cols).map(|(x, w)| (b.left + x, *w)).collect()
+        } else {
+            (0..t.rows.len()).filter_map(|r| row_span(t, r, &cache).map(|(top, foot)| (top, foot - top))).collect()
+        };
+        drop(cache);
+        if from >= spans.len() || to >= spans.len() {
+            return None;
+        }
+        // Where each would stand with the carried one put at `to`.
+        let mut order: Vec<usize> = (0..spans.len()).filter(|i| *i != from).collect();
+        order.insert(to, from);
+        let mut at = spans[0].0;
+        let mut target = vec![0f32; spans.len()];
+        let mut landing = 0.;
+        for &i in &order {
+            if i == from {
+                landing = at;
+            } else {
+                target[i] = at - spans[i].0;
+            }
+            at += spans[i].1;
+        }
+        let show = match self.move_show.take() {
+            Some(s) if s.first == first && s.column == column && s.to == to => s,
+            prev => {
+                // From where they stand now, mid-slide or at rest.
+                let start = match prev {
+                    Some(p) if p.first == first && p.column == column && p.start.len() == spans.len() => {
+                        let k = eased(p.since);
+                        let before = self.move_target(first, column, from, p.to).unwrap_or_else(|| vec![0.; spans.len()]);
+                        p.start.iter().zip(&before).map(|(s, e)| s + (e - s) * k).collect()
+                    }
+                    _ => vec![0.; spans.len()],
+                };
+                MoveShow { first, column, to, start, since: Instant::now() }
+            }
+        };
+        let k = eased(show.since);
+        let shift: Vec<f32> = show.start.iter().zip(&target).map(|(s, e)| s + (e - s) * k).collect();
+        let moving = k < 1.;
+        self.move_show = Some(show);
+        // The card under the pointer, kept over the table.
+        let (start, size_along) = spans[from];
+        let pointer = if column { self.pointer_at.0 } else { self.pointer_at.1 };
+        let (lo, hi) = (spans[0].0, spans[spans.len() - 1].0 + spans[spans.len() - 1].1 - size_along);
+        let card_at = (start + pointer - grab).clamp(lo, hi.max(lo));
+        self.card_from = card_at - landing;
+        let (card, slot) = if column {
+            let h = b.bottom - b.top;
+            (Bounds::new(point(px(card_at), px(b.top)), size(px(size_along), px(h))), Bounds::new(point(px(landing), px(b.top)), size(px(size_along), px(h))))
+        } else {
+            let w = b.right - b.left;
+            (Bounds::new(point(px(b.left), px(card_at)), size(px(w), px(size_along))), Bounds::new(point(px(b.left), px(landing)), size(px(w), px(size_along))))
+        };
+        Some(MovePaint { first, last, column, carried: Some(from), shift, card: Some(card), slot: Some(slot), moving })
+    }
+
+    /// Where each would stand, as a shift, with the carried one at `to`.
+    fn move_target(&self, first: usize, column: bool, from: usize, to: usize) -> Option<Vec<f32>> {
+        let t = self.table(first)?;
+        let cache = self.cache.borrow();
+        let b = table_box(t, &cache)?;
+        let spans: Vec<(f32, f32)> = if column { b.grid.xs.iter().zip(&b.grid.cols).map(|(x, w)| (*x, *w)).collect() } else { (0..t.rows.len()).filter_map(|r| row_span(t, r, &cache).map(|(top, foot)| (top, foot - top))).collect() };
+        let mut order: Vec<usize> = (0..spans.len()).filter(|i| *i != from).collect();
+        order.insert(to.min(order.len()), from);
+        let mut at = spans.first()?.0;
+        let mut target = vec![0f32; spans.len()];
+        for &i in &order {
+            target[i] = if i == from { 0. } else { at - spans[i].0 };
+            at += spans[i].1;
+        }
+        Some(target)
+    }
+
+    /// A move just let go: the moved one's words gliding home.
+    fn settle_paint(&mut self) -> Option<MovePaint> {
+        let s = self.settle.as_ref()?;
+        let k = eased(s.since);
+        if k >= 1. {
+            self.settle = None;
+            return None;
+        }
+        let t = self.table(s.first)?;
+        let n = if s.column { t.columns() } else { t.rows.len() };
+        let mut shift = vec![0.; n];
+        *shift.get_mut(s.at)? = s.from * (1. - k);
+        Some(MovePaint { first: s.first, last: t.last, column: s.column, carried: None, shift, card: None, slot: None, moving: true })
+    }
+
+    /// The move just dropped at `to` settles from where its card was.
+    fn settle_at(&mut self, first: usize, column: bool, to: usize) {
+        self.settle = Some(Settle { first, column, at: to, from: self.card_from, since: Instant::now() });
+        self.move_show = None;
     }
 }

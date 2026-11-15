@@ -262,6 +262,11 @@ pub(crate) struct Grid {
     pub cols: Vec<f32>,
     pub xs: Vec<f32>,
     pub width: f32,
+    /// Each column as wide as its words ask, as far as the room goes: the
+    /// widths with none set, which a drag snaps to and a fit gives back.
+    pub fit: Vec<f32>,
+    /// The room the table stands in, which a width set is a share of.
+    pub room: f32,
 }
 
 /// One row of a table on a line of its own.
@@ -661,6 +666,9 @@ impl<'a> Reader<'a> {
         let mut h = DefaultHasher::new();
         self.look.text_family.hash(&mut h);
         self.look.mono_family.hash(&mut h);
+        // The CJK face too: a change of it alone left every row as it was
+        // laid out until the note's tab was made again.
+        self.look.cjk_family.hash(&mut h);
         self.look.text_px.to_bits().hash(&mut h);
         self.look.mono_px.to_bits().hash(&mut h);
         dark.hash(&mut h);
@@ -986,6 +994,7 @@ impl<'a> Reader<'a> {
                     (a < b).then(|| (a..b, t.clone()))
                 })
                 .collect();
+            let runs = crate::fonts::split_cjk(&shown.text, runs, &self.look.cjk_family, &self.look.cjk_fallbacks);
             let mut lines = window.text_system().shape_text(SharedString::from(shown.text.clone()), px(font_px), &runs, Some(px(wrap)), None).unwrap_or_default();
             let wrapped = lines.pop().unwrap_or_else(|| {
                 let run = TextRun { len: 1, font: self.font(&self.look.text_family, FontWeight::NORMAL, false), color: ink, background_color: None, underline: None, strikethrough: None };
@@ -1159,9 +1168,10 @@ impl<'a> Reader<'a> {
                 continue;
             }
             let room = (width - self.inset_of(&self.analysis.lines[t.first])).max(80.);
+            let (set, fit) = self.columns_of(t, room, theme, window);
             let cols = match held {
                 Some((_, c)) if c.len() == t.columns() => c.clone(),
-                _ => self.columns_of(t, room, theme, window),
+                _ => set,
             };
             let mut xs = Vec::with_capacity(cols.len());
             let mut x = 0.;
@@ -1169,23 +1179,23 @@ impl<'a> Reader<'a> {
                 xs.push(x);
                 x += c;
             }
-            grids.insert(t.first, (key, Rc::new(Grid { cols, xs, width: x })));
+            grids.insert(t.first, (key, Rc::new(Grid { cols, xs, width: x, fit, room })));
         }
     }
 
-    fn columns_of(&self, t: &Table, room: f32, theme: &gpui_component::Theme, window: &mut Window) -> Vec<f32> {
+    /// The columns' widths, and each column as wide as its words ask (the
+    /// two the same where the person set none). A width set is its share
+    /// of the room, so a table set narrower stays so.
+    fn columns_of(&self, t: &Table, room: f32, theme: &gpui_component::Theme, window: &mut Window) -> (Vec<f32>, Vec<f32>) {
         let n = t.columns();
-        if let Some(shares) = t.shares.as_ref().filter(|s| s.len() == n) {
-            let total: f32 = shares.iter().sum();
-            return shares.iter().map(|s| (s / total * room).round().max(LEAST_COLUMN)).collect();
-        }
         let at_rest = Reader { sel: None, ..*self };
         let px_cell = self.rhythm.cell_px;
         let (mut most, mut least) = (vec![0f32; n], vec![0f32; n]);
         let measure = |text: &str, head: bool, window: &mut Window| -> f32 {
             let font = self.font(&self.look.text_family, if head { FontWeight::SEMIBOLD } else { FontWeight::NORMAL }, false);
             let run = TextRun { len: text.len(), font, color: theme.foreground, background_color: None, underline: None, strikethrough: None };
-            f32::from(window.text_system().shape_line(SharedString::from(text.to_string()), px(px_cell), &[run], None).width())
+            let runs = crate::fonts::split_cjk(text, vec![run], &self.look.cjk_family, &self.look.cjk_fallbacks);
+            f32::from(window.text_system().shape_line(SharedString::from(text.to_string()), px(px_cell), &runs, None).width())
         };
         for (ri, spots) in t.cells.iter().enumerate() {
             let line = t.line_of(ri);
@@ -1210,7 +1220,12 @@ impl<'a> Reader<'a> {
         let pad = CELL_X * 2. + 1.;
         let most: Vec<f32> = most.iter().map(|w| (w + pad).max(LEAST_COLUMN)).collect();
         let least: Vec<f32> = least.iter().zip(&most).map(|(w, m)| (w + pad).max(LEAST_COLUMN).min(*m)).collect();
-        shared(&most, &least, room)
+        let fit = shared(&most, &least, room);
+        let set = match t.shares.as_ref().filter(|s| s.len() == n) {
+            Some(shares) => shares.iter().map(|s| (s / 100. * room).round().max(LEAST_COLUMN)).collect(),
+            None => fit.clone(),
+        };
+        (set, fit)
     }
 
     #[allow(clippy::too_many_arguments)]

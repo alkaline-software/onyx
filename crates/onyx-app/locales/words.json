@@ -1,13 +1,4 @@
 {
-  "A font on this Mac, by its name in Font Book.": {
-    "zh-Hans": "这台 Mac 上的字体，按字体册中的名称。",
-    "zh-Hant": "這台 Mac 上的字體，按字體簿中的名稱。",
-    "ja": "この Mac にあるフォント、Font Book での名前で。",
-    "ko": "이 Mac에 있는 글꼴, 서체 관리자의 이름으로.",
-    "fr": "Une police de ce Mac, par son nom dans Livre des polices.",
-    "de": "Eine Schrift auf diesem Mac, mit ihrem Namen in der Schriftsammlung.",
-    "es": "Una fuente de este Mac, por su nombre en Catálogo Tipográfico."
-  },
   "About": {
     "zh-Hans": "关于",
     "zh-Hant": "關於",
@@ -70,15 +61,6 @@
     "fr": "Ambre",
     "de": "Bernstein",
     "es": "Ámbar"
-  },
-  "Appearance": {
-    "zh-Hans": "外观",
-    "zh-Hant": "外觀",
-    "ja": "外観",
-    "ko": "화면 모드",
-    "fr": "Apparence",
-    "de": "Erscheinungsbild",
-    "es": "Apariencia"
   },
   "As in the note": {
     "zh-Hans": "与笔记相同",
@@ -151,15 +133,6 @@
     "fr": "Vérifier l’orthographe et la grammaire",
     "de": "Rechtschreibung und Grammatik prüfen",
     "es": "Revisar ortografía y gramática"
-  },
-  "Chinese font": {
-    "zh-Hans": "中文字体",
-    "zh-Hant": "中文字體",
-    "ja": "中国語のフォント",
-    "ko": "중국어 글꼴",
-    "fr": "Police chinoise",
-    "de": "Chinesische Schrift",
-    "es": "Fuente china"
   },
   "Choose": {
     "zh-Hans": "选择",
@@ -575,15 +548,6 @@
     "de": "Schrift",
     "es": "Fuente"
   },
-  "Font name": {
-    "zh-Hans": "字体名称",
-    "zh-Hant": "字體名稱",
-    "ja": "フォント名",
-    "ko": "글꼴 이름",
-    "fr": "Nom de la police",
-    "de": "Schriftname",
-    "es": "Nombre de la fuente"
-  },
   "Font size": {
     "zh-Hans": "字号",
     "zh-Hant": "字級",
@@ -592,15 +556,6 @@
     "fr": "Taille",
     "de": "Schriftgröße",
     "es": "Tamaño de fuente"
-  },
-  "Fonts": {
-    "zh-Hans": "字体",
-    "zh-Hant": "字體",
-    "ja": "フォント",
-    "ko": "글꼴",
-    "fr": "Polices",
-    "de": "Schriften",
-    "es": "Fuentes"
   },
   "French": {
     "zh-Hans": "法语",
@@ -674,15 +629,6 @@
     "de": "Andere ausblenden",
     "es": "Ocultar otros"
   },
-  "How the vault's page greets you and the sidebar shows you.": {
-    "zh-Hans": "仓库页面如何问候你，侧边栏如何显示你。",
-    "zh-Hant": "儲存庫頁面如何問候你，側邊欄如何顯示你。",
-    "ja": "保管庫のページでの挨拶と、サイドバーでの表示に使われます。",
-    "ko": "보관함 페이지의 인사와 사이드바에 표시되는 모습입니다.",
-    "fr": "Comment la page du coffre vous salue et comment la barre latérale vous présente.",
-    "de": "Wie die Seite des Tresors Sie begrüßt und die Seitenleiste Sie zeigt.",
-    "es": "Cómo te saluda la página de la bóveda y cómo te muestra la barra lateral."
-  },
   "Ignore": {
     "zh-Hans": "忽略",
     "zh-Hant": "忽略",
@@ -754,15 +700,6 @@
     "fr": "Insérer un tableau",
     "de": "Tabelle einfügen",
     "es": "Insertar tabla"
-  },
-  "Installed font": {
-    "zh-Hans": "已安装的字体",
-    "zh-Hant": "已安裝的字體",
-    "ja": "インストール済みのフォント",
-    "ko": "설치된 글꼴",
-    "fr": "Police installée",
-    "de": "Installierte Schrift",
-    "es": "Fuente instalada"
   },
   "It was not moved to the trash: {why}": {
     "zh-Hans": "未能移到废纸篓：{why}",
@@ -962,15 +899,6 @@
     "de": "Mehr",
     "es": "Más"
   },
-  "Moss": {
-    "zh-Hans": "苔绿",
-    "zh-Hant": "苔綠",
-    "ja": "モス",
-    "ko": "모스",
-    "fr": "Mousse",
-    "de": "Moos",
-    "es": "Musgo"
-  },
   "Move Column Left": {
     "zh-Hans": "左移一列",
     "zh-Hant": "左移一欄",
@@ -1160,15 +1088,6 @@
     "de": "Normal",
     "es": "Normal"
   },
-  "Note font": {
-    "zh-Hans": "笔记字体",
-    "zh-Hant": "筆記字體",
-    "ja": "ノートのフォント",
-    "ko": "노트 글꼴",
-    "fr": "Police des notes",
-    "de": "Schrift der Notizen",
-    "es": "Fuente de las notas"
-  },
   "Note text": {
     "zh-Hans": "笔记正文",
     "zh-Hant": "筆記正文",
@@ -1322,15 +1241,6 @@
     "de": "Mit Standard-App öffnen",
     "es": "Abrir con la app predeterminada"
   },
-  "Orchid": {
-    "zh-Hans": "兰花紫",
-    "zh-Hant": "蘭花紫",
-    "ja": "オーキッド",
-    "ko": "오키드",
-    "fr": "Orchidée",
-    "de": "Orchidee",
-    "es": "Orquídea"
-  },
   "Orientation": {
     "zh-Hans": "方向",
     "zh-Hant": "方向",
@@ -1411,15 +1321,6 @@
     "fr": "Coller",
     "de": "Einsetzen",
     "es": "Pegar"
-  },
-  "Periwinkle": {
-    "zh-Hans": "长春花蓝",
-    "zh-Hant": "長春花藍",
-    "ja": "ペリウィンクル",
-    "ko": "페리윙클",
-    "fr": "Pervenche",
-    "de": "Immergrün",
-    "es": "Pervinca"
   },
   "Pictures": {
     "zh-Hans": "图片",
@@ -1798,15 +1699,6 @@
     "fr": "Espagnol",
     "de": "Spanisch",
     "es": "Español"
-  },
-  "Spelling": {
-    "zh-Hans": "拼写",
-    "zh-Hant": "拼字",
-    "ja": "スペル",
-    "ko": "맞춤법",
-    "fr": "Orthographe",
-    "de": "Rechtschreibung",
-    "es": "Ortografía"
   },
   "Still up": {
     "zh-Hans": "还没睡",
@@ -2581,5 +2473,347 @@
     "fr": "Rechercher dans ce terminal",
     "de": "In diesem Terminal suchen",
     "es": "Buscar en este terminal"
+  },
+  "A name can't be empty or have a slash.": {
+    "zh-Hans": "名称不能为空，也不能含有斜杠。",
+    "zh-Hant": "名稱不能為空，也不能含有斜線。",
+    "ja": "名前は空にできず、スラッシュも使えません。",
+    "ko": "이름은 비워 둘 수 없으며 슬래시를 포함할 수 없습니다.",
+    "fr": "Un nom ne peut être vide ni contenir de barre oblique.",
+    "de": "Ein Name darf nicht leer sein und keinen Schrägstrich enthalten.",
+    "es": "Un nombre no puede estar vacío ni llevar una barra."
+  },
+  "Add": {
+    "zh-Hans": "添加",
+    "zh-Hant": "加入",
+    "ja": "追加",
+    "ko": "추가",
+    "fr": "Ajouter",
+    "de": "Hinzufügen",
+    "es": "Añadir"
+  },
+  "Another app holds this shortcut.": {
+    "zh-Hans": "另一个应用已占用此快捷键。",
+    "zh-Hant": "另一個 App 已佔用此快速鍵。",
+    "ja": "別のアプリがこのショートカットを使っています。",
+    "ko": "다른 앱이 이 단축키를 사용 중입니다.",
+    "fr": "Une autre app utilise ce raccourci.",
+    "de": "Eine andere App belegt diesen Kurzbefehl.",
+    "es": "Otra app usa este atajo."
+  },
+  "Auto-Hide Window": {
+    "zh-Hans": "自动隐藏窗口",
+    "zh-Hant": "自動隱藏視窗",
+    "ja": "ウインドウを自動的に隠す",
+    "ko": "윈도우 자동으로 가리기",
+    "fr": "Masquer la fenêtre automatiquement",
+    "de": "Fenster automatisch ausblenden",
+    "es": "Ocultar la ventana automáticamente"
+  },
+  "Avatar": {
+    "zh-Hans": "头像",
+    "zh-Hant": "頭像",
+    "ja": "アバター",
+    "ko": "아바타",
+    "fr": "Avatar",
+    "de": "Avatar",
+    "es": "Avatar"
+  },
+  "CJK font": {
+    "zh-Hans": "中日韩字体",
+    "zh-Hant": "中日韓字體",
+    "ja": "CJK フォント",
+    "ko": "CJK 글꼴",
+    "fr": "Police CJC",
+    "de": "CJK-Schrift",
+    "es": "Fuente CJK"
+  },
+  "Check for Updates…": {
+    "zh-Hans": "检查更新…",
+    "zh-Hant": "檢查更新…",
+    "ja": "アップデートを確認…",
+    "ko": "업데이트 확인…",
+    "fr": "Rechercher des mises à jour…",
+    "de": "Nach Updates suchen …",
+    "es": "Buscar actualizaciones…"
+  },
+  "Done": {
+    "zh-Hans": "完成",
+    "zh-Hant": "完成",
+    "ja": "完了",
+    "ko": "완료",
+    "fr": "OK",
+    "de": "Fertig",
+    "es": "OK"
+  },
+  "English font": {
+    "zh-Hans": "英文字体",
+    "zh-Hant": "英文字體",
+    "ja": "欧文フォント",
+    "ko": "영문 글꼴",
+    "fr": "Police latine",
+    "de": "Lateinische Schrift",
+    "es": "Fuente latina"
+  },
+  "Folder Color": {
+    "zh-Hans": "文件夹颜色",
+    "zh-Hant": "檔案夾顏色",
+    "ja": "フォルダの色",
+    "ko": "폴더 색상",
+    "fr": "Couleur du dossier",
+    "de": "Ordnerfarbe",
+    "es": "Color de la carpeta"
+  },
+  "General": {
+    "zh-Hans": "通用",
+    "zh-Hant": "一般",
+    "ja": "一般",
+    "ko": "일반",
+    "fr": "Général",
+    "de": "Allgemein",
+    "es": "General"
+  },
+  "Hold ⌘, ⌥ or ⌃ with the key": {
+    "zh-Hans": "请同时按住 ⌘、⌥ 或 ⌃",
+    "zh-Hant": "請同時按住 ⌘、⌥ 或 ⌃",
+    "ja": "⌘、⌥、⌃ のいずれかと一緒に押してください",
+    "ko": "⌘, ⌥ 또는 ⌃와 함께 누르세요",
+    "fr": "Maintenez ⌘, ⌥ ou ⌃ avec la touche",
+    "de": "Halte ⌘, ⌥ oder ⌃ mit der Taste",
+    "es": "Mantén ⌘, ⌥ o ⌃ con la tecla"
+  },
+  "Icon": {
+    "zh-Hans": "图标",
+    "zh-Hant": "圖像",
+    "ja": "アイコン",
+    "ko": "아이콘",
+    "fr": "Icône",
+    "de": "Symbol",
+    "es": "Icono"
+  },
+  "Icon and Color…": {
+    "zh-Hans": "图标与颜色…",
+    "zh-Hant": "圖像與顏色…",
+    "ja": "アイコンと色…",
+    "ko": "아이콘 및 색상…",
+    "fr": "Icône et couleur…",
+    "de": "Symbol und Farbe…",
+    "es": "Icono y color…"
+  },
+  "Keep Window Open": {
+    "zh-Hans": "保持窗口打开",
+    "zh-Hant": "保持視窗打開",
+    "ja": "ウインドウを開いたままにする",
+    "ko": "윈도우 열어 두기",
+    "fr": "Garder la fenêtre ouverte",
+    "de": "Fenster geöffnet lassen",
+    "es": "Mantener la ventana abierta"
+  },
+  "Login Items did not take Onyx: {why}": {
+    "zh-Hans": "登录项未能添加 Onyx：{why}",
+    "zh-Hant": "登入項目未能加入 Onyx：{why}",
+    "ja": "ログイン項目に Onyx を追加できませんでした：{why}",
+    "ko": "로그인 항목에 Onyx를 추가하지 못했습니다: {why}",
+    "fr": "Les éléments d’ouverture n’ont pas pris Onyx : {why}",
+    "de": "Anmeldeobjekte haben Onyx nicht übernommen: {why}",
+    "es": "Los ítems de inicio no aceptaron Onyx: {why}"
+  },
+  "Menu Bar": {
+    "zh-Hans": "菜单栏",
+    "zh-Hant": "選單列",
+    "ja": "メニューバー",
+    "ko": "메뉴 막대",
+    "fr": "Barre des menus",
+    "de": "Menüleiste",
+    "es": "Barra de menús"
+  },
+  "Name": {
+    "zh-Hans": "名称",
+    "zh-Hant": "名稱",
+    "ja": "名前",
+    "ko": "이름",
+    "fr": "Nom",
+    "de": "Name",
+    "es": "Nombre"
+  },
+  "No font matches": {
+    "zh-Hans": "没有匹配的字体",
+    "zh-Hant": "沒有相符的字體",
+    "ja": "一致するフォントはありません",
+    "ko": "일치하는 글꼴 없음",
+    "fr": "Aucune police ne correspond",
+    "de": "Keine Schrift passt",
+    "es": "Ninguna fuente coincide"
+  },
+  "None": {
+    "zh-Hans": "无",
+    "zh-Hant": "無",
+    "ja": "なし",
+    "ko": "없음",
+    "fr": "Aucun",
+    "de": "Keiner",
+    "es": "Ninguno"
+  },
+  "Open Onyx": {
+    "zh-Hans": "打开 Onyx",
+    "zh-Hant": "打開 Onyx",
+    "ja": "Onyx を開く",
+    "ko": "Onyx 열기",
+    "fr": "Ouvrir Onyx",
+    "de": "Onyx öffnen",
+    "es": "Abrir Onyx"
+  },
+  "Open at login": {
+    "zh-Hans": "登录时打开",
+    "zh-Hant": "登入時打開",
+    "ja": "ログイン時に開く",
+    "ko": "로그인 시 열기",
+    "fr": "Ouvrir à l’ouverture de session",
+    "de": "Bei der Anmeldung öffnen",
+    "es": "Abrir al iniciar sesión"
+  },
+  "Open in Onyx": {
+    "zh-Hans": "在 Onyx 中打开",
+    "zh-Hant": "在 Onyx 中打開",
+    "ja": "Onyx で開く",
+    "ko": "Onyx에서 열기",
+    "fr": "Ouvrir dans Onyx",
+    "de": "In Onyx öffnen",
+    "es": "Abrir en Onyx"
+  },
+  "Press keys…": {
+    "zh-Hans": "请按键…",
+    "zh-Hant": "請按鍵…",
+    "ja": "キーを押してください…",
+    "ko": "키를 누르세요…",
+    "fr": "Appuyez sur des touches…",
+    "de": "Tasten drücken …",
+    "es": "Pulsa las teclas…"
+  },
+  "Reading fonts…": {
+    "zh-Hans": "正在读取字体…",
+    "zh-Hant": "正在讀取字體…",
+    "ja": "フォントを読み込み中…",
+    "ko": "글꼴을 읽는 중…",
+    "fr": "Lecture des polices…",
+    "de": "Schriften werden gelesen …",
+    "es": "Leyendo fuentes…"
+  },
+  "Search fonts": {
+    "zh-Hans": "搜索字体",
+    "zh-Hant": "搜尋字體",
+    "ja": "フォントを検索",
+    "ko": "글꼴 검색",
+    "fr": "Rechercher des polices",
+    "de": "Schriften suchen",
+    "es": "Buscar fuentes"
+  },
+  "Search icons": {
+    "zh-Hans": "搜索图标",
+    "zh-Hant": "搜尋圖像",
+    "ja": "アイコンを検索",
+    "ko": "아이콘 검색",
+    "fr": "Rechercher des icônes",
+    "de": "Symbole suchen",
+    "es": "Buscar iconos"
+  },
+  "Shortcut": {
+    "zh-Hans": "快捷键",
+    "zh-Hant": "快速鍵",
+    "ja": "ショートカット",
+    "ko": "단축키",
+    "fr": "Raccourci",
+    "de": "Tastenkurzbefehl",
+    "es": "Atajo"
+  },
+  "Show in menu bar": {
+    "zh-Hans": "在菜单栏中显示",
+    "zh-Hant": "在選單列中顯示",
+    "ja": "メニューバーに表示",
+    "ko": "메뉴 막대에 표시",
+    "fr": "Afficher dans la barre des menus",
+    "de": "In der Menüleiste anzeigen",
+    "es": "Mostrar en la barra de menús"
+  },
+  "That key can't be used": {
+    "zh-Hans": "这个键不能使用",
+    "zh-Hant": "這個鍵不能使用",
+    "ja": "そのキーは使えません",
+    "ko": "그 키는 사용할 수 없습니다",
+    "fr": "Cette touche ne peut pas servir",
+    "de": "Diese Taste geht nicht",
+    "es": "Esa tecla no se puede usar"
+  },
+  "There is already a note named {name}.": {
+    "zh-Hans": "已有名为“{name}”的笔记。",
+    "zh-Hant": "已有名為「{name}」的筆記。",
+    "ja": "「{name}」という名前のノートはすでにあります。",
+    "ko": "'{name}' 이름의 노트가 이미 있습니다.",
+    "fr": "Une note nommée « {name} » existe déjà.",
+    "de": "Es gibt schon eine Notiz namens „{name}“.",
+    "es": "Ya hay una nota llamada «{name}»."
+  },
+  "You": {
+    "zh-Hans": "个人",
+    "zh-Hant": "個人",
+    "ja": "プロフィール",
+    "ko": "프로필",
+    "fr": "Vous",
+    "de": "Du",
+    "es": "Tú"
+  },
+  "Sapphire": {
+    "zh-Hans": "蓝宝石",
+    "zh-Hant": "藍寶石",
+    "ja": "サファイア",
+    "ko": "사파이어",
+    "fr": "Saphir",
+    "de": "Saphir",
+    "es": "Zafiro"
+  },
+  "Amethyst": {
+    "zh-Hans": "紫水晶",
+    "zh-Hant": "紫水晶",
+    "ja": "アメジスト",
+    "ko": "자수정",
+    "fr": "Améthyste",
+    "de": "Amethyst",
+    "es": "Amatista"
+  },
+  "Carnelian": {
+    "zh-Hans": "红玉髓",
+    "zh-Hant": "紅玉髓",
+    "ja": "カーネリアン",
+    "ko": "카넬리안",
+    "fr": "Cornaline",
+    "de": "Karneol",
+    "es": "Cornalina"
+  },
+  "Fit Column to Contents": {
+    "zh-Hans": "列宽适应内容",
+    "zh-Hant": "欄寬適應內容",
+    "ja": "列幅を内容に合わせる",
+    "ko": "열 너비를 내용에 맞춤",
+    "fr": "Ajuster la colonne au contenu",
+    "de": "Spalte an Inhalt anpassen",
+    "es": "Ajustar columna al contenido"
+  },
+  "Fit All Columns to Contents": {
+    "zh-Hans": "所有列宽适应内容",
+    "zh-Hant": "所有欄寬適應內容",
+    "ja": "すべての列幅を内容に合わせる",
+    "ko": "모든 열 너비를 내용에 맞춤",
+    "fr": "Ajuster toutes les colonnes au contenu",
+    "de": "Alle Spalten an Inhalt anpassen",
+    "es": "Ajustar todas las columnas al contenido"
+  },
+  "Distribute Columns Evenly": {
+    "zh-Hans": "平均分布各列",
+    "zh-Hant": "平均分配各欄",
+    "ja": "列の幅を揃える",
+    "ko": "열 너비를 같게",
+    "fr": "Répartir les colonnes uniformément",
+    "de": "Spalten gleichmäßig verteilen",
+    "es": "Distribuir columnas uniformemente"
   }
 }

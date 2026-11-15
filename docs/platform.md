@@ -10,11 +10,12 @@ How Onyx works on macOS, Windows and Linux, each on Intel-class and ARM machines
 - **Every child process starts through `onyx_core::process::command`**, so none opens a console window on Windows. Onyx starts none of its own today; the update does.
 - **The window's place is saved from `window_bounds()`**, never `bounds()` (`ui_state.rs`).
 - **A key is named as the Mac has it and bound as `secondary-<key>`**; off a Mac the caps say Ctrl and Alt.
+- **The menu bar is the Mac's alone** (`sys/status_item.rs`, `sys/hotkeys.rs`, `sys/keys.rs`, `sys::launches_at_login`): elsewhere `install_menu_bar` and `install_hot_keys` give nothing, the note in the menu bar never opens, and Settings, Menu Bar has nothing to change. A tray on Windows and Linux is left for when they are published.
 - **A note's line ends are plain.** A file with Windows' is read as plain ones and written back plain (`lines::Doc::from_text`).
 
 ## macOS
 
-The bundle is cargo-packager's with `macos/Info.plist` merged in: the languages, and Markdown as a document type Onyx edits, so Finder offers Onyx for a `.md` file. The dev build is a bundle of its own in `target/debug/dev.noindex/` (`scripts/dev-app.sh`). The installer is a notarized disk image (`docs/release.md`).
+The bundle is cargo-packager's with `macos/Info.plist` merged in: the languages, and Markdown as a document type Onyx edits, so Finder offers Onyx for a `.md` file. It has no `LSUIElement`: Onyx is a Dock app with an item in the menu bar, not a menu bar app, so it stays in the Dock and ⌘-Tab with its window shut. Its item, its hot key (Carbon's `RegisterEventHotKey`, which needs no permission) and Open at login (`SMAppService`) are Mado's; the item's place is kept by the system under the autosave name `OnyxNote`. The dev build is a bundle of its own in `target/debug/dev.noindex/` (`scripts/dev-app.sh`). The installer is a notarized disk image (`docs/release.md`).
 
 ### iCloud Drive
 
