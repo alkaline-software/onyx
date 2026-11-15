@@ -186,7 +186,7 @@ function penSilhouette(ctx, x, y, size, rot) {
 // place, in the app icon and in the template image, so candidates are
 // compared on the same page at every size. docs/design.md names the one
 // chosen and why the others lost.
-const VARIANT = 10;
+const VARIANT = 15;
 
 // A polished pebble: an ellipse filled navy, with a band of light across
 // it in the accent, straight (a cut band) or curved (a polished one),
@@ -304,6 +304,73 @@ const CANDIDATES = [
   candidate('Standing by', 'The pen upright at the note’s right with its nib down on the stone, its top above the stone as the note’s is; in the amber of the line it wrote, so it shows on the stone and on the ground both.',
     { stone: [52, 58, 32, 21, -0.12, false, 0.1], note: [46, 46, 44, -0.1, 2], pen: [60, 28, 36, -0.785, AMBER] }),
 ];
+// The plump pebble, the stone the menu bar's item and the vault page share
+// since v0.5.1: level and mirror-symmetric, a superellipse with a flatter
+// top and a fuller belly, so it reads as a polished pebble at any size.
+// It is lit as the vault page's is (Moonlit, with Edge light): its deepest
+// navy, a lighter navy rising from within to the far shoulder, the teal
+// caught in its lower edge and glowing on the ground under it, and light
+// along its rim from the top round the shoulder, bright at the edge and
+// falling off inward. The teal was always the stone's light; drawn as a
+// straight band across it, it was a groove in the item's one ink and made
+// a coffee bean of the stone.
+const MOON = { DEEP: '#171431', LIFT: '#4a4588', TEAL: '#6FB9C4' };
+const mRgba = (hex, a) => { const n = parseInt(hex.slice(1), 16); return `rgba(${n >> 16},${(n >> 8) & 255},${n & 255},${a})`; };
+function mP(G, t, inset = 0, k = 1) {
+  const c = Math.cos(t), s = Math.sin(t);
+  const [n, b] = s < 0 ? [2.3, G.bt] : [2.2, G.bb];
+  const a = G.a * (1 - inset), bb = b * (1 - inset * k);
+  return [G.cx + a * Math.sign(c) * Math.abs(c) ** (2 / n), G.cy + bb * Math.sign(s) * Math.abs(s) ** (2 / n)];
+}
+function mStone(ctx, G) { ctx.beginPath(); for (let i = 0; i < 180; i++) ctx.lineTo(...mP(G, 2 * Math.PI * i / 180)); ctx.closePath(); }
+function mCrescent(ctx, G, t0, t1, inset, w, k = 1, taper = 0.8) {
+  const n = 48, o = [], i = [];
+  for (let j = 0; j <= n; j++) { const t = t0 + (t1 - t0) * j / n, f = Math.sin(Math.PI * j / n) ** taper; o.push(mP(G, t, inset, k)); i.push(mP(G, t, inset + w * f, k)); }
+  ctx.beginPath(); for (const p of o.concat(i.reverse())) ctx.lineTo(...p); ctx.closePath();
+}
+// A streak of light, tapering to nothing at both ends and soft across:
+// crescents laid one in another, the widest faintest.
+function mStreak(ctx, G, t0, t1, inset, w, a, k, taper) {
+  for (let i = 0; i < 5; i++) {
+    const f = 1 - i / 5, grow = w * (0.35 + 0.65 * f);
+    mCrescent(ctx, G, t0, t1, inset + (w - grow) / 2, grow, k, taper);
+    ctx.fillStyle = mRgba('#ffffff', a / 5 * 1.6 * (1 - f * 0.4)); ctx.fill();
+  }
+}
+function moonlit(ctx, G) {
+  const PI = Math.PI;
+  // The teal glow on the ground under it.
+  ctx.save(); ctx.translate(G.cx, G.cy + G.bb * 1.05); ctx.scale(1, 0.16);
+  let g = ctx.createRadialGradient(0, 0, 0, 0, 0, G.a * 1.05);
+  g.addColorStop(0, mRgba(MOON.TEAL, 0.5)); g.addColorStop(1, mRgba(MOON.TEAL, 0));
+  ctx.fillStyle = g; ctx.beginPath(); ctx.arc(0, 0, G.a * 1.05, 0, PI * 2); ctx.fill(); ctx.restore();
+  mStone(ctx, G); ctx.fillStyle = MOON.DEEP; ctx.fill();
+  ctx.save(); mStone(ctx, G); ctx.clip();
+  const gx = G.cx + G.a * 0.4, gy = G.cy - G.bt * 0.55;
+  g = ctx.createRadialGradient(gx, gy, 0, gx, gy, G.a * 0.95);
+  g.addColorStop(0, mRgba(MOON.LIFT, 1)); g.addColorStop(1, mRgba(MOON.LIFT, 0));
+  mStone(ctx, G); ctx.fillStyle = g; ctx.fill();
+  mCrescent(ctx, G, 0.15 * PI, 0.85 * PI, 0, 0.08, 1.3); ctx.fillStyle = mRgba(MOON.TEAL, 0.55); ctx.fill();
+  mStreak(ctx, G, -0.55 * PI, 0.05 * PI, 0, 0.1, 0.55, 1.1, 1.1);
+  mStreak(ctx, G, -0.45 * PI, -0.05 * PI, 0, 0.035, 0.9, 1.1, 1.2);
+  ctx.restore();
+}
+const PLUMP = { cx: 54, cy: 66, a: 33, bt: 20, bb: 17 };
+CANDIDATES.push({
+  name: 'Writing on a moonlit pebble',
+  desc: 'Writing’s note and pen on the plump pebble the menu bar and the vault page share, lit as the vault page’s: a navy glowing from within, the teal in its lower edge and on the ground under it, and light along its rim.',
+  subject(ctx, u, small) {
+    moonlit(ctx, PLUMP);
+    note(ctx, u, 46, 46, 44, -0.1, { r: 2, rows: linesOf(small) });
+    pen(ctx, 52, 18, 34, 0, small);
+  },
+  silhouette(ctx) {
+    mStone(ctx, PLUMP); ctx.fill();
+    noteSilhouette(ctx, 46, 46, 44, -0.1, 2);
+    penSilhouette(ctx, 52, 18, 34, 0);
+  },
+  cut(ctx) { onStoneCut(ctx, { note: [46, 46, 44, -0.1, 2] }); },
+});
 // The five with the pen, for comparing on one page.
 const PEN_CANDIDATES = CANDIDATES.slice(10, 15);
 // The checklist draws its boxes over its note.

@@ -2,10 +2,10 @@
 //! small window under Onyx's item in the menu bar (`sys/status_item.rs`),
 //! as MiniNotes was before Onyx took its place. Its look is MiniNotes':
 //! a card hung from the item by an arrow. Its arrangement is the main
-//! window's: a row over everything (the sidebar's button, the pin, the
-//! note's name, Open in Onyx), a vault's tree at the left, which slides
-//! shut and open as the main window's sidebar does, and the note at the
-//! right, drawn as it reads. A note is held from the tree or named in place
+//! window's: a row over everything (the sidebar's button, the tabs, the
+//! pin), a vault's tree at the left, which slides shut and open and is as
+//! wide as its edge is dragged, as the main window's sidebar, and the note
+//! at the right under its name, drawn as it reads. A note is held from the tree or named in place
 //! in it; nothing in the window is a panel of the system's.
 //! Everything under it is Onyx's: the note is the window's own `Editor`,
 //! written as a tab's note is, and joined with what the disk has as a
@@ -36,8 +36,15 @@ use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::scroll::ScrollableElement as _;
 use gpui_component::tooltip::ManagedTooltipExt as _;
-use gpui_component::input::{Input, InputEvent, InputState};
+use gpui_component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_component::{h_flex, v_flex, ActiveTheme as _, Icon, Root, Sizable as _};
+
+actions!(onyx_menu_note, [TogglePin, OpenInOnyx]);
+
+/// The note's own keys, bound only while its window has the keyboard
+/// (`key_bindings` in `main.rs`): ⌘⇧P pins it, ⌘⇧O opens it in Onyx, and
+/// ⌘⇧B, the main window's, shows its tree.
+pub(crate) const CONTEXT: &str = "MenuNote";
 use onyx_core::config::Config;
 use onyx_core::vault;
 
@@ -52,27 +59,66 @@ use crate::widgets::{choice_pill, kbd_hint, swallow_click, tip, Fig, Motion, Pre
 /// MiniNotes' size, the card's.
 pub(crate) const NOTE_W: f32 = 620.;
 pub(crate) const NOTE_H: f32 = 500.;
-/// The arrow under the item, from its tip to the card.
-const ARROW_H: f32 = 9.;
-const ARROW_W: f32 = 20.;
+/// The arrow under the item, from its tip to the card, and its width
+/// where its sides run into the card's top, as a popover's: a round tip
+/// and sides that bend out into the edge.
+const ARROW_H: f32 = 10.;
+const ARROW_W: f32 = 34.;
 /// Room kept between the card and the screen's sides, and under the bar.
 const SIDE: f32 = 8.;
 const BELOW: f32 = 2.;
 const RADIUS: f32 = 12.;
+/// Room round the card, at its sides and under it, for the shadow it
+/// casts, which it draws itself: the system's shadow for a window with
+/// the keyboard is a deep one, and MiniNotes' popover cast a light one.
+const SHADE: f32 = 32.;
 const HEAD_H: f32 = 40.;
 /// The gap between the row's parts.
 const HEAD_GAP: f32 = 6.;
 /// The room each side of the words, a little under the main window's
 /// (`SHEET_GUTTER`): the tree takes a third of the card.
 const GUTTER: f32 = 28.;
-/// The tree's width beside the note.
+/// The tree's width beside the note as it first comes; the least and
+/// most a drag of its edge gives it, the most a double click's fit does,
+/// and where the pointer, carried left of it, folds the tree away, as the
+/// main window's sidebar (`SIDEBAR_MIN` and on). At most two fifths of the
+/// card, so the note keeps the most of it; a name cut short says itself
+/// whole under the pointer (`tree_row`).
 const TREE_W: f32 = 200.;
-use crate::tabs::{Item, TabHost, Tabs, STRIP_GAP};
+const TREE_MIN: f32 = 150.;
+const TREE_MAX: f32 = NOTE_W * 0.4;
+const TREE_FIT_MAX: f32 = TREE_MAX;
+const TREE_FOLD_AT: f32 = 100.;
+/// The strip over the tree's edge that takes the drag.
+const GRIP: f32 = 8.;
+use crate::tabs::{Item, TabHost, Tabs};
 /// A note written this long after its first change, as a tab's is.
 const SAVE_AFTER: Duration = Duration::from_secs(2);
 /// In and out, as a menu comes and goes (`docs/design.md`, Timing).
-const COME: Duration = Duration::from_millis(140);
+const COME: Duration = Duration::from_millis(150);
 const GO: Duration = Duration::from_millis(110);
+
+/// The window fading in or out as a whole: from how much showed, to
+/// how much will, over how long, from its first frame since the change.
+#[derive(Clone, Copy)]
+struct Fade {
+    from: f32,
+    to: f32,
+    since: Option<Instant>,
+    over: Duration,
+}
+
+impl Fade {
+    fn now(&self) -> f32 {
+        let Some(at) = self.since else { return self.from };
+        let t = (at.elapsed().as_secs_f32() / self.over.as_secs_f32()).min(1.);
+        self.from + (self.to - self.from) * (1. - (1. - t).powi(3))
+    }
+
+    fn done(&self) -> bool {
+        self.since.is_some_and(|at| at.elapsed() >= self.over)
+    }
+}
 /// A click on the item this soon after the note went for another window
 /// is the one that took the keyboard from it: the note stays shut.
 const JUST_SHUT: Duration = Duration::from_millis(300);
@@ -96,6 +142,10 @@ struct Held {
     dirty: bool,
     save_due: Option<Task<()>>,
     _sub: Subscription,
+    /// The note's name as a field over its words, as the main window's
+    /// (`Shell::make_title`): made the first time the tab is drawn, which
+    /// a field needs the window for.
+    title: Option<(Entity<TextareaState>, Subscription)>,
     /// The note's folder watched, and what hears it.
     _watcher: Option<vault::Watcher>,
     _watch: Option<Task<()>>,
@@ -141,6 +191,11 @@ pub(crate) struct MenuNote {
     /// way and since when.
     tree_open: bool,
     tree_anim: Option<(bool, Instant)>,
+    /// Its width, on its way there after a double click on its edge from
+    /// the width it stood at then, and whether its edge is held.
+    tree_w: f32,
+    tree_w_anim: Option<(f32, Instant)>,
+    tree_drag: bool,
     browse: Browse,
     motion: Motion,
     pinned: bool,
@@ -148,6 +203,7 @@ pub(crate) struct MenuNote {
     /// When the window came in, and when it began to go.
     came: Instant,
     going: Option<Instant>,
+    fade: Fade,
     /// When it last went for another window, for the item's click that
     /// took the keyboard (`JUST_SHUT`).
     shut: Option<Instant>,
@@ -172,18 +228,22 @@ impl MenuNote {
             tabs: Vec::new(),
             shown: None,
             closed: Vec::new(),
-            tabs_row: Tabs::default(),
+            tabs_row: Tabs::from_start(),
             folder_look: None,
             home_fig: Rc::default(),
             user_name: Shell::name_of(&cfg),
             tree_open: UiState::load().menu_tree.unwrap_or(true),
             tree_anim: None,
+            tree_w: UiState::load().menu_tree_w.unwrap_or(TREE_W).clamp(TREE_MIN, TREE_MAX),
+            tree_w_anim: None,
+            tree_drag: false,
             browse: Browse::default(),
             motion: Motion::default(),
             pinned: false,
             window: None,
             came: Instant::now(),
             going: None,
+            fade: Fade { from: 0., to: 0., since: None, over: COME },
             shut: None,
             arrow_x: NOTE_W / 2.,
             menus: Menus::default(),
@@ -255,6 +315,8 @@ impl MenuNote {
         if self.window.is_some() {
             if self.going.take().is_some() {
                 self.came = Instant::now();
+                // Back from as far as it had gone.
+                self.fade = Fade { from: self.fade.now(), to: 1., since: Some(Instant::now()), over: COME };
                 crate::sys::set_menu_bar_open(true);
             }
             self.with_window(|this, window, cx| {
@@ -269,6 +331,8 @@ impl MenuNote {
         self.arrow_x = arrow_x;
         self.came = Instant::now();
         self.going = None;
+        // From its first frame, so none of the fade is spent before it.
+        self.fade = Fade { from: 0., to: 1., since: None, over: COME };
         self.refresh_tree(cx);
         self.user_name = Shell::name_of(&Config::load());
         crate::sys::set_menu_bar_open(true);
@@ -376,8 +440,9 @@ impl MenuNote {
         let x = (cx_at - w / 2.).clamp(left, right.max(left));
         let arrow_x = (cx_at - x).clamp(RADIUS + ARROW_W / 2., w - RADIUS - ARROW_W / 2.);
         // The window's place on its display, from the display's top left.
-        let origin = point(px(x) - b.left(), px(below) - b.top());
-        Some((display.id(), Bounds::new(origin, size(px(w), px(h))), arrow_x))
+        // Grown by the shadow's room, at the sides and under the card.
+        let origin = point(px(x - SHADE) - b.left(), px(below) - b.top());
+        Some((display.id(), Bounds::new(origin, size(px(w + 2. * SHADE), px(h + SHADE))), arrow_x))
     }
 
     /// The window goes, after its motion out. Its note is written first.
@@ -390,6 +455,7 @@ impl MenuNote {
         // The name's field is the window's; a new note is named again.
         self.browse.naming = None;
         self.going = Some(Instant::now());
+        self.fade = Fade { from: self.fade.now(), to: 0., since: Some(Instant::now()), over: GO };
         crate::sys::set_menu_bar_open(false);
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(GO).await;
@@ -473,7 +539,7 @@ impl MenuNote {
         });
         let sub = cx.subscribe(&editor, |this, editor, ev: &EditorEvent, cx| this.heard(editor, ev, cx));
         let (watcher, watch) = self.watch(&path, cx);
-        Some(Held { path, editor, saved: read, dirty: false, save_due: None, _sub: sub, _watcher: watcher, _watch: watch })
+        Some(Held { path, editor, saved: read, dirty: false, save_due: None, _sub: sub, title: None, _watcher: watcher, _watch: watch })
     }
 
     fn show_tab(&mut self, i: usize, cx: &mut Context<Self>) {
@@ -499,6 +565,8 @@ impl MenuNote {
         if i >= self.tabs.len() {
             return;
         }
+        // A name being typed is kept first; the note's path may move with it.
+        self.keep_name(i, cx);
         self.save_tab(i, cx);
         let h = self.tabs.remove(i);
         self.closed.retain(|p| *p != h.path);
@@ -721,6 +789,116 @@ impl MenuNote {
         }
     }
 
+    // -- the note's name ---------------------------------------------------------
+
+    /// The shown tab's name field, made the first time it is drawn, as the
+    /// main window's (`Shell::make_title`): it wraps as the name does and
+    /// is kept when ↩ is pressed or the keyboard leaves.
+    fn title_field(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<Entity<TextareaState>> {
+        let i = self.shown?;
+        let h = self.tabs.get(i)?;
+        if let Some((field, _)) = &h.title {
+            return Some(field.clone());
+        }
+        let name = vault::title(&h.path);
+        let field = cx.new(|cx| {
+            let mut field = TextareaState::new(window, cx).auto_grow(1, crate::shell::TITLE_ROWS).soft_wrap(true).submit_on_enter(true).placeholder(t("Untitled").to_string());
+            field.set_split_runs(Some(Rc::new(crate::fonts::split_for_fields)));
+            field.set_value(name, window, cx);
+            field
+        });
+        let sub = cx.subscribe_in(&field, window, |this, field, ev: &InputEvent, window, cx| match ev {
+            InputEvent::PressEnter { .. } => {
+                this.keep_title(field, window, cx);
+                this.focus_in(window, cx);
+                cx.notify();
+            }
+            InputEvent::Blur => this.keep_title(field, window, cx),
+            _ => {}
+        });
+        self.tabs[i].title = Some((field.clone(), sub));
+        Some(field)
+    }
+
+    /// The name in a tab's field goes to the file, as the main window's
+    /// (`Shell::keep_title_at`): the note written first, then renamed, and
+    /// everything that knows it by its path follows, here and in the main
+    /// window. A line break is a space; a name that cannot be used leaves
+    /// the file as it was.
+    fn keep_name(&mut self, i: usize, cx: &mut Context<Self>) {
+        let Some(h) = self.tabs.get(i) else { return };
+        let Some((field, _)) = &h.title else { return };
+        let name = crate::shell::one_line(&field.read(cx).value());
+        let path = h.path.clone();
+        if name.is_empty() || name == vault::title(&path) {
+            return;
+        }
+        self.save_tab(i, cx);
+        match vault::rename(&path, &name) {
+            Ok(to) => {
+                let moves = [(path, to)];
+                self.follow_moves(&moves, cx);
+                if let Some(shell) = main_shell(cx) {
+                    shell.update(cx, |s, cx| s.moved_elsewhere(&moves, cx));
+                }
+            }
+            Err(e) => eprintln!("onyx: the note was not renamed: {e}"),
+        }
+    }
+
+    /// The field found by what it is, never by the tab showing, which may
+    /// be another by the time the keyboard has left it; then it shows the
+    /// file's name, the new one or the one kept.
+    fn keep_title(&mut self, field: &Entity<TextareaState>, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(i) = self.tabs.iter().position(|h| h.title.as_ref().is_some_and(|(f, _)| f == field)) else { return };
+        self.keep_name(i, cx);
+        let name = vault::title(&self.tabs[i].path);
+        if field.read(cx).value() != name {
+            field.update(cx, |f, cx| f.set_value(name, window, cx));
+        }
+    }
+
+    /// Esc in the name: what was typed goes, and the keyboard with it.
+    fn drop_title(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if let Some((field, path)) = self.held().and_then(|h| h.title.as_ref().map(|(f, _)| (f.clone(), h.path.clone()))) {
+            field.update(cx, |f, cx| f.set_value(vault::title(&path), window, cx));
+        }
+        self.focus_in(window, cx);
+        cx.notify();
+    }
+
+    /// Notes renamed or moved, here or in the main window: a tab's editor
+    /// told where its note is now and its folder watched there, its name
+    /// drawn anew, the tabs closed and the tree followed.
+    fn follow_moves(&mut self, moves: &[(PathBuf, PathBuf)], cx: &mut Context<Self>) {
+        let mut any = false;
+        for i in 0..self.tabs.len() {
+            let to = vault::moved_path(&self.tabs[i].path, moves);
+            if to == self.tabs[i].path {
+                continue;
+            }
+            any = true;
+            let root = vault_of(&to);
+            let place = to.clone();
+            self.tabs[i].editor.update(cx, |e, cx| e.set_place(place, root, cx));
+            let (watcher, watch) = self.watch(&to, cx);
+            let h = &mut self.tabs[i];
+            h._watcher = watcher;
+            h._watch = watch;
+            h.path = to;
+            h.title = None;
+        }
+        for p in &mut self.closed {
+            *p = vault::moved_path(p, moves);
+        }
+        self.browse.open = self.browse.open.iter().map(|f| vault::moved_path(f, moves)).collect();
+        if any {
+            self.remember();
+        }
+        self.read_tree(cx);
+        cx.notify();
+    }
+
     pub(crate) fn set_look(&mut self, look: Look, cx: &mut Context<Self>) {
         self.look = look.clone();
         for h in &self.tabs {
@@ -801,7 +979,7 @@ impl MenuNote {
     fn new_note(&mut self, cx: &mut Context<Self>) {
         let Some(root) = self.browse.vault.clone() else { return };
         let dir = self.path().and_then(Path::parent).filter(|d| d.starts_with(&root)).map(Path::to_path_buf).unwrap_or(root);
-        if self.tree_t() == 0. || (!self.tree_open && !self.tabs.is_empty()) {
+        if !self.tree_open {
             self.toggle_tree(cx);
         }
         self.start_naming(dir, cx);
@@ -826,17 +1004,127 @@ impl MenuNote {
         cx.notify();
     }
 
-    /// How much of the tree is beside the note, 0 to 1, eased. With no
-    /// note held it stands open: it is the way to one.
+    /// How much of the tree is beside the note, 0 to 1, eased.
     fn tree_t(&self) -> f32 {
         match self.tree_anim {
             Some((coming, at)) if at.elapsed() < SLIDE => {
                 let t = ease_out_quint()(at.elapsed().as_secs_f32() / SLIDE.as_secs_f32());
                 if coming { t } else { 1. - t }
             }
-            _ if self.tree_open || self.tabs.is_empty() => 1.,
+            _ if self.tree_open => 1.,
             _ => 0.,
         }
+    }
+
+    /// How wide the tree stands now, on its way there after a double
+    /// click on its edge.
+    fn tree_width(&self) -> f32 {
+        match self.tree_w_anim {
+            Some((from, at)) if at.elapsed() < SLIDE => from + (self.tree_w - from) * ease_out_quint()(at.elapsed().as_secs_f32() / SLIDE.as_secs_f32()),
+            _ => self.tree_w,
+        }
+    }
+
+    /// The pointer moved with the tree's edge held: the tree is as wide
+    /// as where the pointer is, between its least and most, and folds away
+    /// once the pointer is well left of the least. Brought back out in the
+    /// same drag, it is there again.
+    fn tree_drag_to(&mut self, e: &MouseMoveEvent, cx: &mut Context<Self>) {
+        if e.pressed_button != Some(MouseButton::Left) {
+            self.tree_drag_end(cx);
+            return;
+        }
+        // The card stands the shadow's room in from the window's left,
+        // and in by its edge.
+        let x = f32::from(e.position.x) - SHADE - 1.;
+        let open = x >= TREE_FOLD_AT;
+        if open != self.tree_open {
+            self.toggle_tree(cx);
+        }
+        if open {
+            self.tree_w = x.clamp(TREE_MIN, TREE_MAX);
+            self.tree_w_anim = None;
+        }
+        cx.notify();
+    }
+
+    fn tree_drag_end(&mut self, cx: &mut Context<Self>) {
+        if std::mem::take(&mut self.tree_drag) {
+            self.keep_tree_w();
+            cx.notify();
+        }
+    }
+
+    fn keep_tree_w(&self) {
+        let mut ui = UiState::load();
+        ui.menu_tree_w = Some(self.tree_w);
+        ui.save_later();
+    }
+
+    /// The width at which the tree's rows in view, and the vault's name
+    /// over them, are not cut short, long outliers held to `TREE_FIT_MAX`.
+    /// A double click on the edge goes there.
+    fn tree_fit(&self, window: &Window, cx: &App) -> f32 {
+        // Round a name (`tree_row`): the list's padding on both sides, the
+        // row's padding, the chevron and the gap after it; a folder's icon
+        // and its plus with their gaps.
+        const NOTE: f32 = 2. * 6. + 8. + 12. + 6. + 4.;
+        const FOLDER: f32 = 16. + 6. + 22. + 6.;
+        const DEPTH: f32 = 14.;
+        // The vault's row (`render_tree_head`): its padding, its icon,
+        // chevron and gaps, and the plus after it.
+        const HEAD: f32 = 8. + 2. * 8. + 13. + 2. * 6. + 12. + 2. + 28. + 6.;
+        let font = font(cx.theme().font_family.clone());
+        let measure = |text: &str, weight: FontWeight| {
+            let run = TextRun { len: text.len(), font: Font { weight, ..font.clone() }, color: gpui::black(), background_color: None, underline: None, strikethrough: None };
+            f32::from(window.text_system().shape_line(SharedString::from(text.to_string()), px(13.), &[run], None).width())
+        };
+        fn widest(entries: &[vault::Entry], depth: usize, open: &HashSet<PathBuf>, measure: &dyn Fn(&str) -> f32) -> f32 {
+            entries.iter().fold(0., |most: f32, e| {
+                let inside = if e.dir && open.contains(&e.path) { widest(&e.children, depth + 1, open, measure) } else { 0. };
+                let own = NOTE + if e.dir { FOLDER } else { 0. } + DEPTH * depth as f32 + measure(&e.name);
+                most.max(own).max(inside)
+            })
+        }
+        let rows = self.browse.tree.as_ref().map_or(0., |t| widest(&t.children, 0, &self.browse.open, &|s| measure(s, FontWeight::NORMAL)));
+        let head = self.browse.vault.as_deref().map_or(0., |v| HEAD + measure(&vault_name(v), FontWeight::MEDIUM));
+        rows.max(head).ceil().clamp(TREE_MIN, TREE_FIT_MAX)
+    }
+
+    /// The strip over the tree's edge that takes the drag and the double
+    /// click, as the main window's sidebar's (`Shell::render_side_grip`):
+    /// it lights a line on the edge under the pointer, and the pointer
+    /// keeps its look wherever a drag takes it.
+    fn render_tree_grip(&self, edge: f32, cx: &mut Context<Self>) -> impl IntoElement {
+        let line = cx.theme().primary.opacity(0.55);
+        let held = self.tree_drag;
+        div()
+            .id("menu-tree-grip")
+            .group("menu-tree-grip")
+            .absolute()
+            .top(px(HEAD_H))
+            .bottom_0()
+            .left(px(edge - GRIP / 2.))
+            .w(px(GRIP))
+            .occlude()
+            .cursor(CursorStyle::ResizeLeftRight)
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, ev: &MouseDownEvent, window, cx| {
+                    swallow_click(window, cx);
+                    if ev.click_count == 2 {
+                        this.tree_drag = false;
+                        this.tree_w_anim = Some((this.tree_width(), Instant::now()));
+                        this.tree_w = this.tree_fit(window, cx);
+                        this.keep_tree_w();
+                    } else {
+                        this.tree_drag = true;
+                    }
+                    cx.notify();
+                }),
+            )
+            .child(div().absolute().top_0().bottom_0().left(px(GRIP / 2. - 1.5)).w(px(2.)).when(held, |d| d.bg(line)).group_hover("menu-tree-grip", move |s| s.bg(line)))
+            .when(held, |d| d.child(canvas(|_, _, _| (), |_, _, window, _| window.set_window_cursor_style(CursorStyle::ResizeLeftRight)).absolute().size_0()))
     }
 
     fn toggle_folder(&mut self, path: PathBuf, cx: &mut Context<Self>) {
@@ -952,11 +1240,15 @@ impl MenuNote {
     /// Open in Onyx: the note in a tab of the main window, made if it is
     /// shut, in the vault that holds it (a vault Onyx has opened, else the
     /// note's own folder). The note is written first, and this window goes.
+    /// The note showing in the main window, or with none the main window
+    /// itself, and the note in the menu bar put away.
     fn open_in_onyx(&mut self, cx: &mut Context<Self>) {
-        let Some(path) = self.path().map(Path::to_path_buf) else { return };
-        self.save(cx);
+        let path = self.path().map(Path::to_path_buf);
+        if path.is_some() {
+            self.save(cx);
+        }
         self.close(cx);
-        cx.defer(move |cx| crate::show_in_main(Some(path), None, cx));
+        cx.defer(move |cx| crate::show_in_main(path, None, cx));
     }
 
     fn open_link(&mut self, url: String, cx: &mut Context<Self>) {
@@ -1078,7 +1370,6 @@ impl MenuNote {
         let theme = cx.theme().clone();
         let accent = theme.primary;
         let hover = theme.muted;
-        let any = !self.tabs.is_empty();
         let pinned = self.pinned;
         let tree = self.tree_open;
         let icon_button = |id: &'static str, icon: &'static str, ink: Hsla, label: SharedString| {
@@ -1104,21 +1395,19 @@ impl MenuNote {
             .items_center()
             .border_b_1()
             .border_color(theme.border)
-            .when(any, |d| {
-                d.child(icon_button("menu-note-tree", "icons/panel-left.svg", if tree { theme.foreground } else { theme.muted_foreground }, t("Sidebar (⌘⇧B)").into()).on_click(cx.listener(|this, _, window, cx| {
-                    swallow_click(window, cx);
-                    this.toggle_tree(cx);
-                })))
-            })
+            // On while the tree shows, as the pin is while it holds.
+            .child(icon_button("menu-note-tree", "icons/panel-left.svg", if tree { accent } else { theme.muted_foreground }, t("Sidebar (⌘⇧B)").into()).when(tree, |d| d.bg(accent.opacity(0.12))).on_click(cx.listener(|this, _, window, cx| {
+                swallow_click(window, cx);
+                this.toggle_tree(cx);
+            })))
             .child(tabs)
-            .when(self.held().is_some(), |d| {
-                d.child(choice_pill("menu-note-onyx", "icons/app-window.svg", t("Open in Onyx"), Press::Quiet, false, &theme).h(px(28.)).px(px(10.)).text_size(px(12.5)).flex_shrink_0().on_click(cx.listener(|this, _, window, cx| {
-                    swallow_click(window, cx);
-                    this.open_in_onyx(cx);
-                })))
-            })
+            // The note in the main window, or with none the window itself.
+            .child(icon_button("menu-note-onyx", "icons/app-window.svg", theme.muted_foreground, t("Open in Onyx (⌘⇧O)").into()).on_click(cx.listener(|this, _, window, cx| {
+                swallow_click(window, cx);
+                this.open_in_onyx(cx);
+            })))
             .child(
-                icon_button("menu-note-pin", if pinned { "icons/pin-filled.svg" } else { "icons/pin.svg" }, if pinned { accent } else { theme.muted_foreground }, if pinned { t("Auto-Hide Window").into() } else { t("Keep Window Open").into() })
+                icon_button("menu-note-pin", if pinned { "icons/pin-filled.svg" } else { "icons/pin.svg" }, if pinned { accent } else { theme.muted_foreground }, if pinned { t("Auto-Hide Window (⌘⇧P)").into() } else { t("Pin the Window (⌘⇧P)").into() })
                     .when(pinned, |d| d.bg(accent.opacity(0.12)))
                     .on_click(cx.listener(|this, _, window, cx| {
                         swallow_click(window, cx);
@@ -1132,21 +1421,19 @@ impl MenuNote {
     /// folder, the plus after them. Its width is figured from the row's
     /// own, as the main window's is, never measured off a frame.
     fn render_tabs(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        // No tab, no row: the landing page's New Note and the tree's plus
+        // make a note, and a third did not help.
         if self.tabs.is_empty() {
             return div().flex_1().min_w_0().into_any_element();
         }
         let items: Vec<Item> = self.tabs.iter().map(|h| Item { path: h.path.clone(), title: vault::title(&h.path) }).collect();
-        // The card less its rim and the row's ends, less the tree's button,
-        // Open in Onyx and the pin with the gaps between the four.
-        let font = Font { family: cx.theme().font_family.clone(), ..Default::default() };
-        let label = t("Open in Onyx");
-        let run = TextRun { len: label.len(), font, color: gpui::black(), background_color: None, underline: None, strikethrough: None };
-        let label_w = f32::from(window.text_system().shape_line(SharedString::from(label.to_string()), px(12.5), &[run], None).width());
-        let onyx_w = if self.held().is_some() { 2. + 2. * 10. + 14. + 6. + label_w.ceil() + HEAD_GAP } else { 0. };
-        let row = NOTE_W - 2. - 2. * 8. - (28. + HEAD_GAP) - onyx_w - (HEAD_GAP + 28.);
+        // The card less its rim and the row's ends, less the three buttons,
+        // the tree's, Open in Onyx and the pin, with the gaps between.
+        let row = NOTE_W - 2. - 2. * 8. - 3. * (28. + HEAD_GAP);
         let shown = self.path().map(Path::to_path_buf);
         let root = self.browse.vault.clone();
-        self.tabs_row.sync(row - STRIP_GAP * 2., &items, shown.as_deref(), window, cx);
+        // From the left the row has no margins: the head's gap is all.
+        self.tabs_row.sync(row, &items, shown.as_deref(), window, cx);
         if self.tabs_row.moving() {
             window.request_animation_frame();
         }
@@ -1256,7 +1543,7 @@ impl MenuNote {
     /// The tree: the vault's folders and notes, as the main window's
     /// sidebar has them, on `ground`; with no vault, the way to Onyx's
     /// window to open one.
-    fn render_tree(&mut self, ground: Hsla, cx: &mut Context<Self>) -> AnyElement {
+    fn render_tree(&mut self, ground: Hsla, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
         let quiet = |words: SharedString| div().text_center().text_size(px(12.5)).text_color(theme.muted_foreground).child(words);
         let Some(root) = self.browse.vault.clone() else {
@@ -1282,7 +1569,7 @@ impl MenuNote {
         if naming_root {
             rows.push(self.naming_row(0, &theme));
         }
-        self.tree_rows(&tree.children, 0, &theme, cx, &mut rows);
+        self.tree_rows(&tree.children, 0, &theme, window, cx, &mut rows);
         let scroll = self.browse.scroll.clone();
         self.scrollers.name(&scroll);
         let why = self.browse.naming.as_ref().and_then(|n| n.why.clone());
@@ -1292,7 +1579,8 @@ impl MenuNote {
             .relative()
             .child(div().id("menu-note-tree").size_full().overflow_y_scroll().track_scroll(&scroll).child(v_flex().px(px(6.)).pt(px(4.)).pb(px(10.)).children(rows)))
             .child(crate::shell::edge_fade(&scroll, ground, true, px(0.)))
-            .child(crate::shell::edge_fade(&scroll, ground, false, px(0.)))
+            // Its foot's left corner is the card's.
+            .child(crate::shell::edge_fade_at(&scroll, ground, false, Corners { bottom_left: px(RADIUS - 1.), ..Default::default() }))
             .vertical_scrollbar(&scroll)
             .when_some(why, |d, why| {
                 d.child(
@@ -1320,9 +1608,9 @@ impl MenuNote {
     /// The rows of a folder's entries, an open folder's after its row; a
     /// folder opening or shutting runs its rows' box up to their height or
     /// down, as the sidebar's do.
-    fn tree_rows(&self, entries: &[vault::Entry], depth: usize, theme: &gpui_component::Theme, cx: &mut Context<Self>, out: &mut Vec<AnyElement>) {
+    fn tree_rows(&self, entries: &[vault::Entry], depth: usize, theme: &gpui_component::Theme, window: &Window, cx: &mut Context<Self>, out: &mut Vec<AnyElement>) {
         for e in entries {
-            out.push(self.tree_row(e, depth, theme, cx));
+            out.push(self.tree_row(e, depth, theme, window, cx));
             if !e.dir {
                 continue;
             }
@@ -1336,7 +1624,7 @@ impl MenuNote {
             if self.browse.naming.as_ref().is_some_and(|n| n.dir == e.path) {
                 inside.push(self.naming_row(depth + 1, theme));
             }
-            self.tree_rows(&e.children, depth + 1, theme, cx, &mut inside);
+            self.tree_rows(&e.children, depth + 1, theme, window, cx, &mut inside);
             match moving {
                 Some((opening, serial)) => {
                     let full = self.rows_in(e) as f32 * TREE_ROW_H;
@@ -1367,7 +1655,7 @@ impl MenuNote {
     /// A row of the tree: the chevron (a folder), Catppuccin's icon, the
     /// name, lit while it is the note held; a folder offers a new note in
     /// it under the pointer.
-    fn tree_row(&self, e: &vault::Entry, depth: usize, theme: &gpui_component::Theme, cx: &mut Context<Self>) -> AnyElement {
+    fn tree_row(&self, e: &vault::Entry, depth: usize, theme: &gpui_component::Theme, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let open = e.dir && self.browse.open.contains(&e.path);
         let lit = !e.dir && self.path() == Some(e.path.as_path());
         let file = e.path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| e.name.clone());
@@ -1376,6 +1664,14 @@ impl MenuNote {
         let hover_bg = theme.foreground.opacity(0.07);
         let path = e.path.clone();
         let dir = e.dir;
+        // A name the tree's width cuts short says itself whole under the
+        // pointer: the room the row leaves it (the list's padding, the
+        // row's, the chevron, a folder's icon and plus, and their gaps)
+        // against its words' width.
+        let room = self.tree_width() - (2. * 6. + 8. + 14. * depth as f32 + 12. + 6. + 4.) - if e.dir { 16. + 6. + 22. + 6. } else { 0. };
+        let run = TextRun { len: e.name.len(), font: font(theme.font_family.clone()), color: gpui::black(), background_color: None, underline: None, strikethrough: None };
+        let wide = f32::from(window.text_system().shape_line(SharedString::from(e.name.clone()), px(13.), &[run], None).width());
+        let whole: Option<SharedString> = (wide > room + 0.5).then(|| e.name.clone().into());
         let new_here = e.dir.then(|| {
             let into = e.path.clone();
             let hover = theme.foreground.opacity(0.1);
@@ -1420,6 +1716,7 @@ impl MenuNote {
             .text_size(px(13.))
             .text_color(theme.foreground.opacity(if lit { 1. } else { 0.88 }))
             .cursor_pointer()
+            .when_some(whole, |d, whole| d.managed_tooltip(move |window, cx| tip(whole.clone(), window, cx)))
             .child(plate)
             .on_click(cx.listener({
                 let path = path.clone();
@@ -1519,6 +1816,26 @@ impl Focusable for MenuNote {
     }
 }
 
+/// The arrow's outline from its tip to `foot`, the card's edge: each side
+/// bends out into the edge, and the tip is round. Filled, it closes under
+/// the edge so the ground covers the card's edge there; drawn, it is the
+/// two sides alone.
+fn arrow_path(tip: Point<Pixels>, foot: Pixels, mut p: PathBuilder, filled: bool) -> Option<gpui::Path<Pixels>> {
+    let at = |dx: f32, y: Pixels| point(tip.x + px(dx), y);
+    let up = |dy: f32| tip.y + px(dy);
+    let half = ARROW_W / 2.;
+    p.move_to(at(-half, foot));
+    p.cubic_bezier_to(at(-3., up(1.8)), at(-half * 0.56, foot), at(-5.2, up(3.6)));
+    p.curve_to(at(3., up(1.8)), at(0., up(-0.4)));
+    p.cubic_bezier_to(at(half, foot), at(5.2, up(3.6)), at(half * 0.56, foot));
+    if filled {
+        p.line_to(at(half, foot + px(1.5)));
+        p.line_to(at(-half, foot + px(1.5)));
+        p.close();
+    }
+    p.build().ok()
+}
+
 impl Render for MenuNote {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // The router is this window's while it draws (`scroll.rs`).
@@ -1530,16 +1847,50 @@ impl Render for MenuNote {
         }
         let theme = cx.theme().clone();
         let (ground, rim) = (theme.background, theme.border);
-        // The tree's ground, a shade off the note's, as the main window's
-        // sidebar stands off its page.
-        let side = ground.blend(theme.foreground.opacity(0.035));
+        // The card's edge, a hairline: the system's shadow darkens the
+        // outside of it already, and the theme's border beside that read
+        // as a double line.
+        let edge = theme.foreground.opacity(if theme.mode.is_dark() { 0.13 } else { 0.07 });
+        // The tree's ground, a shade toward the main window's frame, which
+        // its sidebar stands on: darker than the note's in a light
+        // appearance, nowhere near the frame itself.
+        let side = ground.blend(theme.title_bar.opacity(0.08));
         let arrow_x = self.arrow_x;
-        let note = match self.held() {
-            Some(h) => {
-                let editor = h.editor.clone();
+        // The tree beside the note, run open or shut on the slide's clock.
+        let shown = self.tree_t();
+        let tree_w = self.tree_width();
+        if self.tree_anim.is_some_and(|(_, at)| at.elapsed() < SLIDE) || self.tree_w_anim.is_some_and(|(_, at)| at.elapsed() < SLIDE) {
+            window.request_animation_frame();
+        }
+        // The card's foot is rounded; a fade over it rounds the corners
+        // that are the card's: the note's left one only with no tree.
+        let corner = px(RADIUS - 1.);
+        let title = self.title_field(window, cx);
+        let note = match self.held().map(|h| (h.editor.clone(), h.path.clone())) {
+            Some((editor, path)) => {
                 let scroll = editor.read(cx).scroll.clone();
                 self.scrollers.name(&scroll);
                 let line = (self.look.text_px * onyx_core::rhythm::LINE).round();
+                // The note's name over its words, as the main window draws
+                // it (`Shell::render_note`): in the words' face, bold, a
+                // soft line under it that says it is the name.
+                let title_font = Font { family: self.look.text_family.clone(), features: FontFeatures::default(), fallbacks: self.look.text_fallbacks.clone(), weight: FontWeight::BOLD, style: FontStyle::Normal };
+                let title_px = px(self.look.text_px * onyx_core::rhythm::TITLE);
+                let title_el = match title.filter(|_| !editor.read(cx).locked()) {
+                    Some(field) => div()
+                        .id("menu-note-title")
+                        .key_context(crate::shell::TITLE_CONTEXT)
+                        .on_action(cx.listener(|this, _: &crate::shell::Escape, window, cx| {
+                            cx.stop_propagation();
+                            this.drop_title(window, cx)
+                        }))
+                        // Not a press under the words, which puts the caret
+                        // at their end.
+                        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                        .child(Textarea::new(&field).appearance(false).bordered(false).flush(true).font(title_font).text_size(title_px).line_height(relative(onyx_core::rhythm::TITLE_LINE)).text_color(theme.foreground).p_0())
+                        .into_any_element(),
+                    None => div().font(title_font).text_size(title_px).line_height(relative(onyx_core::rhythm::TITLE_LINE)).text_color(theme.foreground).child(vault::title(&path)).into_any_element(),
+                };
                 // The words with room round them, and a press under them
                 // puts the caret at their end, as a page of paper is
                 // written on.
@@ -1562,50 +1913,66 @@ impl Render for MenuNote {
                                     h.editor.update(cx, |e, cx| e.move_to_end(cx));
                                 }
                             }))
-                            .child(v_flex().min_h_full().px(px(GUTTER)).pt(px((line * 0.6).round())).pb(px(line * 3.)).child(editor)),
+                            .child(
+                                v_flex()
+                                    .min_h_full()
+                                    .px(px(GUTTER))
+                                    .pt(px((line * 0.6).round()))
+                                    .pb(px(line * 3.))
+                                    .gap(px((line * 0.4).round()))
+                                    .child(title_el)
+                                    .child(div().w_full().h(px(1.)).flex_shrink_0().mb(px((line * 0.25).round())).bg(theme.border.opacity(0.7)))
+                                    .child(editor),
+                            ),
                     )
                     .child(crate::shell::edge_fade(&scroll, ground, true, px(0.)))
-                    .child(crate::shell::edge_fade(&scroll, ground, false, px(0.)))
+                    .child(crate::shell::edge_fade_at(&scroll, ground, false, Corners { bottom_right: corner, bottom_left: if shown > 0. { px(0.) } else { corner }, ..Default::default() }))
                     .vertical_scrollbar(&scroll)
                     .into_any_element()
             }
             None => self.render_landing(cx),
         };
-        // The tree beside the note, run open or shut on the slide's clock:
-        // drawn at its full width in a box that grows, so its rows keep
-        // their place as it comes.
-        let shown = self.tree_t();
-        if self.tree_anim.is_some_and(|(_, at)| at.elapsed() < SLIDE) {
-            window.request_animation_frame();
-        }
+        // The tree drawn at its full width in a box that grows, so its
+        // rows keep their place as it comes. Its foot rounded as the
+        // card's is: a clip in gpui is a rectangle, and the tree's ground
+        // stood past the card's corner.
         let tree = (shown > 0.).then(|| {
             let head = self.render_tree_head(cx);
-            let rows = self.render_tree(side, cx);
+            let rows = self.render_tree(side, window, cx);
             div()
                 .h_full()
                 .flex_shrink_0()
-                .w(px(TREE_W * shown))
+                .w(px(tree_w * shown))
                 .overflow_hidden()
+                .rounded_bl(corner)
                 .border_r_1()
                 .border_color(rim.opacity(shown))
-                .child(v_flex().w(px(TREE_W)).h_full().bg(side).opacity(shown).child(head).child(rows))
+                .child(v_flex().w(px(tree_w)).h_full().bg(side).rounded_bl(corner).opacity(shown).child(head).child(rows))
         });
+        let grip = (shown > 0.).then(|| self.render_tree_grip(1. + tree_w * shown, cx));
         let body = h_flex().flex_1().min_h_0().children(tree).child(note);
         let pick: Rc<dyn Fn(&mut Self, &'static str, SharedString, &mut Window, &mut Context<Self>)> = Rc::new(|this, what, id, window, cx| this.menu_pick(what, id, window, cx));
         let close: Rc<dyn Fn(&mut Self, &mut Context<Self>)> = Rc::new(|this, cx| this.menus.close(cx));
         let menu = self.menus.render(pick, close, cx);
         let head = self.render_head(window, cx);
         let router = cx.entity().downgrade();
+        // The card's own shadow, a popover's: a soft wide one a little
+        // under it and a close one that holds its edge, both light; deeper
+        // in the dark, where a light one is lost.
+        let dark = theme.mode.is_dark();
+        let shade = |a: f32, y: f32, blur: f32| BoxShadow { color: gpui::black().opacity(a), offset: point(px(0.), px(y)), blur_radius: px(blur), spread_radius: px(0.), inset: false };
+        let shadow = vec![shade(if dark { 0.34 } else { 0.10 }, 8., 22.), shade(if dark { 0.24 } else { 0.05 }, 1., 3.)];
         let card = v_flex()
             .absolute()
             .top(px(ARROW_H))
-            .left_0()
+            .left(px(SHADE))
             .w(px(NOTE_W))
             .h(px(NOTE_H))
             .rounded(px(RADIUS))
+            .shadow(shadow)
             .bg(ground)
             .border_1()
-            .border_color(rim)
+            .border_color(edge)
             .overflow_hidden()
             .key_context(crate::shell::SHEET_CONTEXT)
             .track_focus(&self.focus)
@@ -1622,11 +1989,7 @@ impl Render for MenuNote {
             .on_action(cx.listener(|this, _: &crate::shell::Tab7, _, cx| this.go_tab(7, cx)))
             .on_action(cx.listener(|this, _: &crate::shell::Tab8, _, cx| this.go_tab(8, cx)))
             .on_action(cx.listener(|this, _: &crate::shell::Tab9, _, cx| this.go_tab(9, cx)))
-            .on_action(cx.listener(|this, _: &crate::shell::ToggleSidebar, _, cx| {
-                if !this.tabs.is_empty() {
-                    this.toggle_tree(cx);
-                }
-            }))
+            .on_action(cx.listener(|this, _: &crate::shell::ToggleSidebar, _, cx| this.toggle_tree(cx)))
             // Escape: the menu goes, then a name being given.
             .on_action(cx.listener(|this, _: &crate::shell::Escape, _, cx| {
                 if this.menus.open.is_some() {
@@ -1639,66 +2002,83 @@ impl Render for MenuNote {
             }))
             .child(head)
             .child(body)
+            .children(grip)
             .children(self.folder_look.as_ref().map(|(p, _)| p.clone()));
-        // The arrow: the rim's color, then the ground a point inside it,
-        // over the card's rim where they meet.
+        // The arrow, as a popover's: the ground filled over the card's
+        // edge where the two meet, then its sides drawn in the edge's color,
+        // running on into the card's own.
         let arrow = canvas(
             |_, _, _| (),
             move |b, _, window, _| {
                 let tip = point(b.origin.x + px(arrow_x), b.origin.y);
-                let foot = b.origin.y + px(ARROW_H + 1.);
-                let tri = |inset: f32| {
-                    let mut p = PathBuilder::fill();
-                    p.move_to(point(tip.x, tip.y + px(inset)));
-                    p.line_to(point(tip.x + px(ARROW_W / 2. - inset), foot));
-                    p.line_to(point(tip.x - px(ARROW_W / 2. - inset), foot));
-                    p.close();
-                    p.build().ok()
-                };
-                if let Some(p) = tri(0.) {
-                    window.paint_path(p, rim);
-                }
-                if let Some(p) = tri(1.2) {
+                // The card's edge is a point wide from its top.
+                let foot = b.origin.y + px(ARROW_H + 0.5);
+                if let Some(p) = arrow_path(tip, foot, PathBuilder::fill(), true) {
                     window.paint_path(p, ground);
+                }
+                if let Some(p) = arrow_path(tip, foot, PathBuilder::stroke(px(1.)), false) {
+                    window.paint_path(p, edge);
                 }
             },
         )
         .absolute()
         .top_0()
-        .left_0()
+        .left(px(SHADE))
         .w(px(NOTE_W))
-        .h(px(ARROW_H + 2.));
-        let going = self.going.is_some();
-        let id = if going { "menu-note-out" } else { "menu-note-in" };
-        let (dur, from) = if going { (GO, 1.) } else { (COME, 0.) };
-        let came = self.came;
+        .h(px(ARROW_H + 3.));
+        // The window fades as a whole, as the system composes it, its
+        // shadow with it: drawn once at full ink, nothing is drawn again
+        // for the fade. Faded by its words' opacity, every frame cast the
+        // shadow anew from what was half drawn, and the window blinked.
+        if self.fade.since.is_none() {
+            self.fade.since = Some(Instant::now());
+        }
+        crate::sys::set_window_alpha(window, self.fade.now());
+        if !self.fade.done() {
+            window.request_animation_frame();
+        }
         div()
             .size_full()
             .relative()
+            .key_context(CONTEXT)
+            .on_action(cx.listener(|this, _: &TogglePin, _, cx| this.toggle_pin(cx)))
+            .on_action(cx.listener(|this, _: &OpenInOnyx, _, cx| this.open_in_onyx(cx)))
             .font_family(theme.font_family.clone())
             .text_color(theme.foreground)
-            .on_children_prepainted(move |_, window, _| {
-                // The system's shadow follows what is drawn, once it is.
-                if came.elapsed() < COME + Duration::from_millis(60) {
-                    crate::sys::reshape_shadow(window);
-                }
-            })
             .child(
                 div()
                     .size_full()
                     .relative()
                     .child(card)
                     .child(arrow)
-                    .children(menu)
-                    .with_animation(id, Animation::new(dur).with_easing(ease_out_quint()), move |d, k| {
-                        let shown = if from > 0.5 { 1. - k } else { k };
-                        d.opacity(shown).mt(px(-6. * (1. - shown)))
-                    }),
+                    .children(menu),
             )
             .child(
                 canvas(
                     |_, _, _| (),
                     move |_, _, window, _| {
+                        // The tree's edge, once held, follows the pointer
+                        // wherever it goes, and nothing under it hears the
+                        // move.
+                        let (mover, lifter) = (router.clone(), router.clone());
+                        window.on_mouse_event(move |e: &MouseMoveEvent, phase, _, cx| {
+                            if phase == DispatchPhase::Capture {
+                                let held = mover.update(cx, |s, cx| {
+                                    if s.tree_drag {
+                                        s.tree_drag_to(e, cx);
+                                    }
+                                    s.tree_drag
+                                });
+                                if held.unwrap_or(false) {
+                                    cx.stop_propagation();
+                                }
+                            }
+                        });
+                        window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
+                            if phase == DispatchPhase::Capture {
+                                let _ = lifter.update(cx, |s, cx| s.tree_drag_end(cx));
+                            }
+                        });
                         window.on_mouse_event(move |e: &ScrollWheelEvent, phase, window, cx| {
                             if phase == DispatchPhase::Capture {
                                 match router.update(cx, |s, _| s.scrollers.route(e, false)) {
@@ -1803,6 +2183,14 @@ pub(crate) fn written(path: &Path, text: String, cx: &mut App) {
 }
 
 /// Whether the menu bar note is this one.
+/// Notes renamed or moved in the main window: the menu bar note's tabs
+/// follow, a moment on, outside whatever update moved them.
+pub(crate) fn moved(moves: &[(PathBuf, PathBuf)], cx: &mut App) {
+    let Some(note) = cx.try_global::<MenuBarNote>().map(|g| g.0.clone()) else { return };
+    let moves = moves.to_vec();
+    cx.defer(move |cx| note.update(cx, |n, cx| n.follow_moves(&moves, cx)));
+}
+
 pub(crate) fn holds(path: &Path, cx: &App) -> bool {
     cx.try_global::<MenuBarNote>().is_some_and(|n| n.1.borrow().iter().any(|p| p == path))
 }
@@ -1889,6 +2277,53 @@ pub(crate) fn probe(step: &str, cx: &mut App) {
                         window.dispatch_event(PlatformInput::MouseMove(MouseMoveEvent { position: at(i as f32 / 10.), pressed_button: Some(button), modifiers }), cx);
                     }
                     window.dispatch_event(PlatformInput::MouseUp(MouseUpEvent { button, position: at(1.), modifiers, click_count: 1 }), cx);
+                });
+            }
+        }
+        // A left press and release in the note's window, in its points,
+        // and how many clicks it counts as: two for a double click.
+        r if r.starts_with(":press=") => {
+            let n: Vec<f32> = r[":press=".len()..].split(',').filter_map(|v| v.parse().ok()).collect();
+            let Some(handle) = note.read(cx).window else { return };
+            if let [x, y, ref rest @ ..] = n[..] {
+                let clicks = rest.first().map_or(1, |c| *c as usize);
+                let _ = cx.update_window(handle.into(), |_, window, cx| {
+                    let (button, modifiers, position) = (MouseButton::Left, Modifiers::default(), point(px(x), px(y)));
+                    window.dispatch_event(PlatformInput::MouseMove(MouseMoveEvent { position, pressed_button: None, modifiers }), cx);
+                    window.dispatch_event(PlatformInput::MouseDown(MouseDownEvent { button, position, modifiers, click_count: clicks, first_mouse: false }), cx);
+                    window.dispatch_event(PlatformInput::MouseUp(MouseUpEvent { button, position, modifiers, click_count: clicks }), cx);
+                });
+            }
+        }
+        // The note's name typed in its field and kept, as ↩ does.
+        r if r.starts_with(":title=") => {
+            let name = r[":title=".len()..].to_string();
+            let Some(handle) = note.read(cx).window else { return };
+            let _ = cx.update_window(handle.into(), |_, window, cx| {
+                note.update(cx, |n, cx| {
+                    if let Some(field) = n.title_field(window, cx) {
+                        field.update(cx, |f, cx| f.set_value(name, window, cx));
+                        n.keep_title(&field, window, cx);
+                    }
+                })
+            });
+        }
+        // The pointer moved there in the note's window, nothing pressed.
+        r if r.starts_with(":point=") => {
+            let n: Vec<f32> = r[":point=".len()..].split(',').filter_map(|v| v.parse().ok()).collect();
+            let Some(handle) = note.read(cx).window else { return };
+            if let [x, y] = n[..] {
+                let _ = cx.update_window(handle.into(), |_, window, cx| {
+                    window.dispatch_event(PlatformInput::MouseMove(MouseMoveEvent { position: point(px(x), px(y)), pressed_button: None, modifiers: Modifiers::default() }), cx);
+                });
+            }
+        }
+        // A key pressed in the note's window, as the main window's `key=`.
+        r if r.starts_with(":key=") => {
+            let Some(handle) = note.read(cx).window else { return };
+            if let Ok(keystroke) = Keystroke::parse(&r[":key=".len()..]) {
+                let _ = cx.update_window(handle.into(), |_, window, cx| {
+                    window.dispatch_event(PlatformInput::KeyDown(KeyDownEvent { keystroke, is_held: false, prefer_character_input: false }), cx);
                 });
             }
         }

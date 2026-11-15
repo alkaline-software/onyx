@@ -59,6 +59,9 @@ pub struct UiState {
     pub menu_note: Option<PathBuf>,
     pub menu_vault: Option<PathBuf>,
     pub menu_tree: Option<bool>,
+    /// The width a drag or a double click gave the menu bar note's tree.
+    #[serde(default)]
+    pub menu_tree_w: Option<f32>,
     /// Which card the sidebar has open: `notes` or `assets`.
     #[serde(default)]
     pub side_view: Option<String>,
@@ -68,8 +71,8 @@ fn file() -> std::path::PathBuf {
     paths::state_dir().join("ui.json")
 }
 
-/// How many vaults the landing page offers again.
-const RECENT: usize = 6;
+/// How many vaults are remembered: the landing page offers the first, the sidebar all but the one open.
+const RECENT: usize = 12;
 
 /// The writer: one thread, the saves in the order asked. `write_atomic`
 /// flushes the file to the disk, some 5 ms on an SSD, and a frame is not

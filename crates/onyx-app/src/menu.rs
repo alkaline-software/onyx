@@ -106,6 +106,11 @@ pub struct Menu {
     /// Which menu it is, for the view that answers its choices.
     pub what: &'static str,
     pub at: Point<Pixels>,
+    /// The menu's corner that stands at `at`: its top left, or its bottom
+    /// left for a menu that rises from what opened it.
+    pub corner: Anchor,
+    /// Its width, where it is to be as wide as what opened it; else its rows'.
+    pub width: Option<Pixels>,
     pub entries: Vec<Entry>,
     pub serial: u32,
 }
@@ -121,7 +126,17 @@ pub struct Menus {
 impl Menus {
     pub fn show(&mut self, what: &'static str, at: Point<Pixels>, entries: Vec<Entry>) {
         self.serial += 1;
-        self.open = Some(Menu { what, at, entries, serial: self.serial });
+        self.open = Some(Menu { what, at, corner: Anchor::TopLeft, width: None, entries, serial: self.serial });
+    }
+
+    /// The same, the menu's bottom left at `at`, so it rises from there,
+    /// `width` wide where it is given.
+    pub fn show_above(&mut self, what: &'static str, at: Point<Pixels>, width: Option<Pixels>, entries: Vec<Entry>) {
+        self.show(what, at, entries);
+        if let Some(m) = self.open.as_mut() {
+            m.corner = Anchor::BottomLeft;
+            m.width = width;
+        }
     }
 
     /// Put the open menu away, keeping it for its going.
@@ -236,6 +251,7 @@ fn card<V: 'static>(m: &Menu, going: Option<Duration>, pick: std::rc::Rc<dyn Fn(
         }
     });
     let body = v_flex()
+        .when_some(m.width, |d, w| d.w(w))
         .p(px(5.))
         .rounded(px(10.))
         .border_1()
@@ -245,7 +261,11 @@ fn card<V: 'static>(m: &Menu, going: Option<Duration>, pick: std::rc::Rc<dyn Fn(
         .occlude()
         .children(rows);
     let body = match going {
-        None => body.with_animation(ElementId::NamedInteger("menu-in".into(), m.serial as u64), Animation::new(MENU_IN).with_easing(ease_out_quint()), |d, t| d.opacity(t).mt(px(-4. * (1. - t)))).into_any_element(),
+        // It comes in from the side it opens toward: down, or up when it rises.
+        None => {
+            let from = if m.corner == Anchor::BottomLeft { 4. } else { -4. };
+            body.with_animation(ElementId::NamedInteger("menu-in".into(), m.serial as u64), Animation::new(MENU_IN).with_easing(ease_out_quint()), move |d, t| d.opacity(t).mt(px(from * (1. - t)))).into_any_element()
+        }
         Some(gone) => {
             let left = 1. - (gone.as_secs_f32() / MENU_OUT.as_secs_f32()).min(1.);
             body.opacity(ease_out_quint()(left)).into_any_element()
@@ -279,6 +299,6 @@ fn card<V: 'static>(m: &Menu, going: Option<Duration>, pick: std::rc::Rc<dyn Fn(
         .inset_0()
         .child(sheet)
         // Kept inside the window, so the room at its right is the room at its left.
-        .child(anchored().position(m.at).snap_to_window_with_margin(px(8.)).child(body))
+        .child(anchored().position(m.at).anchor(m.corner).snap_to_window_with_margin(px(8.)).child(body))
         .into_any_element()
 }

@@ -66,7 +66,7 @@ pub const TITLE_CONTEXT: &str = "NoteTitle";
 pub const SETTINGS_EDIT: &str = "settings-edit";
 
 /// How many lines a note's name wraps to before it scrolls in its field.
-const TITLE_ROWS: usize = 6;
+pub(crate) const TITLE_ROWS: usize = 6;
 /// How tall a scroller's edge fade stands, and with it the zone that
 /// counts as out of sight: the editor's `SCROLL_MARGIN`, which keeps the
 /// caret out of it. The two change together.
@@ -151,6 +151,11 @@ const SHEET_MOST: f32 = 960.;
 /// `SHEET_GUTTER` in from its edge at every width, so a full sheet in a
 /// page with no more room than its own width has the same room for words.
 const SHEET_MARGIN: Pixels = px(16.);
+/// The gap between the note's sheet and a pane beside it, the source's or
+/// the terminal's: half the page's margin, so the three read as one row.
+const PANE_GAP: f32 = 8.;
+/// The vaults the landing page offers, the last opened first.
+const LANDING_VAULTS: usize = 6;
 const SHEET_GUTTER: f32 = 32.;
 /// The least the window is dragged to.
 pub const MIN_W: Pixels = px(720.);
@@ -276,6 +281,9 @@ pub struct Shell {
     card_x: Pixels,
     card_w: f32,
     page_w: f32,
+    /// The page's room at the sheet's left and right at this draw: the
+    /// margin, or the gap to a pane beside it, eased as the pane slides.
+    page_pad: (f32, f32),
     /// The color the window's own ground was last set to, so it is set
     /// once and not at every frame.
     ground: Cell<Option<Hsla>>,
@@ -310,12 +318,17 @@ pub struct Shell {
     side_view: SideView,
     /// The last change of view: the view left, and when.
     side_moved: Option<(SideView, Instant)>,
+    /// Where the vaults' list rises from: the button, as it was last drawn.
+    vaults_at: Rc<std::cell::Cell<Bounds<Pixels>>>,
     library: Library,
     /// The field a text field's menu was opened on, for what is chosen.
     pub(crate) menu_focus: Option<FocusHandle>,
     /// A file a bar renamed in place, renamed at the next draw, where
     /// the window is to hand (`Shell::rename_entry`).
     pending_rename: Option<(PathBuf, String)>,
+    /// Entries the menu bar note renamed, for everything here that knows
+    /// them by their path to follow at the next frame (`moved_elsewhere`).
+    pending_moves: Vec<(PathBuf, PathBuf)>,
     /// What a note's menu was opened on (`note_menu.rs`).
     canvas: crate::note_menu::NoteMenu,
     /// The words the person has settled with the check.
@@ -522,6 +535,7 @@ impl Shell {
             card_x: px(0.),
             card_w: 0.,
             page_w: 0.,
+            page_pad: (16., 16.),
             cfg,
             motion: Motion::default(),
             scrollers: {
@@ -535,6 +549,7 @@ impl Shell {
             sidebar_open: ui.sidebar_open.unwrap_or(true),
             side_view: SideView::from_key(ui.side_view.as_deref().unwrap_or("notes")),
             side_moved: None,
+            vaults_at: Rc::default(),
             choice: Choice::default(),
             tree_focus: cx.focus_handle(),
             lit_joins: RefCell::new(std::collections::HashMap::new()),
@@ -569,6 +584,7 @@ impl Shell {
             pressed: None,
             menu_focus: None,
             pending_rename: None,
+            pending_moves: Vec::new(),
             canvas: Default::default(),
             words: Rc::new(Words::load()),
             rename: None,
@@ -711,19 +727,10 @@ impl Shell {
         self.closed_tabs.clear();
         let ui = UiState::load();
         let folded: HashSet<PathBuf> = ui.folded.iter().filter(|p| p.starts_with(&root)).cloned().collect();
-        let (tx, rx) = std::sync::mpsc::channel::<Vec<PathBuf>>();
-        let watcher = match vault::watch(&root, move |paths| {
-            let _ = tx.send(paths);
-        }) {
-            Ok(w) => Some(w),
-            Err(e) => {
-                self.say(tf("The vault is not being watched: {why}", &[("why", &e)]), cx);
-                None
-            }
-        };
+        let (watcher, changes) = self.watch_vault(&root, cx);
         let tree = vault::tree(&root);
         crate::folder_look::ensure(&root, cx);
-        self.vault = Some(Vault { root: root.clone(), tree, folded, _watcher: watcher, changes: Rc::new(rx) });
+        self.vault = Some(Vault { root: root.clone(), tree, folded, _watcher: watcher, changes });
         let mut ui = ui;
         ui.remember_vault(&root);
         ui.save_later();
@@ -733,6 +740,55 @@ impl Shell {
         self.save_ui(window);
         window.focus(&self.focus, cx);
         cx.notify();
+    }
+
+    /// A watcher on the vault's folder, and where it says what changed.
+    fn watch_vault(&mut self, root: &Path, cx: &mut Context<Self>) -> (Option<vault::Watcher>, Rc<std::sync::mpsc::Receiver<Vec<PathBuf>>>) {
+        let (tx, rx) = std::sync::mpsc::channel::<Vec<PathBuf>>();
+        let watcher = match vault::watch(root, move |paths| {
+            let _ = tx.send(paths);
+        }) {
+            Ok(w) => Some(w),
+            Err(e) => {
+                self.say(tf("The vault is not being watched: {why}", &[("why", &e)]), cx);
+                None
+            }
+        };
+        (watcher, Rc::new(rx))
+    }
+
+    /// The vault's folder takes a new name. The open notes are written
+    /// first; then the vault is the folder at its new place, watched
+    /// there, and everything that knew a path in it follows, as for a
+    /// folder renamed in it (`follow_moves`), the recent vaults too.
+    fn rename_vault(&mut self, name: &str, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(old) = self.vault_root().map(Path::to_path_buf) else { return };
+        self.save_all(cx);
+        let new = match vault::rename(&old, name) {
+            Ok(new) => new,
+            Err(e) => {
+                self.say(tf("The name was not changed: {why}", &[("why", &e)]), cx);
+                return;
+            }
+        };
+        if new == old {
+            return;
+        }
+        let (watcher, changes) = self.watch_vault(&new, cx);
+        if let Some(v) = self.vault.as_mut() {
+            v.root = new.clone();
+            v.tree = vault::tree(&new);
+            v._watcher = watcher;
+            v.changes = changes;
+        }
+        self.watch_changes(cx);
+        let mut ui = UiState::load();
+        for p in ui.recent_vaults.iter_mut().chain(ui.folded.iter_mut()) {
+            *p = vault::moved_path(p, &[(old.clone(), new.clone())]);
+        }
+        ui.save_later();
+        self.follow_moves(&[(old, new)], window, cx);
+        self.reread_assets(cx);
     }
 
     /// The vault's changes, looked for every so often; a burst of them is
@@ -1144,7 +1200,12 @@ impl Shell {
             self.shown = None;
             match self.tabs.get(ix.min(self.tabs.len().saturating_sub(1))).map(|t| t.path.clone()) {
                 Some(next) => self.show_tab(&next, window, cx),
-                None => window.focus(&self.focus, cx),
+                // The last tab gone, the panes beside it go with it: the
+                // vault's page stands alone, as it opens.
+                None => {
+                    window.focus(&self.focus, cx);
+                    self.put_panes_away(window, cx);
+                }
             }
         }
         self.save_ui(window);
@@ -1301,6 +1362,13 @@ impl Shell {
     /// links followed through the vault, at the next drawing.
     pub(crate) fn ask_rename(&mut self, file: PathBuf, name: String, cx: &mut Context<Self>) {
         self.pending_rename = Some((file, name));
+        cx.notify();
+    }
+
+    /// The menu bar note renamed a note from its name: its tab here, and
+    /// all else that knows it by its path, follow at the next frame.
+    pub(crate) fn moved_elsewhere(&mut self, moves: &[(PathBuf, PathBuf)], cx: &mut Context<Self>) {
+        self.pending_moves.extend_from_slice(moves);
         cx.notify();
     }
 
@@ -1505,7 +1573,11 @@ impl Shell {
     fn finish_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(path) = self.rename.take() else { return };
         let name = self.rename_input.read(cx).value().to_string();
-        self.rename_entry(&path, &name, window, cx);
+        if self.vault_root() == Some(path.as_path()) {
+            self.rename_vault(&name, window, cx);
+        } else {
+            self.rename_entry(&path, &name, window, cx);
+        }
         self.focus_editor_or_shell(window, cx);
         cx.notify();
     }
@@ -1603,12 +1675,10 @@ impl Shell {
 
     /// The vault's name: which vault is open.
     fn show_vault_menu(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
-        let mut entries = vec![Entry::choice("new", "icons/plus.svg", t("New Vault…")), Entry::choice("open-other", "icons/folder-open.svg", t("Open Vault…"))];
-        if self.vault.is_some() {
-            entries.push(Entry::choice("reveal", "icons/folder-open.svg", t(crate::sys::REVEAL_LABEL)));
-            entries.push(Entry::Rule);
-            entries.push(Entry::choice("close", "icons/arrow-left.svg", t("Close Vault")));
+        if self.vault.is_none() {
+            return self.show_vaults_at(at, None, false, cx);
         }
+        let entries = vec![Entry::choice("rename", "icons/pencil-simple.svg", t("Rename")), Entry::Rule, Entry::choice("reveal", "icons/folder-open.svg", t(crate::sys::REVEAL_LABEL))];
         self.menus.show("vault", at, entries);
         cx.notify();
     }
@@ -1779,6 +1849,22 @@ impl Shell {
         }
     }
 
+    /// Every folder of the vault folded.
+    fn collapse_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        fn folders(entries: &[vault::Entry], into: &mut HashSet<PathBuf>) {
+            for e in entries.iter().filter(|e| e.dir) {
+                into.insert(e.path.clone());
+                folders(&e.children, into);
+            }
+        }
+        if let Some(v) = self.vault.as_mut() {
+            let children = v.tree.children.clone();
+            folders(&children, &mut v.folded);
+        }
+        self.save_ui(window);
+        cx.notify();
+    }
+
     fn copy_text(text: impl Into<String>, cx: &mut Context<Self>) {
         crate::widgets::to_clipboard(text, cx);
     }
@@ -1848,18 +1934,13 @@ impl Shell {
                     }
                 }
             }
-            ("entry", "collapse") => {
-                fn folders(entries: &[vault::Entry], into: &mut HashSet<PathBuf>) {
-                    for e in entries.iter().filter(|e| e.dir) {
-                        into.insert(e.path.clone());
-                        folders(&e.children, into);
-                    }
+            ("entry", "collapse") => self.collapse_all(window, cx),
+            ("vault" | "vaults", "new") => self.start_new_vault(window, cx),
+            ("vault" | "vaults", "open-other") => self.choose_vault(window, cx),
+            ("vaults", path) => {
+                if self.vault_root() != Some(Path::new(path)) {
+                    self.open_vault(PathBuf::from(path), window, cx);
                 }
-                if let Some(v) = self.vault.as_mut() {
-                    let children = v.tree.children.clone();
-                    folders(&children, &mut v.folded);
-                }
-                self.save_ui(window);
             }
             ("found", "open") => {
                 if let Some(p) = pressed {
@@ -1934,14 +2015,16 @@ impl Shell {
                     self.new_folder_in(p, window, cx);
                 }
             }
-            ("vault", "new") => self.start_new_vault(window, cx),
-            ("vault", "open-other") => self.choose_vault(window, cx),
+            ("vault", "rename") => {
+                if let Some(root) = self.vault_root().map(Path::to_path_buf) {
+                    self.start_rename(root, window, cx);
+                }
+            }
             ("vault", "reveal") => {
                 if let Some(r) = self.vault_root() {
                     crate::sys::reveal(r);
                 }
             }
-            ("vault", "close") => self.close_vault(window, cx),
             _ => {}
         }
         cx.notify();
@@ -2277,9 +2360,10 @@ impl Shell {
         row.into_any_element()
     }
 
-    /// The sidebar, after emaki's: the brand on the title row, the New
-    /// Note row and the New Folder row, the notes card with the tree,
-    /// and the foot with the person's picture, name and the settings.
+    /// The sidebar, after emaki's: the brand on the title row, the
+    /// vault's card with the tree and the vaults' button under it
+    /// (`render_side_stack`), and the foot with the person's picture,
+    /// name and the settings.
     fn render_sidebar(&self, cx: &mut Context<Self>) -> AnyElement {
         let waiting = self.update.found.is_some();
         let gear_dot = self.motion.presence("gear-dot", waiting, cx);
@@ -2287,39 +2371,6 @@ impl Shell {
         let accent = theme.foreground.opacity(0.1);
         let brand = h_flex().gap(px(5.)).items_center().child(img("icon/icon-128.png").size(px(31.)).flex_shrink_0()).child(crate::widgets::wordmark("Onyx", 23.5, theme.primary, cx));
         let header = Self::drag_region(h_flex().h(TITLEBAR_H).flex_shrink_0().pt(px(2.) + FRAME).pr(px(16.)).justify_end().items_center().child(brand), cx);
-        let new_row = h_flex()
-            .id("side-new-note")
-            .h(px(36.))
-            .px(px(10.))
-            .gap(px(10.))
-            .rounded(px(8.))
-            .cursor_pointer()
-            .hover(move |s| s.bg(accent.opacity(0.6)))
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(cx.listener(|this, _, window, cx| {
-                swallow_click(window, cx);
-                this.new_note(&NewNote, window, cx);
-            }))
-            .child(div().size(px(22.)).rounded_full().bg(theme.primary).flex().items_center().justify_center().child(Icon::default().path("icons/plus.svg").with_size(px(13.)).text_color(theme.primary_foreground)))
-            .child(div().flex_1().text_size(px(13.5)).font_weight(FontWeight::MEDIUM).child(t("New Note")))
-            .child(kbd_hint("⌘N", &theme));
-        let folder_row = h_flex()
-            .id("side-new-folder")
-            .h(px(32.))
-            .px(px(10.))
-            .gap(px(10.))
-            .rounded(px(8.))
-            .cursor_pointer()
-            .hover(move |s| s.bg(accent.opacity(0.6)))
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(cx.listener(|this, _, window, cx| {
-                swallow_click(window, cx);
-                this.new_folder(&NewFolder, window, cx);
-            }))
-            .child(div().w(px(22.)).flex().justify_center().child(Icon::default().path("icons/folder-plus.svg").with_size(px(16.)).text_color(theme.muted_foreground)))
-            .child(div().flex_1().text_size(px(13.5)).child(t("New Folder")))
-            .child(kbd_hint("⌘⇧N", &theme));
-        let top = v_flex().px(px(10.)).pt(px(8.)).gap(px(2.)).child(new_row).child(folder_row);
         let name = self.user_name.clone();
         let family = crate::fonts::wordmark_family(cx);
         let footer = h_flex()
@@ -2382,7 +2433,6 @@ impl Shell {
             .flex_shrink_0()
             .text_color(theme.foreground)
             .child(header)
-            .when(self.vault.is_some(), |d| d.child(top))
             .child(self.render_notes_card(&theme, cx))
             .child(footer)
             .into_any_element()
@@ -2896,7 +2946,8 @@ impl Shell {
         h_flex()
             .w_full()
             .justify_center()
-            .px(SHEET_MARGIN)
+            .pl(px(self.page_pad.0))
+            .pr(px(self.page_pad.1))
             .py(px(8.))
             .child(
                 h_flex()
@@ -2906,7 +2957,7 @@ impl Shell {
                         cx.stop_propagation();
                         this.close_find(window, cx)
                     }))
-                    .w(px(sheet_width(self.width_level(), self.page_w)))
+                    .w(px(self.sheet_w(self.width_level())))
                     .max_w_full()
                     .h(px(36.))
                     .px(px(10.))
@@ -3071,7 +3122,7 @@ impl Shell {
     /// note's name with its folder before it, from the vault's name, or
     /// the vault's own place while its page shows, each a press away from
     /// the file manager; at the right how the note is shown and how wide.
-    fn render_path_bar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    fn render_path_bar(&self, room: Pixels, cx: &mut Context<Self>) -> Option<AnyElement> {
         let root = self.vault_root()?.to_path_buf();
         let theme = cx.theme().clone();
         let (icon, parents, name, target) = match &self.shown {
@@ -3131,7 +3182,7 @@ impl Shell {
                 .items_center()
                 .relative()
                 .child(chip)
-                .when(self.shown.as_deref().is_some_and(vault::is_note), |d| d.child(h_flex().absolute().right(px(PATH_BAR_PAD)).top_0().bottom_0().gap(px(2.)).items_center().child(self.path_button("path-export", "icons/file-export.svg", t("Export (⇧⌘E)"), Self::press_export, &theme, cx))))
+                .when(self.shown.as_deref().is_some_and(vault::is_note), |d| d.child(h_flex().absolute().right(STRIP_END + room).top_0().bottom_0().items_center().child(self.render_more(&theme, cx))))
                 // An asset: the system's app for it, where the note has its
                 // paper; a picture or a PDF has its frame's bar and menu.
                 .when(self.shown.as_deref().is_some_and(|p| !vault::is_note(p)) && !self.shown_framed(), |d| {
@@ -3183,10 +3234,34 @@ impl Shell {
         }
     }
 
-    fn press_export(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        if let Some(path) = self.shown.clone() {
-            self.open_export(path, window, cx);
-        }
+    /// The note's own menu at the path bar's end: the one its row in the
+    /// sidebar opens on a right click (`entry_menu`), Export… with the rest,
+    /// opened at the button. It stands in the strip's column of buttons,
+    /// square and placed as the terminal's over it (`toggle_button`,
+    /// `STRIP_END`), so the two line up; lit while its menu is open.
+    fn render_more(&self, theme: &gpui_component::Theme, cx: &mut Context<Self>) -> Stateful<Div> {
+        let (lit, wash) = (theme.foreground, theme.muted);
+        let open = self.menus.open.as_ref().is_some_and(|m| m.what == "entry") && self.pressed.is_some() && self.pressed == self.shown;
+        div()
+            .id("path-more")
+            .size(TOGGLE_W)
+            .flex()
+            .items_center()
+            .justify_center()
+            .rounded(px(7.))
+            .cursor_pointer()
+            .text_color(if open { lit } else { theme.muted_foreground })
+            .when(open, |d| d.bg(wash))
+            .hover(move |s| s.bg(wash).text_color(lit))
+            .managed_tooltip(|window, cx| tip(t("More"), window, cx))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(|this, ev: &ClickEvent, window, cx| {
+                swallow_click(window, cx);
+                if let Some(path) = this.shown.clone() {
+                    this.show_entry_menu(path, ev.position(), cx);
+                }
+            }))
+            .child(Icon::default().path("icons/file-dots.svg").with_size(px(15.)))
     }
 
     /// The ends of the tabs' row, after Emaki's panel buttons: at the
@@ -3203,8 +3278,8 @@ impl Shell {
                 None => on.then_some(button),
             }
         };
-        let source = self.toggle_button("strip-source", "icons/file-code.svg", t("Source (⌘⇧S)"), self.pressed_line(self.source_anim, self.source_shown()), Rc::new(|this, window, cx| this.toggle_source(window, cx)), cx);
-        let term = self.toggle_button("strip-term", "icons/terminal.svg", t("Terminal (⌃`)"), self.pressed_line(self.term_anim, self.term_shown()), Rc::new(|this, window, cx| this.toggle_terminal(window, cx)), cx);
+        let source = self.toggle_button("strip-source", "icons/file-code.svg", t("Markdown Source (⌘⇧M)"), self.pressed_line(self.source_anim, self.source_shown()), Rc::new(|this, window, cx| this.toggle_source(window, cx)), cx);
+        let term = self.toggle_button("strip-term", "icons/terminal.svg", t("Shell Terminal (⌘⇧S)"), self.pressed_line(self.term_anim, self.term_shown()), Rc::new(|this, window, cx| this.toggle_terminal(window, cx)), cx);
         let source = end("strip-source", note, source, cx);
         let term = end("strip-term", self.vault.is_some() || self.term_on, term, cx);
         let left = h_flex().w(TOGGLE_W).flex_shrink_0().items_center().children(source).into_any_element();
@@ -3262,7 +3337,7 @@ impl Shell {
             .into_any_element()
     }
 
-    /// The note's source beside it, or put away: ⌘⇧S, the View menu and
+    /// The note's source beside it, or put away: ⌘⇧M, the View menu and
     /// the strip's button, for every note, and kept. The keyboard goes
     /// with it: in the note as it opens, it goes to the same place in the
     /// source; in the source as it goes, back to the note.
@@ -3371,6 +3446,11 @@ impl Shell {
         let pane = self.source_pane(ix, window, cx);
         let theme = cx.theme().clone();
         let shown = self.source_t();
+        // Its top and bottom fade by what is left to scroll past each, as
+        // the page's do; the editor keeps its own offset, read from it.
+        let state = pane.read(cx).state.downgrade();
+        let room = move |cx: &App| state.upgrade().map_or((px(0.), px(0.)), |s| s.read(cx).scroll_room());
+        let foot = Corners { bottom_left: px(9.), bottom_right: px(9.), ..Default::default() };
         Some(
             div()
                 .w(px(w))
@@ -3387,10 +3467,13 @@ impl Shell {
                             .border_color(theme.border)
                             .bg(theme.background)
                             .overflow_hidden()
+                            .relative()
                             .pt(px(8.))
                             // A press in it is its own, not the margin's.
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                            .child(pane),
+                            .child(pane)
+                            .child(edge_fade_by(room.clone(), theme.background, true, Corners::default()))
+                            .child(edge_fade_by(room, theme.background, false, foot)),
                     ),
                 )
                 .into_any_element(),
@@ -3410,7 +3493,7 @@ impl Shell {
             .absolute()
             .top(SHEET_MARGIN)
             .bottom(SHEET_MARGIN)
-            .left(px(x + f32::from(SHEET_MARGIN) / 2.) - SIDEBAR_GRIP / 2.)
+            .left(px(x + self.page_pad.0 / 2.) - SIDEBAR_GRIP / 2.)
             .w(SIDEBAR_GRIP)
             .occlude()
             .cursor(CursorStyle::ResizeLeftRight)
@@ -3443,7 +3526,7 @@ impl Shell {
         // left of the pointer by the terminal's share.
         let room = self.source_room;
         if room >= SOURCE_LEAST + NOTE_LEAST {
-            let x = f32::from(e.position.x - self.card_x) - f32::from(SHEET_MARGIN) / 2.;
+            let x = f32::from(e.position.x - self.card_x) - self.page_pad.0 / 2.;
             self.source_share = x.clamp(SOURCE_LEAST, room - NOTE_LEAST) / room;
             cx.notify();
         }
@@ -3456,6 +3539,12 @@ impl Shell {
         }
     }
 
+    /// The sheet's width at a level, in the room between the page's
+    /// margins or its gaps to the panes beside it.
+    fn sheet_w(&self, level: f32) -> f32 {
+        sheet_width_in(level, self.page_w - self.page_pad.0 - self.page_pad.1)
+    }
+
     /// Where the sheet stands from its own width (0) to the page's (1):
     /// full while a pane stands beside it, moving as the pane does.
     fn width_level(&self) -> f32 {
@@ -3464,7 +3553,7 @@ impl Shell {
         source.max(self.term_t())
     }
 
-    /// The terminal at the page's right, or put away: ⌃`, the View menu
+    /// The terminal at the page's right, or put away: ⌘⇧S, the View menu
     /// and the strip's button. The keyboard goes with it, and back to the
     /// note as it goes.
     pub(crate) fn toggle_terminal(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -3589,6 +3678,23 @@ impl Shell {
         }
     }
 
+    /// The source and the terminal put away together, each from where it
+    /// stood, the terminal's shells kept for when it comes back.
+    fn put_panes_away(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.source_on && !self.term_on {
+            return;
+        }
+        let was = self.panes_now();
+        self.source_on = false;
+        self.term_on = false;
+        self.panes_moved(was);
+        if let Some(term) = self.terminal.clone() {
+            term.update(cx, |t, cx| t.set_shown(false, cx));
+        }
+        self.save_ui(window);
+        cx.notify();
+    }
+
     fn term_moving(&self) -> bool {
         self.term_anim.is_some_and(|(_, at, _)| at.elapsed() < SLIDE)
     }
@@ -3652,7 +3758,7 @@ impl Shell {
             .absolute()
             .top(SHEET_MARGIN)
             .bottom(SHEET_MARGIN)
-            .left(px(x - f32::from(SHEET_MARGIN) / 2.) - SIDEBAR_GRIP / 2.)
+            .left(px(x - self.page_pad.1 / 2.) - SIDEBAR_GRIP / 2.)
             .w(SIDEBAR_GRIP)
             .occlude()
             .cursor(CursorStyle::ResizeLeftRight)
@@ -3683,7 +3789,7 @@ impl Shell {
             }
             return;
         }
-        let w = f32::from(self.card_x) + self.card_w - f32::from(e.position.x) - f32::from(SHEET_MARGIN) / 2.;
+        let w = f32::from(self.card_x) + self.card_w - f32::from(e.position.x) - self.page_pad.1 / 2.;
         let source = self.source_shown();
         let most = self.card_w - NOTE_LEAST - if source { SOURCE_LEAST } else { 0. };
         if most >= crate::terminal::TERM_LEAST {
@@ -3697,7 +3803,7 @@ impl Shell {
     /// With no vault: the way in. A vault is a folder of notes.
     fn render_landing(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
-        let recent: Vec<PathBuf> = UiState::load().recent_vaults.into_iter().filter(|p| p.is_dir()).collect();
+        let recent: Vec<PathBuf> = UiState::load().recent_vaults.into_iter().filter(|p| p.is_dir()).take(LANDING_VAULTS).collect();
         let rows = recent.into_iter().enumerate().map(|(i, p)| {
             let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| p.display().to_string());
             let where_ = p.parent().map(|d| d.display().to_string()).unwrap_or_default();
@@ -3742,7 +3848,7 @@ impl Shell {
                         swallow_click(window, cx);
                         this.start_new_vault(window, cx)
                     })))
-                    .child(choice_pill("open-vault", "icons/folder-open.svg", t("Open Vault…"), Press::Quiet, false, &theme).on_click(cx.listener(|this, _, window, cx| {
+                    .child(choice_pill("open-vault", "icons/folder-open.svg", t("Open Folder as Vault…"), Press::Quiet, false, &theme).on_click(cx.listener(|this, _, window, cx| {
                         swallow_click(window, cx);
                         this.choose_vault(window, cx)
                     }))),
@@ -3767,7 +3873,7 @@ impl Shell {
     fn render_no_note(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
         let face = self.look.text_family.clone();
-        let choice = |id: &'static str, icon: &'static str, label: &str, keys: &str, theme: &gpui_component::Theme| choice_pill(id, icon, label.to_string(), Press::Quiet, false, theme).w(px(240.)).h(px(34.)).px(px(14.)).gap(px(8.)).text_size(px(13.)).child(div().flex_1()).child(kbd_hint(keys, theme));
+        let choice = |id: &'static str, icon: &'static str, label: &str, keys: &str, theme: &gpui_component::Theme| choice_pill(id, icon, label.to_string(), Press::Quiet, false, theme).min_w(px(240.)).h(px(34.)).px(px(14.)).gap(px(8.)).text_size(px(13.)).child(div().flex_1()).child(kbd_hint(keys, theme));
         v_flex()
             .size_full()
             .items_center()
@@ -3792,7 +3898,7 @@ impl Shell {
                             this.reopen_tab(window, cx)
                         })))
                     })
-                    .child(choice("home-open-vault", "icons/folder-open.svg", t("Open Vault…"), "⌘⇧O", &theme).on_click(cx.listener(|this, _, window, cx| {
+                    .child(choice("home-open-vault", "icons/folder-open.svg", t("Open Folder as Vault…"), "⌘⇧O", &theme).on_click(cx.listener(|this, _, window, cx| {
                         swallow_click(window, cx);
                         this.choose_vault(window, cx)
                     }))),
@@ -3833,7 +3939,7 @@ impl Shell {
             (wind, lift, near, moving)
         };
         let c = |hex: u32| -> Hsla { rgb(hex).into() };
-        let (deep, stone, top, vein, pages, paper, line, mark) = (c(0x1C1F3A), c(0x262A4C), c(0x3B4170), c(0x5FB8CA), c(0xDAD8CF), c(0xF8F7F2), c(0x474747), c(0xE8A93A));
+        let (deep, glow, teal, pages, paper, line, mark) = (c(0x171431), c(0x4A4588), c(0x6FB9C4), c(0xDAD8CF), c(0xF8F7F2), c(0x474747), c(0xE8A93A));
         // The pen in the drawing's own inks, the lines' gray by day and the
         // pages' warm white by night: the window's foreground is near black
         // and near white, too hard beside the picture's softer colors.
@@ -3892,12 +3998,16 @@ impl Shell {
                 .absolute()
                 .inset_0(),
             )
-            .child(layer("icons/home/shadow.svg", theme.foreground.opacity(0.1)))
-            .child(layer("icons/home/tile-base.svg", deep))
-            .child(layer("icons/home/tile-sides.svg", stone))
-            .child(layer("icons/home/tile-top.svg", top))
-            .child(layer("icons/home/tile-vein.svg", vein))
-            .child(layer("icons/home/tile-glint.svg", gpui::white().opacity(0.28)))
+            // The stone, the icon's plump pebble lit from within: a teal
+            // glow on the page under it, the stone in its deepest navy, a
+            // lighter navy rising to the far shoulder, the teal caught in
+            // its lower edge, and light along its rim. Each layer's shading
+            // is its picture's alpha; its color is given here.
+            .child(layer("icons/home/stone-glow.svg", teal))
+            .child(layer("icons/home/stone-base.svg", deep))
+            .child(layer("icons/home/stone-lift.svg", glow))
+            .child(layer("icons/home/stone-rim.svg", teal))
+            .child(layer("icons/home/stone-edge.svg", gpui::white()))
             .child(book(pages_fill, pages))
             .child(book(pages_edge, line))
             .child(book(cover, paper))
@@ -3945,7 +4055,7 @@ impl Shell {
                 .child(Textarea::new(&field).appearance(false).bordered(false).flush(true).on_secondary_click(Self::input_menu(&field, "edit", cx)).font(title_font).text_size(title_px).line_height(relative(onyx_core::rhythm::TITLE_LINE)).text_color(theme.foreground).p_0())
                 .into_any_element()
         };
-        let sheet_w = sheet_width(level, self.page_w);
+        let sheet_w = self.sheet_w(level);
         let gutter = SHEET_GUTTER;
         div()
             .relative()
@@ -3966,7 +4076,7 @@ impl Shell {
                         this.canvas_menu(editor.clone(), ev.position, MenuAt::default(), cx);
                     }
                 })).child(
-                    v_flex().min_h_full().p(SHEET_MARGIN).child(
+                    v_flex().min_h_full().py(SHEET_MARGIN).pl(px(self.page_pad.0)).pr(px(self.page_pad.1)).child(
                         v_flex()
                             .flex_1()
                             .w(px(sheet_w))
@@ -4087,7 +4197,9 @@ impl Shell {
         }
         let path = self.rename.as_ref()?;
         let theme = cx.theme().clone();
-        let title = if path.is_dir() {
+        let title = if self.vault_root() == Some(path.as_path()) {
+            t("Rename Vault")
+        } else if path.is_dir() {
             t("Rename Folder")
         } else if vault::is_note(path) {
             t("Rename Note")
@@ -4330,15 +4442,22 @@ pub(crate) fn page_ground(theme: &gpui_component::Theme) -> Hsla {
 
 /// The sheet's width at a level from its own (0) to full width (1) on a
 /// page this wide.
+#[cfg(test)]
 fn sheet_width(level: f32, page: f32) -> f32 {
-    let wide = (page - 2. * f32::from(SHEET_MARGIN)).max(READ_W);
+    sheet_width_in(level, page - 2. * f32::from(SHEET_MARGIN))
+}
+
+/// The same in the room the page leaves the sheet, its margins or gaps
+/// taken off already.
+fn sheet_width_in(level: f32, room: f32) -> f32 {
+    let wide = room.max(READ_W);
     let own = ((READ_W + wide) / 2.).min(SHEET_MOST);
     own + (wide - own) * level
 }
 
 /// A name typed in a field that wraps, as a file's name: its lines joined
 /// by a space, and no space at its ends.
-fn one_line(typed: &str) -> String {
+pub(crate) fn one_line(typed: &str) -> String {
     typed.split(['\n', '\r']).map(str::trim).filter(|l| !l.is_empty()).collect::<Vec<_>>().join(" ")
 }
 
@@ -4366,10 +4485,24 @@ fn fade_strength(room: f32) -> f32 {
 /// where its ends meet no corner: a square fade would paint the corner
 /// out, since the card's clip is square.
 pub(crate) fn edge_fade(handle: &ScrollHandle, ground: Hsla, top: bool, corner: Pixels) -> AnyElement {
+    edge_fade_at(handle, ground, top, Corners { bottom_right: corner, bottom_left: corner, ..Default::default() })
+}
+
+/// An edge's fade with its own corners: where a scroller's foot is a
+/// window's corner on one side only, the fade is rounded there alone, or
+/// it paints the square the corner cuts away.
+pub(crate) fn edge_fade_at(handle: &ScrollHandle, ground: Hsla, top: bool, corners: Corners<Pixels>) -> AnyElement {
     let handle = handle.clone();
+    edge_fade_by(move |_| (-handle.offset().y, handle.max_offset().y), ground, top, corners)
+}
+
+/// An edge's fade over a scroller that keeps its own offset (the source
+/// pane's editor): `room` says how far it is scrolled down and how far it
+/// can go.
+pub(crate) fn edge_fade_by(room: impl Fn(&App) -> (Pixels, Pixels) + 'static, ground: Hsla, top: bool, corners: Corners<Pixels>) -> AnyElement {
     canvas(
-        move |bounds, window, _| {
-            let (at, most) = (-handle.offset().y, handle.max_offset().y);
+        move |bounds, window, cx| {
+            let (at, most) = room(cx);
             let strength = fade_strength(f32::from(if top { at } else { most - at }));
             let tall = FADE_H * strength;
             let y = if top { bounds.top() } else { bounds.bottom() - tall };
@@ -4380,7 +4513,7 @@ pub(crate) fn edge_fade(handle: &ScrollHandle, ground: Hsla, top: bool, corner: 
             let Some(dead) = dead else { return };
             window.set_cursor_style(CursorStyle::Arrow, &dead);
             let (from, to) = if top { (ground.opacity(strength), ground.opacity(0.)) } else { (ground.opacity(0.), ground.opacity(strength)) };
-            window.paint_quad(fill(bounds, linear_gradient(180., linear_color_stop(from, 0.), linear_color_stop(to, 1.))).corner_radii(Corners { bottom_right: corner, bottom_left: corner, ..Default::default() }));
+            window.paint_quad(fill(bounds, linear_gradient(180., linear_color_stop(from, 0.), linear_color_stop(to, 1.))).corner_radii(corners));
         },
     )
     .absolute()
@@ -4455,6 +4588,10 @@ impl Render for Shell {
         if let Some((file, name)) = self.pending_rename.take() {
             self.rename_entry(&file, &name, window, cx);
         }
+        let moves = std::mem::take(&mut self.pending_moves);
+        if !moves.is_empty() {
+            self.follow_moves(&moves, window, cx);
+        }
         crate::editor::stamp("shell render begins");
         self.scrollers.begin();
         // The router is the window's being drawn: the menu bar note's
@@ -4492,6 +4629,9 @@ impl Render for Shell {
         let source_full = self.source_full_w(rest);
         let source_w = if note { (source_full * self.source_t()).round() } else { 0. };
         self.page_w = rest - source_w;
+        let margin = f32::from(SHEET_MARGIN);
+        let ease = |t: f32| margin - (margin - PANE_GAP) * t;
+        self.page_pad = (if note { ease(self.source_t()) } else { margin }, if self.terminal.is_some() { ease(self.term_t()) } else { margin });
         let strip_inner = self.card_w - f32::from(STRIP_END * 2. + crate::csd::room(window, cx).1 + (TOGGLE_W + STRIP_END_GAP) * 2.);
         self.tabs_row.sync(strip_inner - crate::tabs::STRIP_GAP * 2., &items, self.shown.as_deref(), window, cx);
         if self.tabs_row.moving() {
@@ -4502,7 +4642,7 @@ impl Render for Shell {
         let center = if items.is_empty() { div().flex_1().min_w_0().into_any_element() } else { self.tabs_row.render(&items, self.shown.as_deref(), root.as_deref(), cx) };
         let (modes, widths) = self.render_strip_ends(cx);
         let notice = self.render_notice(&theme, cx);
-        let path_bar = self.render_path_bar(cx);
+        let path_bar = self.render_path_bar(crate::csd::room(window, cx).1, cx);
         let find_bar = (self.find_open && self.shown.is_some()).then(|| {
             div().w_full().flex_shrink_0().overflow_hidden().child(self.render_find_bar(cx)).with_animation("find-bar-in", Animation::new(crate::widgets::MENU_IN).with_easing(ease_out_quint()), |d, t| if t >= 1. { d } else { d.max_h(px(64. * t)).opacity(t) })
         });

@@ -50,6 +50,9 @@ actions!(onyx_app, [Quit, CloseWindow, Hide, HideOthers, ShowAll, Minimize, Zoom
 fn key_bindings() -> Vec<KeyBinding> {
     let mut keys = vec![
         KeyBinding::new("secondary-shift-b", ToggleSidebar, None),
+        KeyBinding::new("secondary-shift-p", menubar::TogglePin, Some(menubar::CONTEXT)),
+        // Over the main window's Open Vault…, in the note alone.
+        KeyBinding::new("secondary-shift-o", menubar::OpenInOnyx, Some(menubar::CONTEXT)),
         KeyBinding::new("secondary-n", NewNote, None),
         KeyBinding::new("secondary-shift-n", NewFolder, None),
         KeyBinding::new("secondary-shift-o", OpenVault, None),
@@ -91,8 +94,8 @@ fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("secondary-7", Tab7, None),
         KeyBinding::new("secondary-8", Tab8, None),
         KeyBinding::new("secondary-9", Tab9, None),
-        KeyBinding::new("secondary-shift-s", ToggleSource, None),
-        KeyBinding::new("ctrl-`", ToggleTerminal, None),
+        KeyBinding::new("secondary-shift-m", ToggleSource, None),
+        KeyBinding::new("secondary-shift-s", ToggleTerminal, None),
         KeyBinding::new("secondary-q", Quit, None),
     ];
     keys.extend(editor::key_bindings());
@@ -124,7 +127,7 @@ pub(crate) fn app_menus() -> Vec<Menu> {
                 MenuItem::action(t("New Folder"), NewFolder),
                 MenuItem::separator(),
                 MenuItem::action(t("New Vault…"), NewVault),
-                MenuItem::action(t("Open Vault…"), OpenVault),
+                MenuItem::action(t("Open Folder as Vault…"), OpenVault),
                 MenuItem::action(t("Close Vault"), CloseVault),
                 MenuItem::separator(),
                 MenuItem::action(t("Export…"), ExportPdf),
@@ -162,7 +165,7 @@ pub(crate) fn app_menus() -> Vec<Menu> {
     menus.push(Menu {
         name: t("View").into(),
         disabled: false,
-        items: vec![MenuItem::action(t("Source"), ToggleSource), MenuItem::action(t("Terminal"), ToggleTerminal), MenuItem::separator(), MenuItem::action(t("Zoom In"), ZoomIn), MenuItem::action(t("Zoom Out"), ZoomOut), MenuItem::action(t("Reset Zoom"), ZoomReset), MenuItem::separator(), MenuItem::action(t("Search…"), ToggleSearch), MenuItem::separator(), MenuItem::action(t("Toggle Sidebar"), ToggleSidebar)],
+        items: vec![MenuItem::action(t("Markdown Source"), ToggleSource), MenuItem::action(t("Shell Terminal"), ToggleTerminal), MenuItem::separator(), MenuItem::action(t("Zoom In"), ZoomIn), MenuItem::action(t("Zoom Out"), ZoomOut), MenuItem::action(t("Reset Zoom"), ZoomReset), MenuItem::separator(), MenuItem::action(t("Search…"), ToggleSearch), MenuItem::separator(), MenuItem::action(t("Toggle Sidebar"), ToggleSidebar)],
     });
     menus.push(Menu { name: t("Window").into(), disabled: false, items: vec![MenuItem::action(t("Minimize"), Minimize), MenuItem::action(t("Zoom"), Zoom), MenuItem::action(t("Toggle Full Screen"), ToggleFullScreen)] });
     menus

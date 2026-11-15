@@ -79,7 +79,7 @@ const PILL_LEAD: f32 = PILL_PAD + PILL_HANDLE + TAB_GAP;
 /// The square after the last tab, with a plus on it, which shows the
 /// vault's page and leaves every tab open: a tab's height on a track
 /// of its own, and the gap before it.
-const PLUS_W: f32 = TAB_H + 2. * PILL_PAD;
+pub const PLUS_W: f32 = TAB_H + 2. * PILL_PAD;
 const PLUS_ROOM: f32 = PLUS_W + PILL_GAP;
 /// How long ⌘ (Ctrl elsewhere) is held, alone, before every tab shows
 /// the number that goes to it.
@@ -192,6 +192,10 @@ pub struct Tabs {
     /// How far in from the row's left the pills start: half of what they
     /// leave over, so they stand in the middle, none once they fill it.
     lead: Option<Width>,
+    /// The pills from the row's left whatever room they leave, and no
+    /// plus after them, as the menu bar note's small row has them: a note
+    /// is made there from its tree or its landing page.
+    start: bool,
     /// The row's scroll on its way to the showing tab.
     glide: Option<Width>,
     /// How many tabs the widths were last set for.
@@ -216,6 +220,12 @@ pub struct Tabs {
 }
 
 impl Tabs {
+    /// A row whose pills stand from its left, not in its middle, with no
+    /// plus.
+    pub fn from_start() -> Self {
+        Self { start: true, ..Self::default() }
+    }
+
     /// The pills: one folder's tabs together, the pills in the order
     /// their first tabs had and each pill's tabs in theirs.
     pub fn group(tabs: &[PathBuf]) -> Vec<(PathBuf, Vec<PathBuf>)> {
@@ -321,13 +331,14 @@ impl Tabs {
                 self.born.insert(folder.clone(), if first { now.checked_sub(TAB_ANIM * 2).unwrap_or(now) } else { now });
             }
         }
-        // The row less the plus square's room, which is always there.
-        let row = (row_w - PLUS_ROOM).max(0.);
+        // The row less the plus square's room, which is always there where
+        // there is a plus.
+        let row = (row_w - if self.start { 0. } else { PLUS_ROOM }).max(0.);
         let n = keys.len();
         let chrome: f32 = self.groups.iter().map(|(_, keys)| pill_chrome(keys.len())).sum::<f32>() + PILL_GAP * (self.groups.len() as f32 - 1.).max(0.);
         let wanted: Vec<f32> = keys.iter().map(|k| items.iter().find(|i| i.path == *k).map(|i| self.fit(&i.title, window, cx)).unwrap_or(TAB_MIN)).collect();
         let targets = if row <= 0. { wanted.clone() } else { Self::share(&wanted, row - chrome) };
-        let lead = ((row - chrome - targets.iter().sum::<f32>()) / 2.).max(0.);
+        let lead = if self.start { 0. } else { ((row - chrome - targets.iter().sum::<f32>()) / 2.).max(0.) };
         match &mut self.lead {
             Some(l) => l.head(lead, now),
             None => self.lead = Some(Width::at_rest(lead, now)),
@@ -347,7 +358,12 @@ impl Tabs {
                 let mut tab_x = x + PILL_LEAD;
                 for (i, k) in keys.iter().enumerate() {
                     if Some(k) == self.plate.to.as_ref() {
-                        span = Some((x, tab_x + targets[at + i] + PILL_PAD));
+                        // The tab with its pill's mark where both fit, else
+                        // the tab alone: a pill wider than the row, brought
+                        // in from its mark, left a tab at its end outside.
+                        let right = tab_x + targets[at + i] + PILL_PAD;
+                        let left = if right - x <= row { x } else { tab_x - PILL_PAD };
+                        span = Some((left, right));
                     }
                     tab_x += targets[at + i] + TAB_GAP;
                 }
@@ -357,7 +373,12 @@ impl Tabs {
             if let Some((left, right)) = span {
                 let at = self.scroll.offset();
                 let seen = -f32::from(at.x);
-                let to = if left < seen { left } else if right > seen + row { right - row } else { seen };
+                // A little past the tab, so the edge's fade is not over it.
+                let (left, right) = ((left - REVEAL_ROOM).max(0.), right + REVEAL_ROOM);
+                // Never past the row's end, which room past a last tab would
+                // have left empty.
+                let end = (x - PILL_GAP - row).max(0.);
+                let to = (if left < seen { left } else if right > seen + row { right - row } else { seen }).clamp(0., end);
                 if (to - seen).abs() > 0.5 {
                     self.glide.get_or_insert(Width::at_rest(seen, now)).head(to, now);
                 }
@@ -532,12 +553,13 @@ impl Tabs {
         let plate_bg = if dark { theme.secondary_active } else { theme.popover };
         let settled = Width::at_rest(TAB_MIN, Instant::now());
         let hints = self.hints;
+        // The tabs scroll as they need; the plus stands beside them, never
+        // scrolled away (`render`'s end).
         let mut row = h_flex()
             .id("tabs")
-            .flex_1()
+            .flex_shrink(1.)
             .min_w_0()
             .h_full()
-            .mx(px(STRIP_GAP))
             .pl(px(self.lead.map_or(0., |l| l.now())))
             .items_center()
             .gap(px(PILL_GAP))
@@ -723,8 +745,7 @@ impl Tabs {
         // The plus after the last tab: a new note, in the folder of the
         // note showing, its name asked first.
         let hover_bg = plate_bg.opacity(0.5);
-        row = row.child(
-            div()
+        let plus = div()
                 .id("tab-plus")
                 .size(px(PLUS_W))
                 .flex_shrink_0()
@@ -747,10 +768,60 @@ impl Tabs {
                         .justify_center()
                         .hover(move |s| s.bg(hover_bg))
                         .child(Icon::default().path("icons/plus.svg").with_size(px(14.)).text_color(theme.muted_foreground)),
-                ),
-        );
-        row.into_any_element()
+                );
+        // The tabs as wide as they are, as far as the room goes, and the
+        // plus right after them: once they fill the row it stays at its
+        // end and the tabs scroll under the fades beside it.
+        let ground = theme.background;
+        let tabs = div().relative().flex().flex_shrink(1.).min_w_0().h_full().child(row).child(side_fade(&self.scroll, ground, true)).child(side_fade(&self.scroll, ground, false));
+        h_flex()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            // From the left, the row runs from what stands before it and
+            // up to what stands after, its window's own gap between.
+            .when(!self.start, |d| d.mx(px(STRIP_GAP)))
+            .items_center()
+            .gap(px(PILL_GAP))
+            .child(tabs)
+            .when(!self.start, |d| d.child(plus))
+            .into_any_element()
     }
+}
+
+/// The room left past a tab brought into view, out from under the fade.
+const REVEAL_ROOM: f32 = 12.;
+
+/// How wide a scrolled edge's fade is, and how far from the end of the
+/// scroll it is whole.
+const FADE_W: f32 = 28.;
+const FADE_ROOM: f32 = 40.;
+
+/// An edge of the tabs fading into the bar's ground while tabs stand
+/// past it, coming in as they do: a pill cut by the row's edge read as a
+/// hard line.
+fn side_fade(handle: &ScrollHandle, ground: Hsla, left: bool) -> AnyElement {
+    let handle = handle.clone();
+    canvas(
+        move |_, _, _| {
+            let (at, most) = (-f32::from(handle.offset().x), f32::from(handle.max_offset().x));
+            let t = ((if left { at } else { most - at }) / FADE_ROOM).clamp(0., 1.);
+            t * t * (3. - 2. * t)
+        },
+        move |bounds, strength, window, _| {
+            if strength <= 0. {
+                return;
+            }
+            let (from, to) = if left { (ground.opacity(strength), ground.opacity(0.)) } else { (ground.opacity(0.), ground.opacity(strength)) };
+            window.paint_quad(fill(bounds, linear_gradient(90., linear_color_stop(from, 0.), linear_color_stop(to, 1.))));
+        },
+    )
+    .absolute()
+    .top_0()
+    .bottom_0()
+    .w(px(FADE_W))
+    .map(|d| if left { d.left_0() } else { d.right_0() })
+    .into_any_element()
 }
 
 /// The number ⌘ and a digit goes to a tab with (`go_tab`), on a small

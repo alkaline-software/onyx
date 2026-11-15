@@ -467,15 +467,6 @@
     "de": "Exportieren",
     "es": "Exportar"
   },
-  "Export (⇧⌘E)": {
-    "zh-Hans": "导出 (⇧⌘E)",
-    "zh-Hant": "匯出 (⇧⌘E)",
-    "ja": "書き出す (⇧⌘E)",
-    "ko": "내보내기 (⇧⌘E)",
-    "fr": "Exporter (⇧⌘E)",
-    "de": "Exportieren (⇧⌘E)",
-    "es": "Exportar (⇧⌘E)"
-  },
   "Exported {name}": {
     "zh-Hans": "已导出 {name}",
     "zh-Hant": "已匯出 {name}",
@@ -1196,14 +1187,14 @@
     "de": "Notiz öffnen",
     "es": "Abrir nota"
   },
-  "Open Vault…": {
-    "zh-Hans": "打开仓库…",
-    "zh-Hant": "打開儲存庫…",
-    "ja": "保管庫を開く…",
-    "ko": "보관소 열기…",
-    "fr": "Ouvrir un coffre…",
-    "de": "Tresor öffnen…",
-    "es": "Abrir una bóveda…"
+  "Open Folder as Vault…": {
+    "zh-Hans": "将文件夹作为仓库打开…",
+    "zh-Hant": "將檔案夾作為儲存庫打開…",
+    "ja": "フォルダを保管庫として開く…",
+    "ko": "폴더를 보관소로 열기…",
+    "fr": "Ouvrir un dossier comme coffre…",
+    "de": "Ordner als Tresor öffnen…",
+    "es": "Abrir carpeta como bóveda…"
   },
   "Open folder": {
     "zh-Hans": "打开文件夹",
@@ -1672,24 +1663,6 @@
     "fr": "Trier de Z à A",
     "de": "Von Z bis A sortieren",
     "es": "Ordenar de Z a A"
-  },
-  "Source": {
-    "zh-Hans": "源代码",
-    "zh-Hant": "原始碼",
-    "ja": "ソース",
-    "ko": "소스",
-    "fr": "Source",
-    "de": "Quelltext",
-    "es": "Código fuente"
-  },
-  "Source (⌘⇧S)": {
-    "zh-Hans": "源代码 (⌘⇧S)",
-    "zh-Hant": "原始碼 (⌘⇧S)",
-    "ja": "ソース (⌘⇧S)",
-    "ko": "소스 (⌘⇧S)",
-    "fr": "Source (⌘⇧S)",
-    "de": "Quelltext (⌘⇧S)",
-    "es": "Código fuente (⌘⇧S)"
   },
   "Spanish": {
     "zh-Hans": "西班牙语",
@@ -2258,15 +2231,6 @@
     "de": "Terminal",
     "es": "Terminal"
   },
-  "Terminal (⌃`)": {
-    "zh-Hans": "终端 (⌃`)",
-    "zh-Hant": "終端機 (⌃`)",
-    "ja": "ターミナル (⌃`)",
-    "ko": "터미널 (⌃`)",
-    "fr": "Terminal (⌃`)",
-    "de": "Terminal (⌃`)",
-    "es": "Terminal (⌃`)"
-  },
   "Copied": {
     "zh-Hans": "已拷贝",
     "zh-Hant": "已拷貝",
@@ -2501,15 +2465,6 @@
     "de": "Eine andere App belegt diesen Kurzbefehl.",
     "es": "Otra app usa este atajo."
   },
-  "Auto-Hide Window": {
-    "zh-Hans": "自动隐藏窗口",
-    "zh-Hant": "自動隱藏視窗",
-    "ja": "ウインドウを自動的に隠す",
-    "ko": "윈도우 자동으로 가리기",
-    "fr": "Masquer la fenêtre automatiquement",
-    "de": "Fenster automatisch ausblenden",
-    "es": "Ocultar la ventana automáticamente"
-  },
   "Avatar": {
     "zh-Hans": "头像",
     "zh-Hant": "頭像",
@@ -2600,15 +2555,6 @@
     "de": "Symbol und Farbe…",
     "es": "Icono y color…"
   },
-  "Keep Window Open": {
-    "zh-Hans": "保持窗口打开",
-    "zh-Hant": "保持視窗打開",
-    "ja": "ウインドウを開いたままにする",
-    "ko": "윈도우 열어 두기",
-    "fr": "Garder la fenêtre ouverte",
-    "de": "Fenster geöffnet lassen",
-    "es": "Mantener la ventana abierta"
-  },
   "Login Items did not take Onyx: {why}": {
     "zh-Hans": "登录项未能添加 Onyx：{why}",
     "zh-Hant": "登入項目未能加入 Onyx：{why}",
@@ -2671,15 +2617,6 @@
     "fr": "Ouvrir à l’ouverture de session",
     "de": "Bei der Anmeldung öffnen",
     "es": "Abrir al iniciar sesión"
-  },
-  "Open in Onyx": {
-    "zh-Hans": "在 Onyx 中打开",
-    "zh-Hant": "在 Onyx 中打開",
-    "ja": "Onyx で開く",
-    "ko": "Onyx에서 열기",
-    "fr": "Ouvrir dans Onyx",
-    "de": "In Onyx öffnen",
-    "es": "Abrir en Onyx"
   },
   "Press keys…": {
     "zh-Hans": "请按键…",
@@ -2815,5 +2752,95 @@
     "fr": "Répartir les colonnes uniformément",
     "de": "Spalten gleichmäßig verteilen",
     "es": "Distribuir columnas uniformemente"
+  },
+  "Markdown Source": {
+    "zh-Hans": "Markdown 源码",
+    "zh-Hant": "Markdown 原始碼",
+    "ja": "Markdown ソース",
+    "ko": "Markdown 소스",
+    "fr": "Source Markdown",
+    "de": "Markdown-Quelltext",
+    "es": "Código Markdown"
+  },
+  "Markdown Source (⌘⇧M)": {
+    "zh-Hans": "Markdown 源码 (⌘⇧M)",
+    "zh-Hant": "Markdown 原始碼 (⌘⇧M)",
+    "ja": "Markdown ソース (⌘⇧M)",
+    "ko": "Markdown 소스 (⌘⇧M)",
+    "fr": "Source Markdown (⌘⇧M)",
+    "de": "Markdown-Quelltext (⌘⇧M)",
+    "es": "Código Markdown (⌘⇧M)"
+  },
+  "Shell Terminal": {
+    "zh-Hans": "Shell 终端",
+    "zh-Hant": "Shell 終端機",
+    "ja": "シェルターミナル",
+    "ko": "셸 터미널",
+    "fr": "Terminal shell",
+    "de": "Shell-Terminal",
+    "es": "Terminal de shell"
+  },
+  "Shell Terminal (⌘⇧S)": {
+    "zh-Hans": "Shell 终端 (⌘⇧S)",
+    "zh-Hant": "Shell 終端機 (⌘⇧S)",
+    "ja": "シェルターミナル (⌘⇧S)",
+    "ko": "셸 터미널 (⌘⇧S)",
+    "fr": "Terminal shell (⌘⇧S)",
+    "de": "Shell-Terminal (⌘⇧S)",
+    "es": "Terminal de shell (⌘⇧S)"
+  },
+  "New Folder (⌘⇧N)": {
+    "zh-Hans": "新建文件夹 (⌘⇧N)",
+    "zh-Hant": "新增檔案夾 (⌘⇧N)",
+    "ja": "新規フォルダ (⌘⇧N)",
+    "ko": "새로운 폴더 (⌘⇧N)",
+    "fr": "Nouveau dossier (⌘⇧N)",
+    "de": "Neuer Ordner (⌘⇧N)",
+    "es": "Nueva carpeta (⌘⇧N)"
+  },
+  "Auto-Hide Window (⌘⇧P)": {
+    "zh-Hans": "自动隐藏窗口 (⌘⇧P)",
+    "zh-Hant": "自動隱藏視窗 (⌘⇧P)",
+    "ja": "ウインドウを自動的に隠す (⌘⇧P)",
+    "ko": "윈도우 자동으로 가리기 (⌘⇧P)",
+    "fr": "Masquer la fenêtre automatiquement (⌘⇧P)",
+    "de": "Fenster automatisch ausblenden (⌘⇧P)",
+    "es": "Ocultar la ventana automáticamente (⌘⇧P)"
+  },
+  "Open in Onyx (⌘⇧O)": {
+    "zh-Hans": "在 Onyx 中打开 (⌘⇧O)",
+    "zh-Hant": "在 Onyx 中打開 (⌘⇧O)",
+    "ja": "Onyx で開く (⌘⇧O)",
+    "ko": "Onyx에서 열기 (⌘⇧O)",
+    "fr": "Ouvrir dans Onyx (⌘⇧O)",
+    "de": "In Onyx öffnen (⌘⇧O)",
+    "es": "Abrir en Onyx (⌘⇧O)"
+  },
+  "Pin the Window (⌘⇧P)": {
+    "zh-Hans": "固定窗口 (⌘⇧P)",
+    "zh-Hant": "固定視窗 (⌘⇧P)",
+    "ja": "ウインドウを固定 (⌘⇧P)",
+    "ko": "창 고정 (⌘⇧P)",
+    "fr": "Épingler la fenêtre (⌘⇧P)",
+    "de": "Fenster anheften (⌘⇧P)",
+    "es": "Fijar la ventana (⌘⇧P)"
+  },
+  "Vaults": {
+    "zh-Hans": "仓库",
+    "zh-Hant": "儲存庫",
+    "ja": "保管庫",
+    "ko": "보관소",
+    "fr": "Coffres",
+    "de": "Tresore",
+    "es": "Bóvedas"
+  },
+  "Rename Vault": {
+    "zh-Hans": "重命名仓库",
+    "zh-Hant": "重新命名儲存庫",
+    "ja": "保管庫の名前を変更",
+    "ko": "보관소 이름 변경",
+    "fr": "Renommer le coffre",
+    "de": "Tresor umbenennen",
+    "es": "Renombrar bóveda"
   }
 }

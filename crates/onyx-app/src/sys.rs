@@ -812,16 +812,24 @@ pub fn record_keys(_on: bool) {}
 /// it (MiniNotes' `StatusBarController`). It is made borderless: gpui's
 /// panel is titled, and the system drew a titled window's rim and backing
 /// round the whole of it, the arrow's strip too, with a square shadow.
-/// Borderless, its shape and its shadow are what it draws.
+/// Borderless, its shape and its shadow are what it draws, the shadow in
+/// room the window keeps round the card.
 #[cfg(target_os = "macos")]
 pub fn float_note_window(window: &gpui::Window) {
     use objc2_app_kit::NSWindowStyleMask;
     let Some(view) = ns_view(window) else { return };
     if let Some(native) = view.window() {
+        // Unseen first, before the new style mask rebuilds its frame.
+        native.setAlphaValue(0.);
         native.setStyleMask(NSWindowStyleMask::Borderless | NSWindowStyleMask::NonactivatingPanel);
         native.setLevel(objc2_app_kit::NSFloatingWindowLevel);
         native.setOpaque(false);
-        native.setHasShadow(true);
+        // Its shadow is its own (`menubar::SHADE`): the system's for a
+        // window with the keyboard is deep, a popover's is light.
+        native.setHasShadow(false);
+        // Faded in from its first frame by its owner (`set_window_alpha`);
+        // the system's own motion for a window coming would run over that.
+        native.setAnimationBehavior(objc2_app_kit::NSWindowAnimationBehavior::None);
         // A new style mask rebuilds the window's frame and leaves the
         // window itself answering keys: gpui's view is made the one again,
         // or no key reaches the note while a click still does.
@@ -831,16 +839,16 @@ pub fn float_note_window(window: &gpui::Window) {
 #[cfg(not(target_os = "macos"))]
 pub fn float_note_window(_window: &gpui::Window) {}
 
-/// The system's shadow cast again from what the window now draws, for a
-/// window of its own shape (the note's, with its arrow).
+/// How much of a window shows, 0 to 1, as the system composes it: the
+/// whole window, its shadow with it, with nothing drawn again.
 #[cfg(target_os = "macos")]
-pub fn reshape_shadow(window: &gpui::Window) {
+pub fn set_window_alpha(window: &gpui::Window, alpha: f32) {
     if let Some(native) = ns_view(window).and_then(|v| v.window()) {
-        native.invalidateShadow();
+        native.setAlphaValue(alpha.clamp(0., 1.) as f64);
     }
 }
 #[cfg(not(target_os = "macos"))]
-pub fn reshape_shadow(_window: &gpui::Window) {}
+pub fn set_window_alpha(_window: &gpui::Window, _alpha: f32) {}
 
 /// Whether Onyx opens when the person logs in, as System Settings' Login
 /// Items has it: the system keeps it, and Onyx never writes it down.

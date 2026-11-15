@@ -359,6 +359,8 @@ upstream revision finds them.
 
 72. `crates/base/src/input/base/state.rs` (`SplitRuns`, `set_split_runs`), `crates/base/src/input/base/element.rs` (`layout_lines`): a field may be given a function that cuts each line's runs again before it is shaped. Onyx sets a note's Chinese, Japanese and Korean in one face and the rest in another, and its title field draws its name as the note draws its words.
 
+73. `crates/base/src/input/base/state.rs` (`scroll_room`): how far an editor is scrolled down and how far it can go, read from outside it. Onyx fades the source pane's top and bottom edges as its page's, by how much is left to scroll past each.
+
 ## Updating
 
 Check out the new upstream revision, copy the four crates over these, re-apply
