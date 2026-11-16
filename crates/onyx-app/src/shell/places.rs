@@ -1,10 +1,13 @@
-//! Before a vault is shown: one page with the vault page's look, and a
-//! card in the sidebar where the vault's tree stands. The page has the
-//! picture and the greeting of the vault's own page and, under them, the
-//! container's vaults and New Vault…, or with no container New
-//! Container…; Choose Container… with either. The card lists the
-//! containers used before as folders, each opening to its vaults. Close
-//! Vault comes back here.
+//! Before a vault is shown, laid out as the vault itself is, so each level
+//! reads the same: the sidebar's card holds what the open thing holds,
+//! under a row naming it, and the button under the card names the open
+//! thing and lists where else to go, with a way to close it. With a
+//! container open, the card is its vaults under its row, with New Vault…,
+//! and the button is the container's: the containers used before, Choose
+//! Container… and Close Container. With none, the card is the containers
+//! used before, and there is no button. The page has the picture and the
+//! greeting of the vault's own page and what can be made next: New
+//! Vault…, or with no container Choose Container….
 
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
@@ -17,13 +20,8 @@ use gpui_component::{h_flex, v_flex, ActiveTheme as _, Icon, Sizable as _};
 use super::library::{row_tool, vault_list, vault_name};
 use super::{edge_fade, greeting, Shell, LIST_TOP, TREE_ROW_H};
 use crate::i18n::t;
-use crate::widgets::{kbd_hint, swallow_click, FOLD_ANIM};
-
-/// How many vaults the page offers on pills; the card lists them all.
-const PAGE_VAULTS: usize = 5;
-/// How far a vault's row stands in from its container's, as a tree's
-/// level does.
-const DEPTH: f32 = 14.;
+use crate::menu::Entry;
+use crate::widgets::{choice_pill, kbd_hint, swallow_click, Press};
 
 /// A container's path as a person reads it, a step each
 /// (`sys::short_path`: iCloud Drive and the home folder by name).
@@ -48,208 +46,120 @@ fn container_name(dir: &Path) -> (String, String) {
     (name, steps.pop().unwrap_or_default())
 }
 
+fn container_label(dir: &Path) -> String {
+    match container_name(dir) {
+        (name, parent) if parent.is_empty() => name,
+        (name, parent) => format!("{name} · {parent}"),
+    }
+}
+
 impl Shell {
-    /// The page: the picture and the greeting, as the vault's page has
-    /// them, and under them on pills of one width, a long name cut short,
-    /// the container's vaults (the last shown first) and New Vault…, or
-    /// with no container New Container…; Choose Container… with either.
+    /// The page: the picture and the greeting and, on the vault page's
+    /// pills, what can be made next: New Vault…, or with no container
+    /// Choose Container….
     pub(crate) fn render_place_page(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
         let face = self.look.text_family.clone();
-        // The vault page's pills (`render_no_note`).
-        let pill = |id: ElementId, icon: &'static str, label: SharedString, theme: &gpui_component::Theme| {
-            let (ink, edge, hover) = (theme.foreground, theme.foreground.opacity(0.16), theme.foreground.opacity(0.06));
-            h_flex()
-                .id(id)
-                .w(px(260.))
-                .h(px(34.))
-                .px(px(14.))
-                .gap(px(8.))
-                .flex_shrink_0()
-                .items_center()
-                .rounded_full()
-                .text_size(px(13.))
-                .text_color(ink)
-                .border_1()
-                .border_color(edge)
-                .cursor_pointer()
-                .hover(move |s| s.bg(hover))
-                .child(Icon::default().path(icon).with_size(px(14.)).text_color(ink))
-                .child(div().flex_1().min_w_0().truncate().child(label))
+        // As `render_no_note` has them.
+        let choice = |id: &'static str, icon: &'static str, label: &str, theme: &gpui_component::Theme| choice_pill(id, icon, label.to_string(), Press::Quiet, false, theme).min_w(px(240.)).h(px(34.)).px(px(14.)).gap(px(8.)).text_size(px(13.)).child(div().flex_1());
+        let pill = match self.container() {
+            Some(_) => choice("home-new-vault", "icons/plus.svg", t("New Vault…"), &theme).on_click(cx.listener(|this, _, window, cx| {
+                swallow_click(window, cx);
+                this.start_new_vault(window, cx)
+            })),
+            None => choice("home-choose-container", "icons/folder-open.svg", t("Choose Container…"), &theme).child(kbd_hint("⌘⇧O", &theme)).on_click(cx.listener(|this, _, window, cx| {
+                swallow_click(window, cx);
+                this.choose_container(window, cx)
+            })),
         };
-        let head = v_flex().items_center().gap(px(12.)).child(Self::home_figure(&self.home_fig, &theme, cx.entity_id())).child(div().text_size(px(34.)).font_family(face).child(greeting(&self.user_name)));
-        let mut choices = v_flex().gap(px(8.));
-        match self.container() {
-            Some(dir) => {
-                let vaults = vault_list(Some(&dir), None);
-                let listed = !vaults.is_empty();
-                choices = choices.children(vaults.into_iter().take(PAGE_VAULTS).enumerate().map(|(i, p)| {
-                    pill(("place-vault", i).into(), "icons/book-open.svg", vault_name(&p).into(), &theme)
-                        .on_mouse_down(MouseButton::Right, cx.listener({
-                            let p = p.clone();
-                            move |this, ev: &MouseDownEvent, window, cx| {
-                                swallow_click(window, cx);
-                                this.show_recent_menu(p.clone(), ev.position, cx);
-                            }
-                        }))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            swallow_click(window, cx);
-                            this.show_vault(p.clone(), window, cx)
-                        }))
-                }));
-                choices = choices.child(pill("place-new-vault".into(), "icons/plus.svg", t("New Vault…").into(), &theme).when(listed, |d| d.mt(px(8.))).on_click(cx.listener(|this, _, window, cx| {
-                    swallow_click(window, cx);
-                    this.start_new_vault(window, cx)
-                })));
-            }
-            None => {
-                choices = choices.child(pill("place-new-container".into(), "icons/plus.svg", t("New Container…").into(), &theme).on_click(cx.listener(|this, _, window, cx| {
-                    swallow_click(window, cx);
-                    this.start_new_container(window, cx)
-                })));
-            }
-        }
-        choices = choices.child(pill("place-choose-container".into(), "icons/folder-open.svg", t("Choose Container…").into(), &theme).child(kbd_hint("⌘⇧O", &theme)).on_click(cx.listener(|this, _, window, cx| {
-            swallow_click(window, cx);
-            this.choose_container(window, cx)
-        })));
-        v_flex().size_full().items_center().justify_center().pb(px(48.)).gap(px(26.)).child(head).child(choices).into_any_element()
+        v_flex()
+            .size_full()
+            .items_center()
+            .justify_center()
+            .pb(px(48.))
+            .gap(px(26.))
+            .child(v_flex().items_center().gap(px(12.)).child(Self::home_figure(&self.home_fig, &theme, cx.entity_id())).child(div().text_size(px(34.)).font_family(face).child(greeting(&self.user_name))))
+            .child(v_flex().gap(px(8.)).child(pill))
+            .into_any_element()
     }
 
-    /// Whether a container's vaults show under it: the one in use opens
-    /// to begin with and the rest are shut, each turned by a press.
-    fn place_open(&self, dir: &Path) -> bool {
-        (self.container().as_deref() == Some(dir)) != self.place_turned.contains(dir)
-    }
-
-    /// The sidebar's card, framed as the vault's: Containers at its top
-    /// with New Container… and Choose Container… always at its right, and
-    /// under it the containers used before as a tree's folders, each by
-    /// its own name with the folder it is in muted at the right. A press
-    /// on a container opens or shuts it, its vaults under it a level in;
-    /// under the pointer it has New Vault…, made in it, as a folder has
-    /// its own buttons. A press on a vault shows it, its container taken.
+    /// The sidebar before a vault, framed as the vault's: the card, a row
+    /// naming what it lists with its buttons always at the right, the list
+    /// under it; then the container's button, as the vault's stands under
+    /// its tree. A press on a row goes into it; a right click gives Copy
+    /// Path and Reveal in Finder.
     pub(crate) fn render_place_card(&self, ground: Hsla, theme: &gpui_component::Theme, cx: &mut Context<Self>) -> AnyElement {
+        let container = self.container();
         let (lit, muted) = (theme.foreground, theme.muted_foreground);
         let wash = if theme.mode.is_dark() { lit.opacity(0.08) } else { lit.opacity(0.06) };
-        let row = move |id: ElementId, depth: usize| {
+        // A tree's row at its top level: the chevrons' column, the mark, the name.
+        let row = move |id: ElementId, icon: &'static str, name: SharedString, path: PathBuf, cx: &mut Context<Self>| {
             h_flex()
                 .id(id)
                 .flex_shrink_0()
                 .h(px(TREE_ROW_H))
-                .pl(px(8. + DEPTH * depth as f32))
-                .pr(px(4.))
+                .pl(px(8.))
+                .pr(px(8.))
                 .gap(px(6.))
                 .items_center()
                 .rounded(px(7.))
                 .text_size(px(13.))
                 .cursor_pointer()
                 .hover(move |s| s.bg(wash))
+                .on_mouse_down(MouseButton::Right, cx.listener(move |this, ev: &MouseDownEvent, window, cx| {
+                    swallow_click(window, cx);
+                    this.show_recent_menu(path.clone(), ev.position, cx);
+                }))
+                .child(div().w(px(12.)).flex_shrink_0())
+                .child(Icon::default().path(icon).with_size(px(15.)).text_color(muted))
+                .child(div().flex_1().min_w_0().truncate().text_color(lit).child(name))
         };
-        let mut rows: Vec<AnyElement> = Vec::new();
-        for dir in self.known_containers() {
-            let open = self.place_open(&dir);
-            let (name, parent) = container_name(&dir);
-            let hovered = self.hover_row.as_ref() == Some(&dir);
-            rows.push(
-                row(ElementId::Name(format!("place-container-{}", dir.display()).into()), 0)
-                    .on_hover(cx.listener({
-                        let dir = dir.clone();
-                        move |this, on: &bool, _, cx| {
-                            if *on {
-                                this.hover_row = Some(dir.clone());
-                            } else if this.hover_row.as_ref() == Some(&dir) {
-                                this.hover_row = None;
-                            }
-                            cx.notify();
-                        }
-                    }))
-                    .on_mouse_down(MouseButton::Right, cx.listener({
-                        let dir = dir.clone();
-                        move |this, ev: &MouseDownEvent, window, cx| {
-                            swallow_click(window, cx);
-                            this.show_recent_menu(dir.clone(), ev.position, cx);
-                        }
-                    }))
-                    .on_click(cx.listener({
-                        let dir = dir.clone();
-                        move |this, _, window, cx| {
-                            swallow_click(window, cx);
-                            if !this.place_turned.remove(&dir) {
-                                this.place_turned.insert(dir.clone());
-                            }
-                            cx.notify();
-                        }
-                    }))
-                    .child(div().w(px(12.)).flex_shrink_0().flex().justify_center().child(Icon::default().path(if open { "icons/chevron-down.svg" } else { "icons/chevron-right.svg" }).with_size(px(12.)).text_color(muted)))
-                    .child(Icon::default().path(container_icon(&dir)).with_size(px(15.)).text_color(muted))
-                    .child(div().flex_1().min_w_0().truncate().text_color(lit).child(name))
-                    .when(!hovered, |d| d.child(div().flex_shrink(1.).min_w_0().max_w(relative(0.45)).truncate().pr(px(4.)).text_size(px(12.)).text_color(muted).child(parent)))
-                    .when(hovered, |d| {
-                        let dir = dir.clone();
-                        d.child(row_tool(ElementId::Name(format!("place-new-vault-{}", dir.display()).into()), "icons/plus.svg", t("New Vault…").into(), theme).on_click(cx.listener(move |this, _, window, cx| {
-                            swallow_click(window, cx);
-                            this.use_container(dir.clone(), window, cx);
-                            this.start_new_vault(window, cx);
-                        })))
-                    })
-                    .into_any_element(),
-            );
-            // Its vaults, in a box that runs up to their height and back
-            // as a tree's folder does (`Motion::presence`).
-            let key = format!("place-fold-{}", dir.display());
-            let moving = self.motion.presence(&key, open, cx);
-            if !open && moving.is_none() {
-                continue;
-            }
-            let vaults: Vec<AnyElement> = vault_list(Some(&dir), None)
-                .into_iter()
-                .map(|p| {
-                    let container = dir.clone();
-                    let name = vault_name(&p);
-                    row(ElementId::Name(format!("place-vault-row-{}", p.display()).into()), 1)
-                        .on_mouse_down(MouseButton::Right, cx.listener({
-                            let p = p.clone();
-                            move |this, ev: &MouseDownEvent, window, cx| {
+        let (head_icon, head_name, tool, rows): (&'static str, SharedString, Stateful<Div>, Vec<AnyElement>) = match &container {
+            Some(dir) => {
+                let tool = row_tool("place-tool-vault", "icons/plus.svg", t("New Vault…").into(), theme).on_click(cx.listener(|this, _, window, cx| {
+                    swallow_click(window, cx);
+                    this.start_new_vault(window, cx)
+                }));
+                let rows = vault_list(Some(dir), None)
+                    .into_iter()
+                    .map(|p| {
+                        let id = ElementId::Name(format!("place-vault-{}", p.display()).into());
+                        row(id, "icons/book-open.svg", vault_name(&p).into(), p.clone(), cx)
+                            .on_click(cx.listener(move |this, _, window, cx| {
                                 swallow_click(window, cx);
-                                this.show_recent_menu(p.clone(), ev.position, cx);
-                            }
-                        }))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            swallow_click(window, cx);
-                            this.use_container(container.clone(), window, cx);
-                            this.show_vault(p.clone(), window, cx)
-                        }))
-                        .child(div().w(px(12.)).flex_shrink_0())
-                        .child(Icon::default().path("icons/book-open.svg").with_size(px(15.)).text_color(muted))
-                        .child(div().flex_1().min_w_0().truncate().text_color(lit).child(name))
-                        .into_any_element()
-                })
-                .collect();
-            let full = vaults.len() as f32 * TREE_ROW_H;
-            let group = v_flex().flex_shrink_0().overflow_hidden().child(v_flex().flex_shrink_0().children(vaults));
-            rows.push(match moving {
-                Some((opening, serial)) => group
-                    .with_animation(ElementId::NamedInteger(key.into(), serial as u64), Animation::new(FOLD_ANIM).with_easing(ease_out_quint()), move |d, t| {
-                        let t = if opening { t } else { 1. - t };
-                        d.h(px(full * t)).opacity(t)
+                                this.show_vault(p.clone(), window, cx)
+                            }))
+                            .into_any_element()
                     })
-                    .into_any_element(),
-                None => group.into_any_element(),
-            });
-        }
+                    .collect();
+                let (name, _) = container_name(dir);
+                (container_icon(dir), name.into(), tool, rows)
+            }
+            None => {
+                let tool = row_tool("place-tool-choose", "icons/folder-open.svg", t("Choose Container…").into(), theme).on_click(cx.listener(|this, _, window, cx| {
+                    swallow_click(window, cx);
+                    this.choose_container(window, cx)
+                }));
+                let rows = self
+                    .known_containers()
+                    .into_iter()
+                    .map(|dir| {
+                        let (name, parent) = container_name(&dir);
+                        let id = ElementId::Name(format!("place-container-{}", dir.display()).into());
+                        row(id, container_icon(&dir), name.into(), dir.clone(), cx)
+                            .child(div().flex_shrink(1.).min_w_0().max_w(relative(0.45)).truncate().text_size(px(12.)).text_color(muted).child(parent))
+                            .on_click(cx.listener(move |this, _, window, cx| {
+                                swallow_click(window, cx);
+                                this.use_container(dir.clone(), window, cx)
+                            }))
+                            .into_any_element()
+                    })
+                    .collect();
+                ("icons/box.svg", t("Containers").into(), tool, rows)
+            }
+        };
         self.scrollers.name(&self.place_scroll);
-        let tools = h_flex()
-            .flex_shrink_0()
-            .gap(px(2.))
-            .child(row_tool("place-tool-new", "icons/plus.svg", t("New Container…").into(), theme).on_click(cx.listener(|this, _, window, cx| {
-                swallow_click(window, cx);
-                this.start_new_container(window, cx)
-            })))
-            .child(row_tool("place-tool-choose", "icons/folder-open.svg", t("Choose Container…").into(), theme).on_click(cx.listener(|this, _, window, cx| {
-                swallow_click(window, cx);
-                this.choose_container(window, cx)
-            })));
+        // As the vault's own row over its tree (`render_vault_row`).
         let head = h_flex()
             .flex_shrink_0()
             .mx(px(8.))
@@ -260,9 +170,9 @@ impl Shell {
             .gap(px(6.))
             .items_center()
             .text_size(px(13.))
-            .child(div().w(px(12.)).flex_shrink_0().flex().justify_center().child(Icon::default().path("icons/box.svg").with_size(px(15.)).text_color(muted)))
-            .child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::SEMIBOLD).text_color(lit).child(t("Containers")))
-            .child(tools);
+            .child(div().w(px(12.)).flex_shrink_0().flex().justify_center().child(Icon::default().path(head_icon).with_size(px(15.)).text_color(muted)))
+            .child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::SEMIBOLD).text_color(lit).child(head_name))
+            .child(tool);
         let list = div()
             .relative()
             .flex_1()
@@ -285,7 +195,75 @@ impl Shell {
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .child(head)
             .child(list);
-        v_flex().flex_1().min_h_0().child(card).into_any_element()
+        v_flex()
+            .flex_1()
+            .min_h_0()
+            .child(card)
+            .when_some(container, |d, dir| d.child(self.render_container_button(&dir, ground, theme, cx)))
+            .into_any_element()
+    }
+
+    /// The container's button under the card, made as the vault's
+    /// (`render_vaults_button`): its mark and name and the arrows of a
+    /// list. A press lists, rising from it as wide as itself, the
+    /// containers used before (this one ticked), Choose Container… and
+    /// Close Container; a press while it shows puts it away.
+    fn render_container_button(&self, dir: &Path, ground: Hsla, theme: &gpui_component::Theme, cx: &mut Context<Self>) -> AnyElement {
+        let (lit, muted, edge) = (theme.foreground, theme.muted_foreground, theme.foreground.opacity(0.1));
+        let hover = ground.blend(theme.foreground.opacity(0.05));
+        let listed = self.menus.open.as_ref().is_some_and(|m| m.what == "container");
+        let place = self.vaults_at.clone();
+        let (name, _) = container_name(dir);
+        h_flex()
+            .id("container-button")
+            .relative()
+            .flex_shrink_0()
+            .mx(px(8.))
+            .mb(px(10.))
+            .h(px(36.))
+            .px(px(10.))
+            .gap(px(10.))
+            .items_center()
+            .rounded(px(10.))
+            .border_1()
+            .border_color(edge)
+            .bg(if listed { hover } else { ground })
+            .text_size(px(13.))
+            .cursor_pointer()
+            .hover(move |s| s.bg(hover))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(|this, _, window, cx| {
+                swallow_click(window, cx);
+                if this.menus.open.as_ref().is_some_and(|m| m.what == "container") {
+                    this.menus.close(cx);
+                    cx.notify();
+                    return;
+                }
+                let b = this.vaults_at.get();
+                this.show_containers_at(point(b.origin.x, b.origin.y - px(6.)), Some(b.size.width), cx);
+            }))
+            .child(canvas(move |b, _, _| place.set(b), |_, _, _, _| ()).absolute().top_0().left_0().size_full())
+            .child(div().w(px(22.)).flex().justify_center().child(Icon::default().path(container_icon(dir)).with_size(px(15.)).text_color(theme.primary)))
+            .child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::SEMIBOLD).text_color(lit).child(name))
+            .child(Icon::default().path("icons/chevrons-up-down.svg").with_size(px(12.)).text_color(muted))
+            .into_any_element()
+    }
+
+    fn show_containers_at(&mut self, at: Point<Pixels>, width: Option<Pixels>, cx: &mut Context<Self>) {
+        let open = self.container();
+        let mut entries: Vec<Entry> = self
+            .known_containers()
+            .into_iter()
+            .map(|dir| {
+                let chosen = open.as_ref() == Some(&dir);
+                Entry::Choice { id: dir.to_string_lossy().to_string().into(), icon: container_icon(&dir), label: container_label(&dir).into(), picture: false, chosen }
+            })
+            .collect();
+        entries.push(Entry::Rule);
+        entries.push(Entry::choice("choose", "icons/folder-open.svg", t("Choose Container…")));
+        entries.push(Entry::choice("close", "icons/close.svg", t("Close Container")));
+        self.menus.show_above("container", at, width, entries);
+        cx.notify();
     }
 
     /// The containers used before that are still there, the last first,

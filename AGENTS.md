@@ -14,6 +14,7 @@ Onyx is held to the bar of the work that wins Awwwards, the Webbys and the FWA (
 
 - **Nothing jumps.** What appears, goes, opens, closes, grows or moves does so over a moment, with the pattern its neighbors use (`widgets.rs`, `menu.rs`, `shell.rs`). No pause at the end of a motion.
 - **Words are few.** A row's name says what it is; a line under it only where the name does not say it all. No sentence explaining a concept and no hint in an empty list.
+- **No square corner inside a round one.** gpui clips to a rectangle: a lit row, a band or a picture at a rounded card's corner rounds its own corners there (`docs/design.md`, Rules).
 - **Look before saying it is done:** in both appearances, in a long language, and in a narrow window (`docs/probing.md`).
 
 ## Rules that hold everywhere
@@ -75,7 +76,7 @@ crates/onyx-app/           the window
   src/main.rs                menus, key bindings, the main window, the probe's variables
   src/shell.rs               the frame, the sidebar (the vault's tree), the strip, the vault's page, a note's life, the tabs
   src/shell/library.rs       the vault's assets: the sidebar's stack of cards, the Assets card, an asset's tab, a rename that follows its links
-  src/shell/places.rs        before a vault is shown: the page and the sidebar's card of containers and their vaults
+  src/shell/places.rs        before a vault is shown: the page, the card of the container's vaults or of the containers, the container's button
   src/tabs.rs                the tabs' drawing and motion, for either window (TabHost): a folder's on one pill, the plate, the widths
   src/export.rs              Export: the sheet, its formats, its preview, the file; printing
   src/media.rs               a video or a sound in the preview, played by the system's web view

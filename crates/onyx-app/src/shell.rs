@@ -39,7 +39,7 @@ use crate::tabs::{Item as TabItem, Tabs};
 use crate::ui_state::{Rect, UiState};
 use crate::widgets::{choice_pill, float_shadow, kbd_hint, key_text, page_in, small_pill, swallow_click, tip, Fig, Motion, Press, FOLD_ANIM, SLIDE};
 
-actions!(onyx, [ExportPdf, PrintNote, ToggleSidebar, OpenSettings, Escape, NewNote, NewFolder, NewVault, CloseVault, NewContainer, ChooseContainer, ToggleSource, ToggleTerminal, ToggleSearch, FindInNote, FindNext, FindPrev, CloseTab, ReopenTab, ZoomIn, ZoomOut, ZoomReset, Tab1, Tab2, Tab3, Tab4, Tab5, Tab6, Tab7, Tab8, Tab9]);
+actions!(onyx, [ExportPdf, PrintNote, ToggleSidebar, OpenSettings, Escape, NewNote, NewFolder, NewVault, CloseVault, ChooseContainer, CloseContainer, ToggleSource, ToggleTerminal, ToggleSearch, FindInNote, FindNext, FindPrev, CloseTab, ReopenTab, ZoomIn, ZoomOut, ZoomReset, Tab1, Tab2, Tab3, Tab4, Tab5, Tab6, Tab7, Tab8, Tab9]);
 
 /// The key context of the main window.
 pub const KEY_CONTEXT: &str = "Shell";
@@ -198,22 +198,8 @@ struct Tab {
     source: Option<Entity<SourcePane>>,
 }
 
-/// Where a new vault goes: a folder named for it under iCloud Drive's
-/// `Onyx` folder, synced by the system, or a folder of the person's own.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Place {
-    Cloud,
-    Folder,
-}
-
-/// The new-vault sheet while it is up, or the new container's: for a
-/// container, the place chosen, and the folder it is when the place is a
-/// folder of the person's own.
-struct NewVaultSheet {
-    container: bool,
-    place: Place,
-    folder: PathBuf,
-}
+/// The new-vault sheet while it is up: its name is in `vault_input`.
+struct NewVaultSheet;
 
 pub struct Shell {
     pub(crate) cfg: Config,
@@ -234,10 +220,6 @@ pub struct Shell {
     side_scroll: ScrollHandle,
     /// The list on the sidebar's card before a vault is shown (`places.rs`).
     place_scroll: ScrollHandle,
-    /// The new container's sheet, which has no field, for its ↩.
-    place_focus: FocusHandle,
-    /// The containers on the card turned from how they begin, open or shut (`places.rs`).
-    place_turned: HashSet<PathBuf>,
     vault: Option<Vault>,
     /// The open notes, in the row's order: a folder's together.
     tabs: Vec<Tab>,
@@ -571,8 +553,6 @@ impl Shell {
             side_drag: false,
             side_scroll: ScrollHandle::new(),
             place_scroll: ScrollHandle::new(),
-            place_focus: cx.focus_handle(),
-            place_turned: HashSet::new(),
             vault: None,
             tabs: Vec::new(),
             shown: None,
@@ -942,11 +922,12 @@ impl Shell {
         cx.notify();
     }
 
-    /// Ask the system for the container: a new one, or one with
-    /// folders in it already, each of which is then a vault as it is.
-    /// A vault shown from another container gives way to the landing
-    /// page, which lists the new one's vaults.
+    /// Ask the system for the container, in its own folder panel: a
+    /// folder there already, its folders each a vault as they are, or a
+    /// new one made with the panel's New Folder. There is no sheet of
+    /// Onyx's own for it: the panel goes through every folder.
     pub(crate) fn choose_container(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.menus.close(cx);
         let rx = cx.prompt_for_paths(PathPromptOptions { files: false, directories: true, multiple: false, prompt: Some(t("Choose").into()) });
         cx.spawn_in(window, async move |this, cx| {
             let Ok(Ok(Some(paths))) = rx.await else { return };
@@ -970,8 +951,8 @@ impl Shell {
         let _ = Config::edit(move |c| c.app.container = path);
     }
 
-    /// A container taken, from the picker, the card or a new one made: a
-    /// vault shown from another gives way to the page before a vault.
+    /// A container taken, from the picker, the card or the container's
+    /// list: a vault shown from another closes.
     pub(crate) fn use_container(&mut self, dir: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         self.menus.close(cx);
         self.set_container(dir.clone());
@@ -981,7 +962,19 @@ impl Shell {
         cx.notify();
     }
 
-    /// Close Vault: back to the page before a vault, the container's vaults.
+    /// Close Container: the vault closed first, then the container, back
+    /// to the page with none. It stays among the containers used before.
+    fn close_container(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.menus.close(cx);
+        if self.vault.is_some() {
+            self.close_vault(window, cx);
+        }
+        self.cfg.app.container.clear();
+        let _ = Config::edit(|c| c.app.container.clear());
+        cx.notify();
+    }
+
+    /// Close Vault: back to the container's page, its vaults on the card.
     fn close_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.menus.close(cx);
         self.save_all(cx);
@@ -1002,14 +995,14 @@ impl Shell {
 
     // -- a new vault ------------------------------------------------------------
 
-    /// The new-vault sheet: a name, and where it goes. iCloud Drive is the
-    /// first choice where the machine has it, else the documents folder.
+    /// The new-vault sheet, its name alone: the vault goes in the
+    /// container. With no container, the container is asked for first.
     fn start_new_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.container().is_none() {
-            return self.start_new_container(window, cx);
+            return self.choose_container(window, cx);
         }
         self.menus.close(cx);
-        self.new_vault = Some(NewVaultSheet { container: false, place: Place::Folder, folder: PathBuf::new() });
+        self.new_vault = Some(NewVaultSheet);
         self.vault_input.update(cx, |i, cx| {
             i.set_value(t("Notes"), window, cx);
             i.select_all(window, cx);
@@ -1018,68 +1011,9 @@ impl Shell {
         cx.notify();
     }
 
-    /// The new container's sheet: where it goes, iCloud Drive first where
-    /// the machine has it, else an Onyx folder in Documents (Documents
-    /// itself would make each of its folders a vault).
-    fn start_new_container(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.menus.close(cx);
-        let place = if Self::cloud_place().is_some() { Place::Cloud } else { Place::Folder };
-        self.new_vault = Some(NewVaultSheet { container: true, place, folder: onyx_core::paths::documents().join("Onyx") });
-        window.focus(&self.place_focus, cx);
-        cx.notify();
-    }
-
-    /// The container made where the sheet says, and taken.
-    fn finish_new_container(&mut self, sheet: NewVaultSheet, window: &mut Window, cx: &mut Context<Self>) {
-        let dir = Self::new_vault_parent(&sheet);
-        match std::fs::create_dir_all(&dir) {
-            Ok(()) => self.use_container(dir, window, cx),
-            Err(e) => self.say(tf("The container was not made: {why}", &[("why", &e.to_string())]), cx),
-        }
-        self.focus_editor_or_shell(window, cx);
-        cx.notify();
-    }
-
-    /// Where a vault goes in iCloud: Onyx's own app library when the
-    /// bundle is signed for one (`sys::icloud_container`), else an `Onyx`
-    /// folder at iCloud Drive's root; nothing where the machine has no
-    /// iCloud Drive.
-    fn cloud_place() -> Option<PathBuf> {
-        crate::sys::icloud_container().or_else(|| onyx_core::paths::icloud_drive().map(|d| d.join("Onyx")))
-    }
-
-    /// Where a vault named `name` would go for the sheet's choice.
-    fn new_vault_parent(sheet: &NewVaultSheet) -> PathBuf {
-        match sheet.place {
-            Place::Cloud => Self::cloud_place().unwrap_or_else(onyx_core::paths::documents),
-            Place::Folder => sheet.folder.clone(),
-        }
-    }
-
-    /// Ask the system for the folder a new vault goes in.
-    fn pick_vault_folder(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let rx = cx.prompt_for_paths(PathPromptOptions { files: false, directories: true, multiple: false, prompt: Some(t("Choose").into()) });
-        cx.spawn_in(window, async move |this, cx| {
-            let Ok(Ok(Some(paths))) = rx.await else { return };
-            let Some(dir) = paths.into_iter().next() else { return };
-            let _ = cx.update(|window, cx| {
-                let _ = this.update(cx, |s, cx| {
-                    if let Some(sheet) = s.new_vault.as_mut() {
-                        sheet.folder = dir;
-                        sheet.place = Place::Folder;
-                    }
-                    window.focus(&s.place_focus, cx);
-                    cx.notify();
-                });
-            });
-        })
-        .detach();
-    }
-
     fn finish_new_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(sheet) = self.new_vault.take() else { return };
-        if sheet.container {
-            return self.finish_new_container(sheet, window, cx);
+        if self.new_vault.take().is_none() {
+            return;
         }
         let name = self.vault_input.read(cx).value().to_string();
         let Some(parent) = self.container() else { return };
@@ -2006,6 +1940,13 @@ impl Shell {
             ("entry", "collapse") => self.collapse_all(window, cx),
             ("vault" | "vaults", "new") => self.start_new_vault(window, cx),
             ("vaults", "close") => self.close_vault(window, cx),
+            ("container", "choose") => self.choose_container(window, cx),
+            ("container", "close") => self.close_container(window, cx),
+            ("container", path) => {
+                if self.container().as_deref() != Some(Path::new(path)) {
+                    self.use_container(PathBuf::from(path), window, cx);
+                }
+            }
             ("vaults", path) => {
                 if self.vault_root() != Some(Path::new(path)) {
                     self.show_vault(PathBuf::from(path), window, cx);
@@ -4240,76 +4181,21 @@ impl Shell {
         Some(self.render_sheet("rename-sheet", title.into(), body, t("↩ to rename, Esc to cancel").into(), Self::cancel_rename, cx))
     }
 
-    /// A new vault: its name in a field, and where it goes as two rows,
-    /// iCloud Drive (where the machine has it) and a folder of one's own
-    /// with a pill to choose it. ↩ makes it and opens it.
+    /// A new vault: its name in a field, Cancel and Create; ↩ makes it
+    /// in the container and shows it.
     fn render_new_vault(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let sheet = self.new_vault.as_ref()?;
+        self.new_vault.as_ref()?;
         let theme = cx.theme().clone();
-        let cloud = Self::cloud_place();
-        let row = |id: &'static str, icon: &'static str, name: SharedString, where_: SharedString, place: Place, on: bool, theme: &gpui_component::Theme, cx: &mut Context<Self>| {
-            h_flex()
-                .id(id)
-                .h(px(48.))
-                .px(px(12.))
-                .gap(px(10.))
-                .items_center()
-                .cursor_pointer()
-                .when(on, |d| d.bg(theme.primary.opacity(0.1)))
-                .when(!on, |d| d.hover(|s| s.bg(theme.foreground.opacity(0.04))))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    swallow_click(window, cx);
-                    if let Some(sheet) = this.new_vault.as_mut() {
-                        sheet.place = place;
-                    }
-                    window.focus(&this.place_focus, cx);
-                    cx.notify();
-                }))
-                .child(Icon::default().path(icon).with_size(px(16.)).text_color(if on { theme.primary } else { theme.muted_foreground }))
-                .child(v_flex().flex_1().min_w_0().child(div().text_size(px(13.)).child(name)).child(div().text_size(px(11.)).text_color(theme.muted_foreground).truncate().child(where_)))
-        };
-        let folder_where: SharedString = crate::sys::short_path(&sheet.folder).into();
-        let mut rows: Vec<AnyElement> = Vec::new();
-        // A new vault goes in the container and the sheet asks its name
-        // alone; a new container's sheet asks only where it goes.
-        let placed = !sheet.container;
-        if cloud.is_some() && !placed {
-            rows.push(row("place-cloud", "icons/cloud.svg", t("iCloud Drive").into(), format!("{} › Onyx", t("iCloud Drive")).into(), Place::Cloud, sheet.place == Place::Cloud, &theme, cx).into_any_element());
-        }
-        if !placed { rows.push(
-            row("place-folder", "icons/device-laptop.svg", t("On this computer").into(), folder_where, Place::Folder, sheet.place == Place::Folder, &theme, cx)
-                .when(cloud.is_some(), |d| d.border_t_1().border_color(theme.border))
-                .child(small_pill("place-choose", "icons/folder-open.svg", t("Choose…"), Press::Quiet, false, &theme).on_click(cx.listener(|this, _, window, cx| {
-                    swallow_click(window, cx);
-                    this.pick_vault_folder(window, cx)
-                })))
-                .into_any_element(),
-        ); }
-        let places = (!rows.is_empty()).then(|| v_flex().w_full().rounded(px(12.)).border_1().border_color(theme.border).overflow_hidden().children(rows).into_any_element());
-        // The container's sheet has no field: ↩ is heard on the places.
-        let places = places.map(|p| {
-            div()
-                .track_focus(&self.place_focus)
-                .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
-                    if ev.keystroke.key == "enter" {
-                        cx.stop_propagation();
-                        this.finish_new_vault(window, cx);
-                    }
-                }))
-                .child(p)
-                .into_any_element()
-        });
-        let field = (!sheet.container).then(|| Self::sheet_field("vault-field", &self.vault_input, &theme, cx));
-        let body = vec![field, places, Some(
+        let body = vec![
+            Self::sheet_field("vault-field", &self.vault_input, &theme, cx),
             h_flex()
                 .gap(px(8.))
                 .justify_end()
                 .child(small_pill("vault-cancel", "icons/close.svg", t("Cancel"), Press::Quiet, false, &theme).on_click(cx.listener(|this, _, window, cx| this.cancel_new_vault(window, cx))))
                 .child(small_pill("vault-ok", "icons/check.svg", t("Create"), Press::Primary, false, &theme).on_click(cx.listener(|this, _, window, cx| this.finish_new_vault(window, cx))))
                 .into_any_element(),
-        )].into_iter().flatten().collect();
-        let title = if sheet.container { t("New Container") } else { t("New Vault") };
-        Some(self.render_sheet("vault-sheet", title.into(), body, t("↩ to create, Esc to cancel").into(), Self::cancel_new_vault, cx))
+        ];
+        Some(self.render_sheet("vault-sheet", t("New Vault").into(), body, t("↩ to create, Esc to cancel").into(), Self::cancel_new_vault, cx))
     }
 
     // -- the actions ------------------------------------------------------------
@@ -4763,7 +4649,7 @@ impl Render for Shell {
             .on_action(cx.listener(Self::new_folder))
             .on_action(cx.listener(|this, _: &NewVault, window, cx| this.start_new_vault(window, cx)))
             .on_action(cx.listener(|this, _: &CloseVault, window, cx| this.close_vault(window, cx)))
-            .on_action(cx.listener(|this, _: &NewContainer, window, cx| this.start_new_container(window, cx)))
+            .on_action(cx.listener(|this, _: &CloseContainer, window, cx| this.close_container(window, cx)))
             .on_action(cx.listener(|this, _: &ChooseContainer, window, cx| this.choose_container(window, cx)))
             .on_action(cx.listener(|this, _: &ExportPdf, window, cx| {
                 if let Some(path) = this.shown.clone() {

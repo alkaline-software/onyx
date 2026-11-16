@@ -1106,15 +1106,6 @@
     "de": "Auf der Seite",
     "es": "En la página"
   },
-  "On this computer": {
-    "zh-Hans": "在这台电脑上",
-    "zh-Hant": "在這台電腦上",
-    "ja": "このコンピュータ上",
-    "ko": "이 컴퓨터에",
-    "fr": "Sur cet ordinateur",
-    "de": "Auf diesem Computer",
-    "es": "En este equipo"
-  },
   "Only the start of the file is shown.": {
     "zh-Hans": "只显示了文件的开头。",
     "zh-Hant": "只顯示了檔案的開頭。",
@@ -2060,15 +2051,6 @@
     "de": "Verkleinern (⌘-)",
     "es": "Reducir (⌘-)"
   },
-  "iCloud Drive": {
-    "zh-Hans": "iCloud 云盘",
-    "zh-Hant": "iCloud 雲碟",
-    "ja": "iCloud Drive",
-    "ko": "iCloud Drive",
-    "fr": "iCloud Drive",
-    "de": "iCloud Drive",
-    "es": "iCloud Drive"
-  },
   "no matches": {
     "zh-Hans": "没有匹配",
     "zh-Hant": "沒有符合",
@@ -2789,24 +2771,6 @@
     "de": "Tresor umbenennen",
     "es": "Renombrar bóveda"
   },
-  "New Container…": {
-    "zh-Hans": "新建容器…",
-    "zh-Hant": "新增容器…",
-    "ja": "新しいコンテナ…",
-    "ko": "새 컨테이너…",
-    "fr": "Nouveau conteneur…",
-    "de": "Neuer Container…",
-    "es": "Nuevo contenedor…"
-  },
-  "New Container": {
-    "zh-Hans": "新建容器",
-    "zh-Hant": "新增容器",
-    "ja": "新しいコンテナ",
-    "ko": "새 컨테이너",
-    "fr": "Nouveau conteneur",
-    "de": "Neuer Container",
-    "es": "Nuevo contenedor"
-  },
   "Close Vault": {
     "zh-Hans": "关闭仓库",
     "zh-Hant": "關閉儲存庫",
@@ -2825,13 +2789,13 @@
     "de": "Container",
     "es": "Contenedores"
   },
-  "The container was not made: {why}": {
-    "zh-Hans": "容器未能创建：{why}",
-    "zh-Hant": "容器未能建立：{why}",
-    "ja": "コンテナを作成できませんでした：{why}",
-    "ko": "컨테이너를 만들지 못했습니다: {why}",
-    "fr": "Le conteneur n'a pas été créé : {why}",
-    "de": "Der Container wurde nicht erstellt: {why}",
-    "es": "El contenedor no se creó: {why}"
+  "Close Container": {
+    "zh-Hans": "关闭容器",
+    "zh-Hant": "關閉容器",
+    "ja": "コンテナを閉じる",
+    "ko": "컨테이너 닫기",
+    "fr": "Fermer le conteneur",
+    "de": "Container schließen",
+    "es": "Cerrar el contenedor"
   }
 }
