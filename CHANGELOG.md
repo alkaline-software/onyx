@@ -1,5 +1,21 @@
 # Changelog
 
+## v0.5.1
+
+1. **The menu bar note.** MiniNotes comes back inside Onyx: any note in a small window under Onyx's item in the menu bar, or at ⌃⌥⌘O from any app, with the vault's tree, tabs and the same editor as the main window.
+2. **Vaults.** One container holds your vaults, chosen in Settings; each vault is a block with its own mark, listed from the sidebar's foot, and a vault or any folder can take an icon and a color that travel with it.
+3. **Export and print.** A note becomes a PDF, an image, a Word document or a web page, or goes to the printer, with every page previewed first.
+4. **Tables.** Edited cell by cell, with handles to move rows and columns, menus to add, align and sort, and widths that fit their words.
+5. **Pictures, files and cards.** A picture is resized and placed as one piece, a PDF or a document stands in a frame of its own, and a link can show as a small, medium or large card.
+6. **The source and the terminal.** The note as written opens beside it with Sublime Text's keys, and a terminal with tabs opens at the page's right in the vault's folder.
+7. **Spelling and grammar**, checked as you write.
+8. **A new icon.** A note on a moonlit pebble, in the Dock and in the menu bar.
+
+**Fixes**
+
+- Far less memory and CPU: pictures decoded at the size they show and let go with their view, PDFs read as needed, and nothing ticking while nothing moves.
+- A scroll's momentum stays in the pane it began in.
+
 ## v0.5.0
 
 1. **Onyx.** MiniNotes is Onyx: a note-taking app of its own, built anew in Rust and GPUI, with the window, the settings, the motion and the languages of the Alkaline Software apps.
