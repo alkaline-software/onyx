@@ -24,6 +24,55 @@ const TILE_W: f32 = 176.;
 const TILE_H: f32 = 60.;
 const TILE_GAP: f32 = 10.;
 
+/// A vault's tile on the page before a vault, the same in the main
+/// window and the menu bar note: a wash of its ink on `page`, its deck and
+/// its name, for the caller to give its presses.
+pub(crate) fn vault_tile(id: ElementId, p: &std::path::Path, page: Hsla, theme: &gpui_component::Theme, cx: &mut App) -> Stateful<Div> {
+    let dark = theme.mode.is_dark();
+    let name = vault_name(p);
+    let ink = vault_ink(p, theme, cx);
+    let face = page.blend(ink.opacity(if dark { 0.1 } else { 0.06 }));
+    let badge = vault_stack(p, &name, 28., face, theme, cx);
+    let hover = face.blend(theme.foreground.opacity(if dark { 0.06 } else { 0.04 }));
+    tile(id, theme)
+        .bg(face)
+        .border_color(ink.opacity(if dark { 0.3 } else { 0.22 }))
+        .hover(move |s| s.bg(hover))
+        .child(badge)
+        .child(div().flex_1().min_w_0().truncate().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).text_color(theme.foreground).child(name))
+}
+
+/// New Vault…'s tile after the vaults', a plus in an empty tile.
+pub(crate) fn new_vault_tile(id: &'static str, theme: &gpui_component::Theme) -> Stateful<Div> {
+    let lit = theme.foreground.opacity(if theme.mode.is_dark() { 0.09 } else { 0.06 });
+    tile(id.into(), theme)
+        .hover(move |s| s.bg(lit))
+        .child(div().size(px(28.)).flex_shrink_0().rounded(px(8.4)).bg(theme.foreground.opacity(0.06)).flex().items_center().justify_center().child(Icon::default().path("icons/plus.svg").with_size(px(15.)).text_color(theme.muted_foreground)))
+        .child(div().flex_1().min_w_0().truncate().text_color(theme.muted_foreground).child(t("New Vault…")))
+}
+
+/// The tiles' rows, `per_row` at most to a row, centered.
+pub(crate) fn tile_rows(per_row: usize) -> Div {
+    h_flex().max_w(px(TILE_W * per_row as f32 + TILE_GAP * (per_row as f32 - 1.))).flex_wrap().justify_center().gap(px(TILE_GAP))
+}
+
+fn tile(id: ElementId, theme: &gpui_component::Theme) -> Stateful<Div> {
+    let dark = theme.mode.is_dark();
+    h_flex()
+        .id(id)
+        .w(px(TILE_W))
+        .h(px(TILE_H))
+        .px(px(12.))
+        .gap(px(10.))
+        .items_center()
+        .rounded(px(12.))
+        .border_1()
+        .border_color(theme.foreground.opacity(0.1))
+        .bg(theme.foreground.opacity(if dark { 0.04 } else { 0.025 }))
+        .text_size(px(13.))
+        .cursor_pointer()
+}
+
 impl Shell {
     /// The page: the picture and the greeting, and under them what the
     /// card has, laid out as tiles: each of the container's vaults by
@@ -35,24 +84,7 @@ impl Shell {
     pub(crate) fn render_place_page(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
         let face = self.look.text_family.clone();
-        let dark = theme.mode.is_dark();
         let page = super::page_ground(&theme);
-        let (rim, ground, lit) = (theme.foreground.opacity(0.1), theme.foreground.opacity(if dark { 0.04 } else { 0.025 }), theme.foreground.opacity(if dark { 0.09 } else { 0.06 }));
-        let tile = |id: ElementId| {
-            h_flex()
-                .id(id)
-                .w(px(TILE_W))
-                .h(px(TILE_H))
-                .px(px(12.))
-                .gap(px(10.))
-                .items_center()
-                .rounded(px(12.))
-                .border_1()
-                .border_color(rim)
-                .bg(ground)
-                .text_size(px(13.))
-                .cursor_pointer()
-        };
         let container = self.container();
         let tiles: Vec<AnyElement> = match &container {
             None => Vec::new(),
@@ -60,17 +92,7 @@ impl Shell {
                 let mut tiles: Vec<AnyElement> = vault_list(Some(dir), None)
                     .into_iter()
                     .map(|p| {
-                        let name = vault_name(&p);
-                        // Each vault's tile in a wash of its ink, its pile
-                        // for its mark.
-                        let ink = vault_ink(&p, &theme, cx);
-                        let face = page.blend(ink.opacity(if dark { 0.1 } else { 0.06 }));
-                        let badge = vault_stack(&p, &name, 28., face, &theme, cx);
-                        let hover = face.blend(theme.foreground.opacity(if dark { 0.06 } else { 0.04 }));
-                        tile(ElementId::Name(format!("page-vault-{}", p.display()).into()))
-                            .bg(face)
-                            .border_color(ink.opacity(if dark { 0.3 } else { 0.22 }))
-                            .hover(move |s| s.bg(hover))
+                        vault_tile(ElementId::Name(format!("page-vault-{}", p.display()).into()), &p, page, &theme, cx)
                             .on_mouse_down(MouseButton::Right, cx.listener({
                                 let p = p.clone();
                                 move |this, ev: &MouseDownEvent, window, cx| {
@@ -82,20 +104,15 @@ impl Shell {
                                 swallow_click(window, cx);
                                 this.show_vault(p.clone(), window, cx)
                             }))
-                            .child(badge)
-                            .child(div().flex_1().min_w_0().truncate().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).text_color(theme.foreground).child(name))
                             .into_any_element()
                     })
                     .collect();
                 tiles.push(
-                    tile("page-new-vault".into())
-                        .hover(move |s| s.bg(lit))
+                    new_vault_tile("page-new-vault", &theme)
                         .on_click(cx.listener(|this, _, window, cx| {
                             swallow_click(window, cx);
                             this.start_new_vault(window, cx)
                         }))
-                        .child(div().size(px(28.)).flex_shrink_0().rounded(px(8.4)).bg(theme.foreground.opacity(0.06)).flex().items_center().justify_center().child(Icon::default().path("icons/plus.svg").with_size(px(15.)).text_color(theme.muted_foreground)))
-                        .child(div().flex_1().min_w_0().truncate().text_color(theme.muted_foreground).child(t("New Vault…")))
                         .into_any_element(),
                 );
                 tiles
@@ -135,8 +152,8 @@ impl Shell {
                         .pt(px(24.))
                         .pb(px(48.))
                         .gap(px(26.))
-                        .child(v_flex().items_center().gap(px(12.)).child(self.shelf_figure(cx)).child(div().text_size(px(34.)).font_family(face).child(words)))
-                        .when(!tiles.is_empty(), |d| d.child(h_flex().max_w(px(TILE_W * 3. + TILE_GAP * 2.)).flex_wrap().justify_center().gap(px(TILE_GAP)).children(tiles)))
+                        .child(v_flex().items_center().gap(px(12.)).child(Self::shelf_figure(&self.home_fig, cx.entity_id())).child(div().text_size(px(34.)).font_family(face).child(words)))
+                        .when(!tiles.is_empty(), |d| d.child(tile_rows(3).children(tiles)))
                         .child(choose),
                 ),
             )
@@ -149,6 +166,24 @@ impl Shell {
     /// container's vaults by `vault_list`'s order, each with its mark. A
     /// press shows one; a right click gives Copy Path and Reveal in Finder.
     pub(crate) fn render_place_card(&self, ground: Hsla, theme: &gpui_component::Theme, cx: &mut Context<Self>) -> AnyElement {
+        // With no container there are no vaults to list: the card holds
+        // the one thing to do, Choose Container…, at its center.
+        if self.container().is_none() {
+            let choose = choice_pill("side-choose-container", "icons/folder-open.svg", t("Choose Container…").to_string(), Press::Quiet, false, theme)
+                .h(px(32.))
+                .px(px(14.))
+                .gap(px(8.))
+                .text_size(px(13.))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    swallow_click(window, cx);
+                    this.choose_container(window, cx)
+                }));
+            return v_flex()
+                .flex_1()
+                .min_h_0()
+                .child(v_flex().mx(px(8.)).mt(px(10.)).mb(px(8.)).flex_1().min_h_0().items_center().justify_center().rounded(px(10.)).border_1().border_color(theme.foreground.opacity(0.1)).bg(ground).child(choose))
+                .into_any_element();
+        }
         let (lit, muted) = (theme.foreground, theme.muted_foreground);
         let wash = if theme.mode.is_dark() { lit.opacity(0.08) } else { lit.opacity(0.06) };
         let rows: Vec<AnyElement> = vault_list(self.container().as_deref(), None)
@@ -197,7 +232,7 @@ impl Shell {
             swallow_click(window, cx);
             this.start_new_vault(window, cx)
         }));
-        // As the vault's own row over its tree (`render_vault_row`).
+        // As a tree's head, the vaults' title and the one tool.
         let head = h_flex()
             .flex_shrink_0()
             .mx(px(8.))
@@ -249,12 +284,14 @@ impl Shell {
     /// pointer comes, and the notebook under it rises out of the fan. As
     /// `home_figure`, each notebook is made as text with its turn written
     /// in, rounded to half a degree and half a point, so nothing blurs.
-    fn shelf_figure(&self, cx: &mut Context<Self>) -> impl IntoElement {
+    /// Drawn by the page before a vault and by the menu bar note's landing
+    /// page before one, each with its own spring, `view` redrawn as the
+    /// pointer moves it.
+    pub(crate) fn shelf_figure(home_fig: &std::rc::Rc<std::cell::RefCell<crate::widgets::Fig>>, view: EntityId) -> impl IntoElement {
         const W: f32 = 220.;
         const H: f32 = 124.;
-        let view = cx.entity_id();
         let (wind, near, moving) = {
-            let mut fig = self.home_fig.borrow_mut();
+            let mut fig = home_fig.borrow_mut();
             let moving = fig.step();
             let (wind, _, near) = fig.at();
             (wind, near, moving)
@@ -279,8 +316,8 @@ impl Shell {
             parts.push(book(r#"<g fill="none" stroke="currentColor" stroke-linecap="round"><rect x="58" y="48" width="60" height="74" rx="6" stroke-width="1.5"/><path d="M72 98 H104" stroke-width="3.5"/></g>"#.into(), line));
             parts.push(book(r#"<rect x="70" y="66" width="36" height="16" rx="4" fill="currentColor"/>"#.into(), label));
         }
-        let fig = self.home_fig.clone();
-        let (moved, left) = (self.home_fig.clone(), self.home_fig.clone());
+        let fig = home_fig.clone();
+        let (moved, left) = (home_fig.clone(), home_fig.clone());
         div()
             .id("shelf-fig")
             .relative()

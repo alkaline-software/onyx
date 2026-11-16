@@ -1007,15 +1007,6 @@
     "de": "Keine Vorschläge gefunden",
     "es": "No se han encontrado sugerencias"
   },
-  "No vault": {
-    "zh-Hans": "没有仓库",
-    "zh-Hant": "沒有儲存庫",
-    "ja": "保管庫なし",
-    "ko": "보관소 없음",
-    "fr": "Aucun coffre",
-    "de": "Kein Tresor",
-    "es": "Sin bóveda"
-  },
   "Normal": {
     "zh-Hans": "标准",
     "zh-Hant": "標準",
@@ -2788,5 +2779,23 @@
     "fr": "Créez un coffre pour commencer.",
     "de": "Erstellen Sie einen Tresor, um zu beginnen.",
     "es": "Crea una bóveda para empezar."
+  },
+  "Close Container": {
+    "zh-Hans": "关闭容器",
+    "zh-Hant": "關閉容器",
+    "ja": "コンテナを閉じる",
+    "ko": "컨테이너 닫기",
+    "fr": "Fermer le conteneur",
+    "de": "Container schließen",
+    "es": "Cerrar contenedor"
+  },
+  "There is already a folder named {name}.": {
+    "zh-Hans": "已有名为“{name}”的文件夹。",
+    "zh-Hant": "已有名為「{name}」的檔案夾。",
+    "ja": "「{name}」という名前のフォルダはすでにあります。",
+    "ko": "'{name}' 이름의 폴더가 이미 있습니다.",
+    "fr": "Un dossier nommé « {name} » existe déjà.",
+    "de": "Es gibt schon einen Ordner namens „{name}“.",
+    "es": "Ya hay una carpeta llamada «{name}»."
   }
 }

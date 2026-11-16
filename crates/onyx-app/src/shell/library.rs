@@ -244,16 +244,14 @@ impl Shell {
 
     // -- the stack ----------------------------------------------------------
 
-    /// The vault's card, and under it the vault's button. The card's top
-    /// is a pair of tabs, Notes and Assets, each half the width, after a
-    /// design of Emaki's: the one open stands on a plate, which slides to
-    /// the other at a press, and the card's content fades in under it. The
-    /// tabs stand on a tinted band, its top rounded as the card's, since
-    /// the card's own corner does not cut what is drawn in it. Under the
-    /// card, the button that names the vault open and lists the others
-    /// (`render_vaults_button`).
+    /// The vault's card, and under it the vault's block, which lists the
+    /// vaults (`render_vault_block`). The card's top is a pair of tabs, Notes and
+    /// Assets, each half the width, after a design of Emaki's: the one
+    /// open stands on a plate, which slides to the other at a press, and
+    /// the card's content fades in under it. The tabs stand on a tinted
+    /// band, its top rounded as the card's, since the card's own corner
+    /// does not cut what is drawn in it.
     pub(crate) fn render_side_stack(&self, content: Div, ground: Hsla, theme: &gpui_component::Theme, cx: &mut Context<Self>) -> AnyElement {
-        let button = self.render_vaults_button(ground, theme, cx);
         let moved = self.side_moved.filter(|(_, at)| at.elapsed() < FOLD_ANIM);
         let serial = self.side_view.key();
         let fading = moved.is_some();
@@ -300,69 +298,38 @@ impl Shell {
         let band = div().flex_shrink_0().p(px(4.)).rounded_t(px(9.)).bg(track_bg).border_b_1().border_color(theme.foreground.opacity(0.1)).child(tabs);
         let content = fade_in(content.flex_1().min_h_0(), format!("side-card-{serial}"));
         let card = v_flex().mx(px(8.)).mt(px(10.)).mb(px(8.)).flex_1().min_h_0().rounded(px(10.)).border_1().border_color(theme.foreground.opacity(0.1)).bg(ground).overflow_hidden().child(band).child(content);
-        v_flex().flex_1().min_h_0().child(card).child(button).into_any_element()
+        let block = self.render_vault_block(theme, cx);
+        v_flex().flex_1().min_h_0().child(card).children(block).into_any_element()
     }
 
-    /// The vault at the top of the notes, as the menu bar note has it: a
-    /// folder's row over the tree that does not scroll with it, the vault's
-    /// name, and at its right Collapse All Folders, New Note and New
-    /// Folder, always there: the last two in the columns a folder's own
-    /// stand in under the pointer. A right click gives the vault's menu (Rename,
-    /// Reveal in Finder); a row let go on it goes to the vault's top.
-    pub(crate) fn render_vault_row(&self, ground: Hsla, theme: &gpui_component::Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// The vault under its card (`vault_block`, as the menu bar note has
+    /// it on its head): a press lists the vaults over it, as wide as it
+    /// (`show_vaults_at`), and a press while they show puts them away; a
+    /// right click gives the vault's menu (Rename, Icon and Color…, Reveal
+    /// in Finder); a row let go on it goes to the vault's top.
+    pub(crate) fn render_vault_block(&self, theme: &gpui_component::Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
         let root = self.vault_root()?.to_path_buf();
-        let root_mark = root.clone();
-        let name: SharedString = self.vault.as_ref().map(|v| v.tree.name.clone()).unwrap_or_default().into();
-        let lit = theme.foreground;
-        let listed = self.menus.open.as_ref().is_some_and(|m| m.what == "vault");
-        let tools = h_flex()
-            .flex_shrink_0()
-            .gap(px(2.))
-            .child(row_tool("vault-collapse", "icons/copy-minus.svg", t("Collapse All Folders").into(), theme).on_click(cx.listener(|this, _, window, cx| {
-                swallow_click(window, cx);
-                this.collapse_all(window, cx);
-            })))
-            // At the vault's top, as a folder's make in the folder; ⌘N
-            // makes beside the note showing.
-            .child(row_tool("vault-new-note", "icons/file-plus.svg", t("New Note").into(), theme).on_click(cx.listener({
-                let root = root.clone();
-                move |this, _, window, cx| {
-                    swallow_click(window, cx);
-                    this.new_note_in(root.clone(), window, cx);
-                }
-            })))
-            .child(row_tool("vault-new-folder", "icons/folder-plus.svg", t("New Folder").into(), theme).on_click(cx.listener({
-                let root = root.clone();
-                move |this, _, window, cx| {
-                    swallow_click(window, cx);
-                    this.new_folder_in(root.clone(), window, cx);
-                }
-            })));
+        let name = self.vault.as_ref().map(|v| v.tree.name.clone()).unwrap_or_default();
+        let listed = self.menus.open.as_ref().is_some_and(|m| m.what == "vaults");
+        let place = self.vaults_at.clone();
         let wash = theme.primary.opacity(0.22);
-        // A block of the vault's ink over the tree, taller than a folder's
-        // row and with the vault's pile for its mark: the thing the
-        // folders are in, never one of them.
-        let ink = vault_ink(&root, theme, cx);
-        let dim = ground.l < 0.5;
-        let block = ground.blend(ink.opacity(if dim { 0.13 } else { 0.09 }));
-        let mark = vault_stack(&root_mark, &name, 22., block, theme, cx);
+        let under = cx.theme().title_bar;
+        let block = vault_block("vault-block", &root, &name, BlockSize::SIDEBAR, under, listed, theme, cx);
         Some(
-            h_flex()
-                .id("vault-row")
-                .flex_shrink_0()
+            block
                 .mx(px(8.))
-                .mt(px(8.))
-                .mb(px(4.))
-                .h(px(VAULT_BLOCK_H))
-                .pl(px(10.))
-                .pr(px(6.))
-                .gap(px(10.))
-                .items_center()
-                .rounded(px(10.))
-                .border_1()
-                .border_color(ink.opacity(if dim { 0.28 } else { 0.22 }))
-                .bg(if listed { block.blend(lit.opacity(0.06)) } else { block })
-                .text_size(px(14.))
+                .mb(px(10.))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(|this, _, window, cx| {
+                    swallow_click(window, cx);
+                    if this.menus.open.as_ref().is_some_and(|m| m.what == "vaults") {
+                        this.menus.close(cx);
+                        cx.notify();
+                        return;
+                    }
+                    let b = this.vaults_at.get();
+                    this.show_vaults_at(point(b.origin.x, b.origin.y - px(6.)), Some(b.size.width), true, cx);
+                }))
                 .on_mouse_down(MouseButton::Right, cx.listener(|this, ev: &MouseDownEvent, window, cx| {
                     swallow_click(window, cx);
                     this.show_vault_menu(ev.position, cx);
@@ -372,61 +339,60 @@ impl Shell {
                     cx.stop_propagation();
                     this.tree_drop(drag, root.clone(), window, cx)
                 }))
-                // In the chevrons' column, as the menu bar note's vault is.
-                // The vault's own mark, never a folder's: over the chevrons' column.
-                .child(mark)
-                .child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::SEMIBOLD).text_color(lit).child(name))
-                .child(tools)
+                // Where the list drops from: the block as it was last drawn.
+                .child(canvas(move |b, _, _| place.set(b), |_, _, _, _| ()).absolute().top_0().left_0().size_full())
                 .into_any_element(),
         )
     }
 
-    /// The button under the card, a slim card of its own: the vault shown,
-    /// its mark and its name, and the arrows of a list. A press lists the
-    /// vaults in a menu as wide as the button that rises from its top
-    /// (`show_vaults_at`); a press while it shows puts it away. It stays
-    /// lit while the list shows.
-    fn render_vaults_button(&self, ground: Hsla, theme: &gpui_component::Theme, cx: &mut Context<Self>) -> AnyElement {
-        let (lit, muted, edge) = (theme.foreground, theme.muted_foreground, theme.foreground.opacity(0.1));
-        let hover = ground.blend(theme.foreground.opacity(0.05));
-        let listed = self.menus.open.as_ref().is_some_and(|m| m.what == "vaults");
-        let place = self.vaults_at.clone();
-        let name: SharedString = self.vault.as_ref().map(|v| v.tree.name.clone()).unwrap_or_default().into();
-        let badge = self.vault_root().map(Path::to_path_buf).map(|root| vault_badge(&root, &name, 20., theme, cx));
-        h_flex()
-            .id("vaults-button")
-            .relative()
+    /// The vault at the top of its tree (`vault_root_row`), with the
+    /// Notes tools at its right: Collapse All Folders, and New Note and
+    /// New Folder at the vault's top (⌘N makes beside the note showing).
+    /// A right click gives the vault's menu; a row let go on it goes to
+    /// the vault's top.
+    pub(crate) fn render_vault_root(&self, ground: Hsla, theme: &gpui_component::Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let root = self.vault_root()?.to_path_buf();
+        let name = self.vault.as_ref().map(|v| v.tree.name.clone()).unwrap_or_default();
+        let [collapse, note, folder] = notes_tools("side", theme);
+        let wash = theme.primary.opacity(0.22);
+        let tools = h_flex()
             .flex_shrink_0()
-            .mx(px(8.))
-            .mb(px(10.))
-            .h(px(36.))
-            .px(px(10.))
-            .gap(px(10.))
-            .items_center()
-            .rounded(px(10.))
-            .border_1()
-            .border_color(edge)
-            .bg(if listed { hover } else { ground })
-            .text_size(px(13.))
-            .cursor_pointer()
-            .hover(move |s| s.bg(hover))
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(cx.listener(|this, _, window, cx| {
+            .gap(px(2.))
+            .child(collapse.on_click(cx.listener(|this, _, window, cx| {
                 swallow_click(window, cx);
-                if this.menus.open.as_ref().is_some_and(|m| m.what == "vaults") {
-                    this.menus.close(cx);
-                    cx.notify();
-                    return;
+                this.collapse_all(window, cx);
+            })))
+            .child(note.on_click(cx.listener({
+                let root = root.clone();
+                move |this, _, window, cx| {
+                    swallow_click(window, cx);
+                    this.new_note_in(root.clone(), window, cx);
                 }
-                let b = this.vaults_at.get();
-                this.show_vaults_at(point(b.origin.x, b.origin.y - px(6.)), Some(b.size.width), true, cx);
-            }))
-            // Where the list rises from: the button as it was last drawn.
-            .child(canvas(move |b, _, _| place.set(b), |_, _, _, _| ()).absolute().top_0().left_0().size_full())
-            .children(badge)
-            .child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::SEMIBOLD).text_color(lit).child(name))
-            .child(Icon::default().path("icons/chevrons-up-down.svg").with_size(px(12.)).text_color(muted))
-            .into_any_element()
+            })))
+            .child(folder.on_click(cx.listener({
+                let root = root.clone();
+                move |this, _, window, cx| {
+                    swallow_click(window, cx);
+                    this.new_folder_in(root.clone(), window, cx);
+                }
+            })));
+        Some(
+            vault_root_row("side-vault-root", &root, &name, ground, theme, cx)
+                .mx(px(8.))
+                .mt(px(4.))
+                .pr(px(4.))
+                .on_mouse_down(MouseButton::Right, cx.listener(|this, ev: &MouseDownEvent, window, cx| {
+                    swallow_click(window, cx);
+                    this.show_vault_menu(ev.position, cx);
+                }))
+                .drag_over::<super::TreeDrag>(move |style, _, _, _| style.bg(wash))
+                .on_drop(cx.listener(move |this, drag: &super::TreeDrag, window, cx| {
+                    cx.stop_propagation();
+                    this.tree_drop(drag, root.clone(), window, cx)
+                }))
+                .child(tools)
+                .into_any_element(),
+        )
     }
 
     /// The vaults' list (`vault_list`), the open one ticked; then New
@@ -443,7 +409,12 @@ impl Shell {
         if !entries.is_empty() {
             entries.push(Entry::Rule);
         }
-        entries.push(Entry::choice("new", "icons/plus.svg", t("New Vault…")));
+        // A vault is made in the container: with none, the way to one.
+        if self.container().is_some() {
+            entries.push(Entry::choice("new", "icons/plus.svg", t("New Vault…")));
+        } else {
+            entries.push(Entry::choice("container", "icons/folder-open.svg", t("Choose Container…")));
+        }
         if open.is_some() {
             entries.push(Entry::choice("close", "icons/close.svg", t("Close Vault")));
         }
@@ -451,6 +422,9 @@ impl Shell {
             self.menus.show_above("vaults", at, width, entries);
         } else {
             self.menus.show("vaults", at, entries);
+            if let Some(m) = self.menus.open.as_mut() {
+                m.width = width;
+            }
         }
         cx.notify();
     }
@@ -837,12 +811,15 @@ pub(crate) fn container_of(cfg: &onyx_core::config::Config) -> Option<PathBuf> {
 /// The vaults to offer, for the sidebar's list, the landing page and the
 /// menu bar note's: the one open first, then those in the container
 /// opened before, the last opened first, then the rest of the folder's by
-/// name (`vault::vaults_in`). With no folder, the ones opened before.
+/// name (`vault::vaults_in`). With no container there is no vault: the
+/// ones opened before in a container since closed are not offered, in
+/// either window.
 pub(crate) fn vault_list(folder: Option<&Path>, open: Option<&Path>) -> Vec<PathBuf> {
-    let in_folder: Vec<PathBuf> = folder.map(vault::vaults_in).unwrap_or_default();
+    let Some(folder) = folder else { return Vec::new() };
+    let in_folder: Vec<PathBuf> = vault::vaults_in(folder);
     let mut out: Vec<PathBuf> = open.filter(|o| o.is_dir()).map(Path::to_path_buf).into_iter().collect();
     for p in crate::ui_state::UiState::load().recent_vaults {
-        if p.is_dir() && (folder.is_none() || in_folder.contains(&p)) && !out.contains(&p) {
+        if p.is_dir() && in_folder.contains(&p) && !out.contains(&p) {
             out.push(p);
         }
     }
@@ -880,9 +857,10 @@ pub(crate) fn vault_badge(root: &Path, name: &str, size: f32, theme: &gpui_compo
 /// vaults, each well taller than a folder's.
 pub(crate) const VAULT_BLOCK_H: f32 = 48.;
 
-/// A vault's ink: the color it was given, else the accent.
+/// A vault's ink: the color it was given, else none, the muted ink, as
+/// the picker's empty swatch says; the accent is the app's, not a vault's.
 pub(crate) fn vault_ink(root: &Path, theme: &gpui_component::Theme, cx: &mut App) -> Hsla {
-    crate::folder_look::vault_look(root, cx).color.as_deref().and_then(crate::folder_look::parse_hex).unwrap_or(theme.primary)
+    crate::folder_look::vault_look(root, cx).color.as_deref().and_then(crate::folder_look::parse_hex).unwrap_or(theme.muted_foreground)
 }
 
 /// A vault's mark where a vault stands as a block: its badge at the front
@@ -906,11 +884,92 @@ pub(crate) fn vault_stack(root: &Path, name: &str, size: f32, under: Hsla, theme
         .child(div().absolute().top(px(step * 2.)).left_0().child(vault_badge(root, name, size, theme, cx).bg(face)))
 }
 
+/// A vault block's measures: the sidebar's, and the menu bar note's,
+/// smaller for its narrower tree.
+#[derive(Clone, Copy)]
+pub(crate) struct BlockSize {
+    pub h: f32,
+    pub deck: f32,
+    pub text: f32,
+}
+
+impl BlockSize {
+    pub const SIDEBAR: Self = Self { h: VAULT_BLOCK_H, deck: 22., text: 14. };
+    pub const MENU: Self = Self { h: 38., deck: 17., text: 13. };
+}
+
+/// The vault over its tree, the same in the sidebar and the menu bar
+/// note, which give it its press: a block in a wash of the vault's ink
+/// with an edge of it, its deck and its name. The block is the switch: no
+/// arrows say so. Each has it at the tree's foot: under the card in the
+/// sidebar, under the tree in the menu bar note.
+/// `under` is the ground it stands on; `listed` lights it while its list
+/// shows.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn vault_block(id: impl Into<ElementId>, root: &Path, name: &str, size: BlockSize, under: Hsla, listed: bool, theme: &gpui_component::Theme, cx: &mut App) -> Stateful<Div> {
+    let ink = vault_ink(root, theme, cx);
+    let dim = under.l < 0.5;
+    let face = under.blend(ink.opacity(if dim { 0.16 } else { 0.1 }));
+    let lit = face.blend(theme.foreground.opacity(0.06));
+    let mark = vault_stack(root, name, size.deck, face, theme, cx);
+    h_flex()
+        .id(id.into())
+        .relative()
+        .flex_shrink_0()
+        .h(px(size.h))
+        .pl(px(size.h * 0.2))
+        .pr(px(6.))
+        .gap(px(size.h * 0.2))
+        .items_center()
+        .rounded(px(10.))
+        .border_1()
+        .border_color(ink.opacity(if dim { 0.3 } else { 0.24 }))
+        .bg(if listed { lit } else { face })
+        .text_size(px(size.text))
+        .cursor_pointer()
+        .hover(move |s| s.bg(lit))
+        .child(mark)
+        .child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::SEMIBOLD).text_color(theme.foreground).child(name.to_string()))
+}
+
+/// The Notes tab's own tools, the same in both trees: Collapse All
+/// Folders, New Note and New Folder, each a `row_tool`, for the caller to
+/// give its press. New Note and New Folder stand in the columns a
+/// folder's own do under the pointer.
+pub(crate) fn notes_tools(prefix: &str, theme: &gpui_component::Theme) -> [Stateful<Div>; 3] {
+    [
+        row_tool(SharedString::from(format!("{prefix}-collapse")), "icons/copy-minus.svg", t("Collapse All Folders").into(), theme),
+        row_tool(SharedString::from(format!("{prefix}-new-note")), "icons/file-plus.svg", t("New Note").into(), theme),
+        row_tool(SharedString::from(format!("{prefix}-new-folder")), "icons/folder-plus.svg", t("New Folder").into(), theme),
+    ]
+}
+
+/// The vault at the top of its tree, the same in both trees, after
+/// Emaki's: a row of the tree's height, the vault's deck in the chevron's
+/// column and its name in bold, for the caller to give the Notes tools
+/// (`notes_tools`) at its right, its right padding and its presses. The
+/// vault's block lists the vaults; this row is the tree's own head.
+pub(crate) fn vault_root_row(id: &'static str, root: &Path, name: &str, under: Hsla, theme: &gpui_component::Theme, cx: &mut App) -> Stateful<Div> {
+    let mark = vault_stack(root, name, 14., under, theme, cx);
+    h_flex()
+        .id(id)
+        .flex_shrink_0()
+        .h(px(32.))
+        .pl(px(5.))
+        .gap(px(7.))
+        .items_center()
+        .rounded(px(7.))
+        .text_size(px(13.))
+        .child(mark)
+        .child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::SEMIBOLD).text_color(theme.foreground).child(name.to_string()))
+}
+
 pub(crate) fn row_tool(id: impl Into<ElementId>, icon: &'static str, words: SharedString, theme: &gpui_component::Theme) -> Stateful<Div> {
     let (lit, wash, muted) = (theme.foreground, theme.foreground.opacity(0.1), theme.muted_foreground);
+    // A little smaller than the icon buttons on a head, the icon theirs.
     div()
         .id(id.into())
-        .size(px(24.))
+        .size(px(22.))
         .flex_shrink_0()
         .flex()
         .items_center()

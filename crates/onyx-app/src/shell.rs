@@ -47,7 +47,7 @@ pub const KEY_CONTEXT: &str = "Shell";
 pub(crate) const SHEET_CONTEXT: &str = "Sheet";
 
 pub(crate) mod library;
-mod places;
+pub(crate) mod places;
 mod tree;
 pub(crate) use tree::{Choice, TreeDrag};
 
@@ -965,6 +965,18 @@ impl Shell {
         if self.vault_root().is_some_and(|v| v.parent() != Some(dir.as_path())) {
             self.close_vault(window, cx);
         }
+        cx.notify();
+    }
+
+    /// The container let go, from its row in Settings: the vault shown
+    /// closes and the window is as at its first launch, the page offering
+    /// Choose Container…. The vaults stay where they are on the disk.
+    pub(crate) fn close_container(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.vault.is_some() {
+            self.close_vault(window, cx);
+        }
+        self.cfg.app.container.clear();
+        let _ = Config::edit(|c| c.app.container.clear());
         cx.notify();
     }
 
@@ -1933,6 +1945,7 @@ impl Shell {
             }
             ("entry", "collapse") => self.collapse_all(window, cx),
             ("vault" | "vaults", "new") => self.start_new_vault(window, cx),
+            ("vaults", "container") => self.choose_container(window, cx),
             ("vaults", "close") => self.close_vault(window, cx),
             ("vaults", path) => {
                 if self.vault_root() != Some(Path::new(path)) {
@@ -2489,7 +2502,7 @@ impl Shell {
             return self.render_side_stack(div().flex().flex_col().child(assets), ground, theme, cx);
         }
         let rows = self.render_tree(theme, cx);
-        let list = div().flex().flex_col().children(self.render_vault_row(ground, theme, cx)).child(
+        let list = div().flex().flex_col().children(self.render_vault_root(ground, theme, cx)).child(
                 div()
                     .relative()
                     .flex_1()

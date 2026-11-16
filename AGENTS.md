@@ -14,8 +14,9 @@ Onyx is held to the bar of the work that wins Awwwards, the Webbys and the FWA (
 
 - **Nothing jumps.** What appears, goes, opens, closes, grows or moves does so over a moment, with the pattern its neighbors use (`widgets.rs`, `menu.rs`, `shell.rs`). No pause at the end of a motion.
 - **Words are few.** A row's name says what it is; a line under it only where the name does not say it all. No sentence explaining a concept and no hint in an empty list.
+- **The sidebar and the menu bar note's tree are one design.** They differ only in the vault block's size (`BlockSize`) and the tree's ground, lighter in the menu bar note; each tree starts with the vault's row and the Notes tools at its right, and ends with the vault's block, whose list rises from it. Both are built from `shell/library.rs`'s shared parts (`vault_block`, `vault_root_row`, `notes_tools`, `row_tool`). A change to either is made to both (`docs/window.md`).
 - **No square corner inside a round one.** gpui clips to a rectangle: a lit row, a band or a picture at a rounded card's corner rounds its own corners there (`docs/design.md`, Rules).
-- **Look before saying it is done:** in both appearances, in a long language, and in a narrow window (`docs/probing.md`).
+- **Look before saying it is done:** in both appearances, in a long language, in a narrow window, and in every state the thing can be in, the empty one first (no container, no vault, no notes, nothing chosen): a control built for its usual state shows its empty one only when someone meets it (`docs/probing.md`).
 
 ## Rules that hold everywhere
 

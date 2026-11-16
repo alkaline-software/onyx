@@ -455,37 +455,85 @@ impl Shell {
         let theme = cx.theme().clone();
         let lit = theme.foreground.opacity(if theme.mode.is_dark() { 0.06 } else { 0.045 });
         let inner = CARD_R - px(1.);
-        let path = match self.container() {
-            None => div().text_size(px(13.)).text_color(theme.muted_foreground).child(t("None")).into_any_element(),
-            Some(dir) => {
-                let shown = crate::sys::short_path(&dir);
-                let icon = if shown.starts_with("iCloud Drive") { "icons/cloud.svg" } else { "icons/folder.svg" };
-                let sep = std::path::MAIN_SEPARATOR;
-                let mut parts: Vec<AnyElement> = Vec::new();
-                for (i, part) in shown.split(sep).enumerate() {
-                    if i > 0 {
-                        parts.push(div().px(px(3.)).text_color(theme.muted_foreground.opacity(0.7)).child(sep.to_string()).into_any_element());
-                    }
-                    parts.push(div().child(part.to_string()).into_any_element());
+        // With none, the row is the one thing to do: Choose Container…
+        // whole, lit whole under the pointer, its keys at the right.
+        let Some(dir) = self.container() else {
+            return h_flex()
+                .id("container-choose")
+                .min_h(px(46.))
+                .px(px(14.))
+                .gap(px(9.))
+                .items_center()
+                .rounded(inner)
+                .text_size(px(13.))
+                .cursor_pointer()
+                .hover(move |s| s.bg(lit))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(|_, _, _, cx| {
+                    let me = cx.entity();
+                    let Some(main) = cx.try_global::<crate::MainShell>().map(|m| m.1) else { return };
+                    cx.defer(move |cx| {
+                        let _ = main.update(cx, |_, window, cx| me.update(cx, |s, cx| s.choose_container(window, cx)));
+                    });
+                }))
+                .child(Icon::default().path("icons/folder-open.svg").with_size(px(15.)).text_color(theme.primary))
+                .child(div().flex_1().child(t("Choose Container…")))
+                .child(crate::widgets::kbd_hint("⌘⇧O", &theme))
+                .into_any_element();
+        };
+        let path = {
+            let shown = crate::sys::short_path(&dir);
+            let icon = if shown.starts_with("iCloud Drive") { "icons/cloud.svg" } else { "icons/folder.svg" };
+            let sep = std::path::MAIN_SEPARATOR;
+            let mut parts: Vec<AnyElement> = Vec::new();
+            for (i, part) in shown.split(sep).enumerate() {
+                if i > 0 {
+                    parts.push(div().px(px(3.)).text_color(theme.muted_foreground.opacity(0.7)).child(sep.to_string()).into_any_element());
                 }
-                let words: SharedString = t("Reveal in Finder").into();
-                h_flex()
-                    .id("container-path")
-                    .size_full()
-                    .px(px(14.))
-                    .py(px(8.))
-                    .gap(px(9.))
-                    .items_center()
-                    .rounded_l(inner)
-                    .cursor_pointer()
-                    .hover(move |s| s.bg(lit))
-                    .managed_tooltip(move |window, cx| tip(words.clone(), window, cx))
-                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(move |_, _, _| crate::sys::reveal(&dir))
-                    .child(Icon::default().path(icon).with_size(px(15.)).text_color(theme.primary))
-                    .child(h_flex().flex_wrap().min_w_0().font_family(self.look.mono_family.clone()).text_size(px(12.5)).text_color(theme.foreground).children(parts))
-                    .into_any_element()
+                parts.push(div().child(part.to_string()).into_any_element());
             }
+            let words: SharedString = t("Reveal in Finder").into();
+            // At the path's end, Close Container: the window as at its
+            // first launch. Red under the pointer, as a thing let go.
+            let (danger, wash) = (theme.danger, theme.danger.opacity(0.12));
+            let close = div()
+                .id("container-close")
+                .size(px(24.))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded(px(6.))
+                .text_color(theme.muted_foreground)
+                .hover(move |s| s.bg(wash).text_color(danger))
+                .managed_tooltip(|window, cx| tip(t("Close Container"), window, cx))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(|_, _, _, cx| {
+                    cx.stop_propagation();
+                    let me = cx.entity();
+                    let Some(main) = cx.try_global::<crate::MainShell>().map(|m| m.1) else { return };
+                    cx.defer(move |cx| {
+                        let _ = main.update(cx, |_, window, cx| me.update(cx, |s, cx| s.close_container(window, cx)));
+                    });
+                }))
+                .child(Icon::default().path("icons/close.svg").with_size(px(13.)));
+            h_flex()
+                .id("container-path")
+                .size_full()
+                .px(px(14.))
+                .py(px(8.))
+                .gap(px(9.))
+                .items_center()
+                .rounded_l(inner)
+                .cursor_pointer()
+                .hover(move |s| s.bg(lit))
+                .managed_tooltip(move |window, cx| tip(words.clone(), window, cx))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(move |_, _, _| crate::sys::reveal(&dir))
+                .child(Icon::default().path(icon).with_size(px(15.)).text_color(theme.primary))
+                .child(h_flex().flex_1().flex_wrap().min_w_0().font_family(self.look.mono_family.clone()).text_size(px(12.5)).text_color(theme.foreground).children(parts))
+                .child(close)
+                .into_any_element()
         };
         let change = h_flex()
             .id("container-change")

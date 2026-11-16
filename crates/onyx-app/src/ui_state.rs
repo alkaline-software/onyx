@@ -60,9 +60,9 @@ pub struct UiState {
     pub menu_note: Option<PathBuf>,
     pub menu_vault: Option<PathBuf>,
     pub menu_tree: Option<bool>,
-    /// The width a drag or a double click gave the menu bar note's tree.
-    #[serde(default)]
-    pub menu_tree_w: Option<f32>,
+    /// Whether the menu bar note's vault was closed (Close Vault): its
+    /// tree lists the vaults until one is chosen.
+    pub menu_closed: bool,
     /// Which card the sidebar has open: `notes` or `assets`.
     #[serde(default)]
     pub side_view: Option<String>,

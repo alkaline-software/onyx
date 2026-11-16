@@ -736,7 +736,7 @@ impl Picker {
                     let mark = if self.folder == self.root {
                         let name = self.root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
                         let letter: String = name.chars().next().map(|c| c.to_uppercase().collect()).unwrap_or_default();
-                        div().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).text_color(ink.unwrap_or(theme.primary)).child(letter).into_any_element()
+                        div().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).text_color(ink.unwrap_or(theme.muted_foreground)).child(letter).into_any_element()
                     } else {
                         drawn(None, ink, "folder", false, theme.mode.is_dark(), 18., theme)
                     };

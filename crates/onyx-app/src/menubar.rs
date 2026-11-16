@@ -78,19 +78,11 @@ const HEAD_GAP: f32 = 6.;
 /// The room each side of the words, a little under the main window's
 /// (`SHEET_GUTTER`): the tree takes a third of the card.
 const GUTTER: f32 = 28.;
-/// The tree's width beside the note as it first comes; the least and
-/// most a drag of its edge gives it, the most a double click's fit does,
-/// and where the pointer, carried left of it, folds the tree away, as the
-/// main window's sidebar (`SIDEBAR_MIN` and on). At most two fifths of the
-/// card, so the note keeps the most of it; a name cut short says itself
-/// whole under the pointer (`tree_row`).
-const TREE_W: f32 = 200.;
-const TREE_MIN: f32 = 150.;
-const TREE_MAX: f32 = NOTE_W * 0.4;
-const TREE_FIT_MAX: f32 = TREE_MAX;
-const TREE_FOLD_AT: f32 = 100.;
-/// The strip over the tree's edge that takes the drag.
-const GRIP: f32 = 8.;
+/// The tree's width beside the note, fixed, under a third of the card, so
+/// the note keeps the most of it, and the vault's row keeps room for a
+/// name beside its three tools. A name cut short says itself whole
+/// under the pointer (`tree_row`).
+const TREE_W: f32 = 170.;
 use crate::tabs::{Item, TabHost, Tabs};
 /// A note written this long after its first change, as a tab's is.
 const SAVE_AFTER: Duration = Duration::from_secs(2);
@@ -162,12 +154,20 @@ struct Browse {
     open: HashSet<PathBuf>,
     naming: Option<Naming>,
     scroll: ScrollHandle,
+    /// The folder the pointer is on, whose New Note and New Folder show.
+    hover_row: Option<PathBuf>,
 }
 
 /// A new note being named, in its folder's place in the tree. Nothing is
 /// made until the name is given.
 struct Naming {
     dir: PathBuf,
+    /// A folder's name being given, not a note's.
+    folder: bool,
+    /// A vault's, in the container (`dir`), not a note's or a folder's:
+    /// asked in the vault's block at the tree's foot, or atop the list of
+    /// vaults while none is shown.
+    vault: bool,
     input: Entity<InputState>,
     /// Why the name given was refused.
     why: Option<SharedString>,
@@ -191,11 +191,11 @@ pub(crate) struct MenuNote {
     /// way and since when.
     tree_open: bool,
     tree_anim: Option<(bool, Instant)>,
-    /// Its width, on its way there after a double click on its edge from
-    /// the width it stood at then, and whether its edge is held.
-    tree_w: f32,
-    tree_w_anim: Option<(f32, Instant)>,
-    tree_drag: bool,
+    /// Where the vault's block at the tree's foot stood when last drawn,
+    /// which its list rises from.
+    vault_at: Rc<std::cell::Cell<Bounds<Pixels>>>,
+    /// The landing page's scroll, while it lists the vaults.
+    landing_scroll: ScrollHandle,
     browse: Browse,
     motion: Motion,
     pinned: bool,
@@ -234,9 +234,8 @@ impl MenuNote {
             user_name: Shell::name_of(&cfg),
             tree_open: UiState::load().menu_tree.unwrap_or(true),
             tree_anim: None,
-            tree_w: UiState::load().menu_tree_w.unwrap_or(TREE_W).clamp(TREE_MIN, TREE_MAX),
-            tree_w_anim: None,
-            tree_drag: false,
+            vault_at: Rc::default(),
+            landing_scroll: ScrollHandle::default(),
             browse: Browse::default(),
             motion: Motion::default(),
             pinned: false,
@@ -923,7 +922,7 @@ impl MenuNote {
         let held = self.path().and_then(|p| vaults.iter().filter(|v| p.starts_with(v)).max_by_key(|v| v.components().count()).cloned());
         let shown = self.browse.vault.clone().filter(|v| vaults.contains(v));
         let last = UiState::load().menu_vault.filter(|v| vaults.contains(v));
-        let vault = held.or(shown).or(last).or_else(|| vaults.first().cloned());
+        let vault = if UiState::load().menu_closed { None } else { held.or(shown).or(last).or_else(|| vaults.first().cloned()) };
         if let (Some(root), Some(path)) = (vault.as_ref(), self.path().map(Path::to_path_buf)) {
             let mut up = path.parent();
             while let Some(d) = up.filter(|d| d.starts_with(root) && *d != root.as_path()) {
@@ -946,10 +945,30 @@ impl MenuNote {
         if let Some(v) = vault {
             let mut ui = UiState::load();
             ui.menu_vault = Some(v);
+            ui.menu_closed = false;
             ui.save_later();
         }
         self.read_tree(cx);
         cx.notify();
+    }
+
+    /// Close Vault, as the main window's: the vault's notes written and
+    /// their tabs closed, and the tree back to the list of vaults until
+    /// one is chosen, kept so (`menu_closed`).
+    fn close_vault(&mut self, cx: &mut Context<Self>) {
+        let Some(root) = self.browse.vault.clone() else { return };
+        for i in (0..self.tabs.len()).rev() {
+            if self.tabs[i].path.starts_with(&root) {
+                self.close_tab(i, cx);
+            }
+        }
+        self.closed.retain(|p| !p.starts_with(&root));
+        self.set_vault(None, cx);
+        let mut ui = UiState::load();
+        ui.menu_vault = None;
+        ui.menu_closed = true;
+        ui.save_later();
+        self.with_window(|this, window, cx| this.focus_in(window, cx), cx);
     }
 
     /// The vault's tree, read off the window's thread.
@@ -1016,117 +1035,6 @@ impl MenuNote {
         }
     }
 
-    /// How wide the tree stands now, on its way there after a double
-    /// click on its edge.
-    fn tree_width(&self) -> f32 {
-        match self.tree_w_anim {
-            Some((from, at)) if at.elapsed() < SLIDE => from + (self.tree_w - from) * ease_out_quint()(at.elapsed().as_secs_f32() / SLIDE.as_secs_f32()),
-            _ => self.tree_w,
-        }
-    }
-
-    /// The pointer moved with the tree's edge held: the tree is as wide
-    /// as where the pointer is, between its least and most, and folds away
-    /// once the pointer is well left of the least. Brought back out in the
-    /// same drag, it is there again.
-    fn tree_drag_to(&mut self, e: &MouseMoveEvent, cx: &mut Context<Self>) {
-        if e.pressed_button != Some(MouseButton::Left) {
-            self.tree_drag_end(cx);
-            return;
-        }
-        // The card stands the shadow's room in from the window's left,
-        // and in by its edge.
-        let x = f32::from(e.position.x) - SHADE - 1.;
-        let open = x >= TREE_FOLD_AT;
-        if open != self.tree_open {
-            self.toggle_tree(cx);
-        }
-        if open {
-            self.tree_w = x.clamp(TREE_MIN, TREE_MAX);
-            self.tree_w_anim = None;
-        }
-        cx.notify();
-    }
-
-    fn tree_drag_end(&mut self, cx: &mut Context<Self>) {
-        if std::mem::take(&mut self.tree_drag) {
-            self.keep_tree_w();
-            cx.notify();
-        }
-    }
-
-    fn keep_tree_w(&self) {
-        let mut ui = UiState::load();
-        ui.menu_tree_w = Some(self.tree_w);
-        ui.save_later();
-    }
-
-    /// The width at which the tree's rows in view, and the vault's name
-    /// over them, are not cut short, long outliers held to `TREE_FIT_MAX`.
-    /// A double click on the edge goes there.
-    fn tree_fit(&self, window: &Window, cx: &App) -> f32 {
-        // Round a name (`tree_row`): the list's padding on both sides, the
-        // row's padding, the chevron and the gap after it; a folder's icon
-        // and its plus with their gaps.
-        const NOTE: f32 = 2. * 6. + 8. + 12. + 6. + 4.;
-        const FOLDER: f32 = 16. + 6. + 22. + 6.;
-        const DEPTH: f32 = 14.;
-        // The vault's row (`render_tree_head`): its padding, its icon,
-        // chevron and gaps, and the plus after it.
-        const HEAD: f32 = 8. + 2. * 8. + 13. + 2. * 6. + 12. + 2. + 28. + 6.;
-        let font = font(cx.theme().font_family.clone());
-        let measure = |text: &str, weight: FontWeight| {
-            let run = TextRun { len: text.len(), font: Font { weight, ..font.clone() }, color: gpui::black(), background_color: None, underline: None, strikethrough: None };
-            f32::from(window.text_system().shape_line(SharedString::from(text.to_string()), px(13.), &[run], None).width())
-        };
-        fn widest(entries: &[vault::Entry], depth: usize, open: &HashSet<PathBuf>, measure: &dyn Fn(&str) -> f32) -> f32 {
-            entries.iter().fold(0., |most: f32, e| {
-                let inside = if e.dir && open.contains(&e.path) { widest(&e.children, depth + 1, open, measure) } else { 0. };
-                let own = NOTE + if e.dir { FOLDER } else { 0. } + DEPTH * depth as f32 + measure(&e.name);
-                most.max(own).max(inside)
-            })
-        }
-        let rows = self.browse.tree.as_ref().map_or(0., |t| widest(&t.children, 0, &self.browse.open, &|s| measure(s, FontWeight::NORMAL)));
-        let head = self.browse.vault.as_deref().map_or(0., |v| HEAD + measure(&vault_name(v), FontWeight::MEDIUM));
-        rows.max(head).ceil().clamp(TREE_MIN, TREE_FIT_MAX)
-    }
-
-    /// The strip over the tree's edge that takes the drag and the double
-    /// click, as the main window's sidebar's (`Shell::render_side_grip`):
-    /// it lights a line on the edge under the pointer, and the pointer
-    /// keeps its look wherever a drag takes it.
-    fn render_tree_grip(&self, edge: f32, cx: &mut Context<Self>) -> impl IntoElement {
-        let line = cx.theme().primary.opacity(0.55);
-        let held = self.tree_drag;
-        div()
-            .id("menu-tree-grip")
-            .group("menu-tree-grip")
-            .absolute()
-            .top(px(HEAD_H))
-            .bottom_0()
-            .left(px(edge - GRIP / 2.))
-            .w(px(GRIP))
-            .occlude()
-            .cursor(CursorStyle::ResizeLeftRight)
-            .on_mouse_down(
-                MouseButton::Left,
-                cx.listener(|this, ev: &MouseDownEvent, window, cx| {
-                    swallow_click(window, cx);
-                    if ev.click_count == 2 {
-                        this.tree_drag = false;
-                        this.tree_w_anim = Some((this.tree_width(), Instant::now()));
-                        this.tree_w = this.tree_fit(window, cx);
-                        this.keep_tree_w();
-                    } else {
-                        this.tree_drag = true;
-                    }
-                    cx.notify();
-                }),
-            )
-            .child(div().absolute().top_0().bottom_0().left(px(GRIP / 2. - 1.5)).w(px(2.)).when(held, |d| d.bg(line)).group_hover("menu-tree-grip", move |s| s.bg(line)))
-            .when(held, |d| d.child(canvas(|_, _, _| (), |_, _, window, _| window.set_window_cursor_style(CursorStyle::ResizeLeftRight)).absolute().size_0()))
-    }
-
     fn toggle_folder(&mut self, path: PathBuf, cx: &mut Context<Self>) {
         self.browse.naming = None;
         if !self.browse.open.remove(&path) {
@@ -1139,14 +1047,41 @@ impl MenuNote {
     /// A new note in `dir`: a row in its place in the tree, its name
     /// offered as the first free "Untitled" and selected to type over.
     fn start_naming(&mut self, dir: PathBuf, cx: &mut Context<Self>) {
-        if let Some(root) = self.browse.vault.clone() {
+        self.ask_name(dir, false, cx);
+    }
+
+    /// A new folder's name asked in the tree, as a note's is.
+    fn start_folder(&mut self, dir: PathBuf, cx: &mut Context<Self>) {
+        self.ask_name(dir, true, cx);
+    }
+
+    /// The tree's folders all shut, as the sidebar's Collapse All Folders.
+    fn collapse_all(&mut self, cx: &mut Context<Self>) {
+        self.browse.open.clear();
+        cx.notify();
+    }
+
+    fn ask_name(&mut self, dir: PathBuf, folder: bool, cx: &mut Context<Self>) {
+        self.ask(dir, folder, false, cx);
+    }
+
+    /// New Vault…: its name asked where the vault's block stands, the
+    /// first free "Notes" offered, as the main window's sheet offers it.
+    fn start_vault(&mut self, cx: &mut Context<Self>) {
+        let Some(container) = crate::shell::library::container_of(&Config::load()) else { return };
+        self.menus.close(cx);
+        self.ask(container, true, true, cx);
+    }
+
+    fn ask(&mut self, dir: PathBuf, folder: bool, vault: bool, cx: &mut Context<Self>) {
+        if let Some(root) = self.browse.vault.clone().filter(|_| !vault) {
             let mut up = Some(dir.as_path());
             while let Some(d) = up.filter(|d| d.starts_with(&root) && *d != root.as_path()) {
                 self.browse.open.insert(d.to_path_buf());
                 up = d.parent();
             }
         }
-        let name = vault::free_stem(&dir, t("Untitled"), false);
+        let name = if vault { vault::free_stem(&dir, t("Notes"), true) } else if folder { vault::free_stem(&dir, t("New folder"), true) } else { vault::free_stem(&dir, t("Untitled"), false) };
         self.with_window(move |this, window, cx| {
             let input = cx.new(|cx| InputState::new(window, cx));
             input.update(cx, |i, cx| {
@@ -1163,7 +1098,7 @@ impl MenuNote {
                 }
                 _ => {}
             });
-            this.browse.naming = Some(Naming { dir, input, why: None, _sub: sub });
+            this.browse.naming = Some(Naming { dir, folder, vault, input, why: None, _sub: sub });
             this.focus_in(window, cx);
             cx.notify();
         }, cx);
@@ -1174,7 +1109,31 @@ impl MenuNote {
     fn finish_naming(&mut self, cx: &mut Context<Self>) {
         let Some(n) = self.browse.naming.as_mut() else { return };
         let name = n.input.read(cx).value().to_string();
-        match vault::create(&n.dir, &name, false) {
+        let folder = n.folder;
+        if n.vault {
+            match vault::new_vault(&n.dir, &name) {
+                Ok(root) => {
+                    self.browse.naming = None;
+                    self.set_vault(Some(root), cx);
+                    self.with_window(|this, window, cx| this.focus_in(window, cx), cx);
+                }
+                Err(e) => {
+                    n.why = Some(match e.kind() {
+                        std::io::ErrorKind::InvalidInput => t("A name can't be empty or have a slash.").into(),
+                        _ => tf("The vault was not made: {why}", &[("why", &e)]).into(),
+                    });
+                    cx.notify();
+                }
+            }
+            return;
+        }
+        match vault::create(&n.dir, &name, folder) {
+            Ok(path) if folder => {
+                self.browse.naming = None;
+                self.browse.open.insert(path);
+                self.read_tree(cx);
+                self.with_window(|this, window, cx| this.focus_in(window, cx), cx);
+            }
             Ok(path) => {
                 self.browse.naming = None;
                 self.read_tree(cx);
@@ -1183,8 +1142,10 @@ impl MenuNote {
             Err(e) => {
                 let named = name.trim().to_string();
                 let why = match e.kind() {
+                    std::io::ErrorKind::AlreadyExists if folder => tf("There is already a folder named {name}.", &[("name", &named)]),
                     std::io::ErrorKind::AlreadyExists => tf("There is already a note named {name}.", &[("name", &named)]),
                     std::io::ErrorKind::InvalidInput => t("A name can't be empty or have a slash.").to_string(),
+                    _ if folder => tf("The folder could not be made: {why}", &[("why", &e)]),
                     _ => tf("The note could not be made: {why}", &[("why", &e)]),
                 };
                 n.why = Some(why.into());
@@ -1200,19 +1161,26 @@ impl MenuNote {
         }
     }
 
-    /// The vault's name on the page: the vaults Onyx knows, and Onyx's
-    /// window, where one is opened or made.
-    fn vault_menu(&mut self, at: Point<Pixels>, cx: &mut Context<Self>) {
+    /// The vault's block at the tree's foot: the vaults Onyx knows, rising
+    /// from the block, as wide as it, then New Vault… and Close Vault, as
+    /// the sidebar's list has them. Onyx's window is the head's own button
+    /// at the right.
+    fn vault_menu(&mut self, cx: &mut Context<Self>) {
+        let b = self.vault_at.get();
+        let at = point(b.origin.x, b.origin.y - px(6.));
         let shown = self.browse.vault.clone();
         let mut entries: Vec<Entry> = known_vaults()
             .into_iter()
-            .map(|v| Entry::Choice { id: v.to_string_lossy().to_string().into(), icon: "icons/folder.svg", label: vault_name(&v).into(), picture: false, chosen: shown.as_ref() == Some(&v) })
+            .map(|v| Entry::Choice { id: v.to_string_lossy().to_string().into(), icon: "icons/book-open.svg", label: vault_name(&v).into(), picture: false, chosen: shown.as_ref() == Some(&v) })
             .collect();
         if !entries.is_empty() {
             entries.push(Entry::Rule);
         }
-        entries.push(Entry::choice("open-onyx", "icons/app-window.svg", t("Open Onyx")));
-        self.menus.show("vaults", at, entries);
+        entries.push(Entry::choice("new", "icons/plus.svg", t("New Vault…")));
+        if shown.is_some() {
+            entries.push(Entry::choice("close", "icons/close.svg", t("Close Vault")));
+        }
+        self.menus.show_above("vaults", at, Some(b.size.width), entries);
         cx.notify();
     }
 
@@ -1297,6 +1265,7 @@ impl MenuNote {
             if let Some(folder) = self.pressed.take() {
                 match id.as_ref() {
                     "new-note" => self.start_naming(folder, cx),
+                    "new-folder" => self.start_folder(folder, cx),
                     "folder-look" => self.open_folder_look(folder, window, cx),
                     _ => {}
                 }
@@ -1305,7 +1274,8 @@ impl MenuNote {
         }
         if what == "vaults" {
             match id.as_ref() {
-                "open-onyx" => self.show_onyx(cx),
+                "new" => self.start_vault(cx),
+                "close" => self.close_vault(cx),
                 path => self.set_vault(Some(PathBuf::from(path)), cx),
             }
             return;
@@ -1445,6 +1415,9 @@ impl MenuNote {
     /// next, each on a pill with its keys.
     fn render_landing(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
+        if self.browse.vault.is_none() && crate::shell::library::container_of(&Config::load()).is_some() {
+            return self.render_vault_page(cx);
+        }
         let choice = |id: &'static str, icon: &'static str, label: &str, keys: &str, theme: &gpui_component::Theme| choice_pill(id, icon, label.to_string(), Press::Quiet, false, theme).min_w(px(220.)).h(px(34.)).px(px(14.)).gap(px(8.)).text_size(px(13.)).child(div().flex_1()).child(kbd_hint(keys, theme));
         v_flex()
             .flex_1()
@@ -1482,62 +1455,238 @@ impl MenuNote {
             .into_any_element()
     }
 
-    /// The tree's own row: the vault's name, which offers the others, and
-    /// a new note at the vault's top.
-    fn render_tree_head(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// The vault's block (`library::vault_block`) at the tree's foot, as
+    /// the sidebar has it under its card: its press lists the vaults Onyx
+    /// knows over it, as wide as it, and a press while they show puts them
+    /// away. With no vault, nothing.
+    fn render_tree_foot(&self, ground: Hsla, cx: &mut Context<Self>) -> Option<AnyElement> {
+        use crate::shell::library::{vault_block, BlockSize};
         let theme = cx.theme().clone();
-        let hover = theme.foreground.opacity(0.07);
-        let root = self.browse.vault.clone();
-        let name = root.as_deref().map(vault_name).unwrap_or_else(|| t("No vault").to_string());
-        h_flex()
-            .h(px(36.))
-            .flex_shrink_0()
-            .pl(px(8.))
-            .pr(px(6.))
-            .pt(px(6.))
-            .gap(px(2.))
-            .items_center()
-            .child(
-                h_flex()
-                    .id("menu-note-vault")
-                    .flex_1()
-                    .min_w_0()
-                    .h(px(28.))
-                    .px(px(8.))
-                    .gap(px(6.))
-                    .items_center()
-                    .rounded(px(7.))
-                    .cursor_pointer()
-                    .hover(move |s| s.bg(hover))
-                    .on_click(cx.listener(|this, ev: &ClickEvent, window, cx| {
+        let root = self.browse.vault.clone()?;
+        if self.browse.naming.as_ref().is_some_and(|n| n.vault) {
+            return Some(self.vault_naming(ground, &theme).mx(px(6.)).mt(px(4.)).mb(px(6.)).into_any_element());
+        }
+        let name = vault_name(&root);
+        let listed = self.menus.open.as_ref().is_some_and(|m| m.what == "vaults");
+        let place = self.vault_at.clone();
+        Some(
+            vault_block("menu-note-vault", &root, &name, BlockSize::MENU, ground, listed, &theme, cx)
+                .mx(px(6.))
+                .mt(px(4.))
+                .mb(px(6.))
+                .on_click(cx.listener(|this, _, window, cx| {
+                    swallow_click(window, cx);
+                    if this.menus.open.as_ref().is_some_and(|m| m.what == "vaults") {
+                        this.menus.close(cx);
+                        cx.notify();
+                    } else {
+                        this.vault_menu(cx);
+                    }
+                }))
+                .child(canvas(move |b, _, _| place.set(b), |_, _, _, _| ()).absolute().top_0().left_0().size_full())
+                .into_any_element(),
+        )
+    }
+
+    /// No tab and no vault, with a container: the main window's page before
+    /// a vault made small (`Shell::render_place_page`): the notebooks'
+    /// drawing, the plain instruction, and a tile for each vault, two to a
+    /// row, then New Vault…, whose name is asked atop the tree's list. No
+    /// Choose Container…: the container is the main window's.
+    fn render_vault_page(&self, cx: &mut Context<Self>) -> AnyElement {
+        use crate::shell::places::{new_vault_tile, tile_rows, vault_tile};
+        let theme = cx.theme().clone();
+        let vaults = known_vaults();
+        let words = if vaults.is_empty() { t("Create a vault to start.") } else { t("Pick a vault to start.") };
+        let mut tiles: Vec<AnyElement> = Vec::new();
+        for (i, v) in vaults.into_iter().enumerate() {
+            tiles.push(
+                vault_tile(ElementId::NamedInteger("menu-page-vault".into(), i as u64), &v, theme.background, &theme, cx)
+                    .on_click(cx.listener(move |this, _, window, cx| {
                         swallow_click(window, cx);
-                        this.vault_menu(ev.position() + point(px(-40.), px(16.)), cx);
+                        this.set_vault(Some(v.clone()), cx);
+                        this.with_window(|this, window, cx| this.focus_in(window, cx), cx);
                     }))
-                    .child(Icon::default().path("icons/folder.svg").with_size(px(13.)).text_color(theme.muted_foreground))
-                    .child(div().min_w_0().truncate().text_size(px(13.)).font_weight(FontWeight::MEDIUM).text_color(theme.foreground).child(name))
-                    .child(Icon::default().path("icons/chevron-down.svg").with_size(px(12.)).flex_shrink_0().text_color(theme.muted_foreground)),
-            )
-            .when_some(root, |d, root| {
-                d.child(
-                    div()
-                        .id("menu-note-new")
-                        .size(px(28.))
-                        .flex_shrink_0()
-                        .flex()
+                    .into_any_element(),
+            );
+        }
+        tiles.push(
+            new_vault_tile("menu-page-new-vault", &theme)
+                .on_click(cx.listener(|this, _, window, cx| {
+                    swallow_click(window, cx);
+                    if !this.tree_open {
+                        this.toggle_tree(cx);
+                    }
+                    this.start_vault(cx);
+                }))
+                .into_any_element(),
+        );
+        let scroll = self.landing_scroll.clone();
+        self.scrollers.name(&scroll);
+        div()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .relative()
+            .child(
+                div().id("menu-page").size_full().overflow_y_scroll().track_scroll(&scroll).child(
+                    v_flex()
+                        .min_h_full()
                         .items_center()
                         .justify_center()
-                        .rounded(px(7.))
-                        .cursor_pointer()
-                        .hover(move |s| s.bg(hover))
-                        .managed_tooltip(|window, cx| tip(t("New Note"), window, cx))
-                        .on_click(cx.listener(move |this, _, window, cx| {
-                            swallow_click(window, cx);
-                            this.start_naming(root.clone(), cx);
-                        }))
-                        .child(Icon::default().path("icons/plus.svg").with_size(px(14.)).text_color(theme.muted_foreground)),
-                )
-            })
+                        .px(px(20.))
+                        .pt(px(20.))
+                        .pb(px(32.))
+                        .gap(px(22.))
+                        .child(v_flex().items_center().gap(px(10.)).child(Shell::shelf_figure(&self.home_fig, cx.entity_id())).child(div().text_size(px(26.)).font_family(self.look.text_family.clone()).child(words)))
+                        .child(tile_rows(2).children(tiles)),
+                ),
+            )
+            .vertical_scrollbar(&scroll)
             .into_any_element()
+    }
+
+    /// A new vault's name being given, in the shape of the block it will
+    /// be (`library::vault_block` at `BlockSize::MENU`): an empty deck's
+    /// tile and the field, its edge the accent, or the danger's while a
+    /// name is refused.
+    fn vault_naming(&self, ground: Hsla, theme: &gpui_component::Theme) -> Div {
+        use crate::shell::library::BlockSize;
+        let size = BlockSize::MENU;
+        let Some(n) = &self.browse.naming else { return div() };
+        let rim = if n.why.is_some() { theme.danger } else { theme.primary };
+        let tile = div().size(px(size.deck)).rounded(px(size.deck * 0.3)).bg(theme.muted_foreground.opacity(0.18));
+        h_flex()
+            .flex_shrink_0()
+            .h(px(size.h))
+            .pl(px(size.h * 0.2 + 2.))
+            .pr(px(8.))
+            .gap(px(size.h * 0.2 + 2.))
+            .items_center()
+            .rounded(px(10.))
+            .border_1()
+            .border_color(rim.opacity(0.6))
+            .bg(ground.blend(theme.foreground.opacity(0.05)))
+            .text_size(px(size.text))
+            .font_weight(FontWeight::SEMIBOLD)
+            .child(tile)
+            .child(div().flex_1().min_w_0().child(Input::new(&n.input).appearance(false).bordered(false).xsmall().px_0()))
+    }
+
+    /// No vault shown, with a container: the vaults to choose from, as the
+    /// sidebar's card has them before a vault (`Shell::render_place_card`):
+    /// a head with the vaults' title and New Vault…, then a block for each
+    /// (`library::vault_block`), a new one's name atop them while it is
+    /// asked.
+    fn render_vault_list(&self, ground: Hsla, cx: &mut Context<Self>) -> AnyElement {
+        use crate::shell::library::{row_tool, vault_block, BlockSize};
+        let theme = cx.theme().clone();
+        let tool = row_tool("menu-note-new-vault", "icons/plus.svg", t("New Vault…").into(), &theme).on_click(cx.listener(|this, _, window, cx| {
+            swallow_click(window, cx);
+            this.start_vault(cx);
+        }));
+        let head = h_flex()
+            .flex_shrink_0()
+            .mx(px(6.))
+            .mt(px(4.))
+            .h(px(32.))
+            .pl(px(8.))
+            .gap(px(6.))
+            .items_center()
+            .text_size(px(13.))
+            .child(div().w(px(12.)).flex_shrink_0().flex().justify_center().child(Icon::default().path("icons/books.svg").with_size(px(15.)).text_color(theme.muted_foreground)))
+            .child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::SEMIBOLD).text_color(theme.foreground).child(t("Vaults")))
+            .child(tool);
+        let mut rows: Vec<AnyElement> = Vec::new();
+        if self.browse.naming.as_ref().is_some_and(|n| n.vault) {
+            rows.push(self.vault_naming(ground, &theme).into_any_element());
+        }
+        for (i, v) in known_vaults().into_iter().enumerate() {
+            let name = vault_name(&v);
+            rows.push(
+                vault_block(ElementId::NamedInteger("menu-note-vaults".into(), i as u64), &v, &name, BlockSize::MENU, ground, false, &theme, cx)
+                    .on_click(cx.listener(move |this, _, window, cx| {
+                        swallow_click(window, cx);
+                        this.set_vault(Some(v.clone()), cx);
+                        this.with_window(|this, window, cx| this.focus_in(window, cx), cx);
+                    }))
+                    .into_any_element(),
+            );
+        }
+        let scroll = self.browse.scroll.clone();
+        self.scrollers.name(&scroll);
+        v_flex()
+            .flex_1()
+            .min_h_0()
+            .child(head)
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .relative()
+                    .child(div().id("menu-note-vaults").size_full().overflow_y_scroll().track_scroll(&scroll).child(v_flex().px(px(6.)).pt(px(4.)).pb(px(10.)).gap(px(6.)).children(rows)))
+                    .child(crate::shell::edge_fade(&scroll, ground, true, px(0.)))
+                    .child(crate::shell::edge_fade_at(&scroll, ground, false, Corners { bottom_left: px(RADIUS - 1.), ..Default::default() }))
+                    .vertical_scrollbar(&scroll),
+            )
+            .into_any_element()
+    }
+
+    /// Why a name was refused, over the tree's foot.
+    fn render_why(&self, foot: bool, theme: &gpui_component::Theme) -> Option<AnyElement> {
+        let why = self.browse.naming.as_ref().and_then(|n| n.why.clone())?;
+        Some(
+            div()
+                .absolute()
+                .bottom(px(if foot { 38. + 4. + 6. + 8. } else { 10. }))
+                .left(px(8.))
+                .right(px(8.))
+                .px(px(10.))
+                .py(px(8.))
+                .rounded(px(8.))
+                .bg(theme.popover)
+                .border_1()
+                .border_color(theme.danger.opacity(0.4))
+                .shadow_md()
+                .text_size(px(12.5))
+                .text_color(theme.danger)
+                .child(why)
+                .with_animation("menu-note-why", Animation::new(COME).with_easing(ease_out_quint()), |d, k| d.opacity(k).mb(px(-4. * (1. - k))))
+                .into_any_element(),
+        )
+    }
+
+    /// The vault at the top of its tree, the sidebar's own row
+    /// (`library::vault_root_row`), with the Notes tools
+    /// (`library::notes_tools`) at its right.
+    fn render_tree_head(&self, ground: Hsla, cx: &mut Context<Self>) -> AnyElement {
+        use crate::shell::library::{notes_tools, vault_root_row};
+        let theme = cx.theme().clone();
+        let Some(root) = self.browse.vault.clone() else { return div().h(px(8.)).into_any_element() };
+        let name = vault_name(&root);
+        let [collapse, note, folder] = notes_tools("menu-note", &theme);
+        let tools = h_flex()
+            .flex_shrink_0()
+            .gap(px(2.))
+            .child(collapse.on_click(cx.listener(|this, _, window, cx| {
+                swallow_click(window, cx);
+                this.collapse_all(cx);
+            })))
+            .child(note.on_click(cx.listener({
+                let root = root.clone();
+                move |this, _, window, cx| {
+                    swallow_click(window, cx);
+                    this.start_naming(root.clone(), cx);
+                }
+            })))
+            .child(folder.on_click(cx.listener({
+                let root = root.clone();
+                move |this, _, window, cx| {
+                    swallow_click(window, cx);
+                    this.start_folder(root.clone(), cx);
+                }
+            })));
+        vault_root_row("menu-note-vault-root", &root, &name, ground, &theme, cx).mx(px(6.)).mt(px(4.)).child(tools).into_any_element()
     }
 
     /// The tree: the vault's folders and notes, as the main window's
@@ -1545,6 +1694,9 @@ impl MenuNote {
     /// window to open one.
     fn render_tree(&mut self, ground: Hsla, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
+        if self.browse.vault.is_none() && crate::shell::library::container_of(&Config::load()).is_some() {
+            return self.render_vault_list(ground, cx);
+        }
         let Some(root) = self.browse.vault.clone() else {
             return v_flex()
                 .flex_1()
@@ -1569,36 +1721,15 @@ impl MenuNote {
         self.tree_rows(&tree.children, 0, &theme, window, cx, &mut rows);
         let scroll = self.browse.scroll.clone();
         self.scrollers.name(&scroll);
-        let why = self.browse.naming.as_ref().and_then(|n| n.why.clone());
         div()
             .flex_1()
             .min_h_0()
             .relative()
             .child(div().id("menu-note-tree").size_full().overflow_y_scroll().track_scroll(&scroll).child(v_flex().px(px(6.)).pt(px(4.)).pb(px(10.)).children(rows)))
             .child(crate::shell::edge_fade(&scroll, ground, true, px(0.)))
-            // Its foot's left corner is the card's.
-            .child(crate::shell::edge_fade_at(&scroll, ground, false, Corners { bottom_left: px(RADIUS - 1.), ..Default::default() }))
+            // Its foot is over the vault's block, not at the card's corner.
+            .child(crate::shell::edge_fade(&scroll, ground, false, px(0.)))
             .vertical_scrollbar(&scroll)
-            .when_some(why, |d, why| {
-                d.child(
-                    div()
-                        .absolute()
-                        .bottom(px(10.))
-                        .left(px(8.))
-                        .right(px(8.))
-                        .px(px(10.))
-                        .py(px(8.))
-                        .rounded(px(8.))
-                        .bg(theme.popover)
-                        .border_1()
-                        .border_color(theme.danger.opacity(0.4))
-                        .shadow_md()
-                        .text_size(px(12.5))
-                        .text_color(theme.danger)
-                        .child(why)
-                        .with_animation("menu-note-why", Animation::new(COME).with_easing(ease_out_quint()), |d, k| d.opacity(k).mb(px(-4. * (1. - k)))),
-                )
-            })
             .into_any_element()
     }
 
@@ -1665,33 +1796,14 @@ impl MenuNote {
         // pointer: the room the row leaves it (the list's padding, the
         // row's, the chevron, a folder's icon and plus, and their gaps)
         // against its words' width.
-        let room = self.tree_width() - (2. * 6. + 8. + 14. * depth as f32 + 12. + 6. + 4.) - if e.dir { 16. + 6. + 22. + 6. } else { 0. };
+        let room = TREE_W - (2. * 6. + 8. + 14. * depth as f32 + 12. + 6. + 4.) - if e.dir { 16. + 6. } else { 0. };
         let run = TextRun { len: e.name.len(), font: font(theme.font_family.clone()), color: gpui::black(), background_color: None, underline: None, strikethrough: None };
         let wide = f32::from(window.text_system().shape_line(SharedString::from(e.name.clone()), px(13.), &[run], None).width());
         let whole: Option<SharedString> = (wide > room + 0.5).then(|| e.name.clone().into());
-        let new_here = e.dir.then(|| {
-            let into = e.path.clone();
-            let hover = theme.foreground.opacity(0.1);
-            div()
-                .id(ElementId::Name(format!("menu-new-in-{}", e.path.display()).into()))
-                .size(px(22.))
-                .flex_shrink_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(6.))
-                .opacity(0.)
-                .group_hover("menu-row", |s| s.opacity(1.))
-                .hover(move |s| s.bg(hover))
-                .managed_tooltip(|window, cx| tip(t("New Note"), window, cx))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    swallow_click(window, cx);
-                    cx.stop_propagation();
-                    this.start_naming(into.clone(), cx);
-                }))
-                .child(Icon::default().path("icons/plus.svg").with_size(px(13.)).text_color(theme.muted_foreground))
-        });
+        // The pointer on a folder's plate shows its tools; the row's own
+        // hover is its whole name's tip.
         let plate = h_flex()
+            .id(ElementId::Name(format!("menu-plate-{}", e.path.display()).into()))
             .size_full()
             .pl(px(8. + 14. * depth as f32))
             .pr(px(4.))
@@ -1703,7 +1815,39 @@ impl MenuNote {
             .child(div().w(px(12.)).flex_shrink_0().flex().justify_center().when(e.dir, |d| d.child(Icon::default().path(if open { "icons/chevron-down.svg" } else { "icons/chevron-right.svg" }).with_size(px(12.)).text_color(theme.muted_foreground))))
             .children(icon)
             .child(div().flex_1().min_w_0().truncate().child(e.name.clone()))
-            .children(new_here);
+            // A folder's New Note and New Folder while the pointer is on
+            // it, as the sidebar's (`Shell::hover_row`): no room is kept
+            // for them else.
+            .when(e.dir && self.browse.hover_row.as_ref() == Some(&e.path), |d| {
+                let (note_in, folder_in) = (path.clone(), path.clone());
+                d.child(
+                    h_flex()
+                        .flex_shrink_0()
+                        .mr(px(-4.))
+                        .gap(px(2.))
+                        .child(crate::shell::library::row_tool(ElementId::Name(format!("menu-row-note-{}", e.path.display()).into()), "icons/file-plus.svg", t("New Note").into(), theme).on_click(cx.listener(move |this, _, window, cx| {
+                            swallow_click(window, cx);
+                            cx.stop_propagation();
+                            this.start_naming(note_in.clone(), cx);
+                        })))
+                        .child(crate::shell::library::row_tool(ElementId::Name(format!("menu-row-folder-{}", e.path.display()).into()), "icons/folder-plus.svg", t("New Folder").into(), theme).on_click(cx.listener(move |this, _, window, cx| {
+                            swallow_click(window, cx);
+                            cx.stop_propagation();
+                            this.start_folder(folder_in.clone(), cx);
+                        }))),
+                )
+            })
+            .when(dir, |d| {
+                let hovered = path.clone();
+                d.on_hover(cx.listener(move |this, on: &bool, _, cx| {
+                    if *on {
+                        this.browse.hover_row = Some(hovered.clone());
+                    } else if this.browse.hover_row.as_ref() == Some(&hovered) {
+                        this.browse.hover_row = None;
+                    }
+                    cx.notify();
+                }))
+            });
         div()
             .id(ElementId::Name(format!("menu-entry-{}", e.path.display()).into()))
             .group("menu-row")
@@ -1731,7 +1875,7 @@ impl MenuNote {
                 d.on_mouse_down(MouseButton::Right, cx.listener(move |this, ev: &MouseDownEvent, window, cx| {
                     swallow_click(window, cx);
                     this.pressed = Some(path.clone());
-                    let items = vec![Entry::choice("new-note", "icons/file-plus.svg", t("New Note")), Entry::choice("folder-look", "tabler/palette.svg", t("Icon and Color…"))];
+                    let items = vec![Entry::choice("new-note", "icons/file-plus.svg", t("New Note")), Entry::choice("new-folder", "icons/folder-plus.svg", t("New Folder")), Entry::choice("folder-look", "tabler/palette.svg", t("Icon and Color…"))];
                     this.menus.show("folder", ev.position, items);
                     cx.notify();
                 }))
@@ -1762,6 +1906,7 @@ impl MenuNote {
                     .border_1()
                     .border_color(rim.opacity(0.6))
                     .child(div().w(px(12.)).flex_shrink_0())
+                    .when(n.folder, |d| d.child(Icon::default().path("icons/folder.svg").with_size(px(15.)).text_color(theme.muted_foreground)))
                     .child(div().flex_1().min_w_0().child(Input::new(&n.input).appearance(false).bordered(false).xsmall().px_0())),
             )
             .into_any_element()
@@ -1851,12 +1996,13 @@ impl Render for MenuNote {
         // The tree's ground, a shade toward the main window's frame, which
         // its sidebar stands on: darker than the note's in a light
         // appearance, nowhere near the frame itself.
-        let side = ground.blend(theme.title_bar.opacity(0.08));
+        // A shade toward the main window's sidebar, lighter than it.
+        let side = ground.blend(theme.title_bar.opacity(0.16));
         let arrow_x = self.arrow_x;
         // The tree beside the note, run open or shut on the slide's clock.
         let shown = self.tree_t();
-        let tree_w = self.tree_width();
-        if self.tree_anim.is_some_and(|(_, at)| at.elapsed() < SLIDE) || self.tree_w_anim.is_some_and(|(_, at)| at.elapsed() < SLIDE) {
+        let tree_w = TREE_W;
+        if self.tree_anim.is_some_and(|(_, at)| at.elapsed() < SLIDE) {
             window.request_animation_frame();
         }
         // The card's foot is rounded; a fade over it rounds the corners
@@ -1934,8 +2080,10 @@ impl Render for MenuNote {
         // card's is: a clip in gpui is a rectangle, and the tree's ground
         // stood past the card's corner.
         let tree = (shown > 0.).then(|| {
-            let head = self.render_tree_head(cx);
+            let head = self.render_tree_head(side, cx);
             let rows = self.render_tree(side, window, cx);
+            let foot = self.render_tree_foot(side, cx);
+            let why = self.render_why(foot.is_some(), &cx.theme().clone());
             div()
                 .h_full()
                 .flex_shrink_0()
@@ -1944,9 +2092,8 @@ impl Render for MenuNote {
                 .rounded_bl(corner)
                 .border_r_1()
                 .border_color(rim.opacity(shown))
-                .child(v_flex().w(px(tree_w)).h_full().bg(side).rounded_bl(corner).opacity(shown).child(head).child(rows))
+                .child(v_flex().w(px(tree_w)).h_full().bg(side).rounded_bl(corner).opacity(shown).relative().child(head).child(rows).children(foot).children(why))
         });
-        let grip = (shown > 0.).then(|| self.render_tree_grip(1. + tree_w * shown, cx));
         let body = h_flex().flex_1().min_h_0().children(tree).child(note);
         let pick: Rc<dyn Fn(&mut Self, &'static str, SharedString, &mut Window, &mut Context<Self>)> = Rc::new(|this, what, id, window, cx| this.menu_pick(what, id, window, cx));
         let close: Rc<dyn Fn(&mut Self, &mut Context<Self>)> = Rc::new(|this, cx| this.menus.close(cx));
@@ -1999,7 +2146,6 @@ impl Render for MenuNote {
             }))
             .child(head)
             .child(body)
-            .children(grip)
             .children(self.folder_look.as_ref().map(|(p, _)| p.clone()));
         // The arrow, as a popover's: the ground filled over the card's
         // edge where the two meet, then its sides drawn in the edge's color,
@@ -2054,28 +2200,6 @@ impl Render for MenuNote {
                 canvas(
                     |_, _, _| (),
                     move |_, _, window, _| {
-                        // The tree's edge, once held, follows the pointer
-                        // wherever it goes, and nothing under it hears the
-                        // move.
-                        let (mover, lifter) = (router.clone(), router.clone());
-                        window.on_mouse_event(move |e: &MouseMoveEvent, phase, _, cx| {
-                            if phase == DispatchPhase::Capture {
-                                let held = mover.update(cx, |s, cx| {
-                                    if s.tree_drag {
-                                        s.tree_drag_to(e, cx);
-                                    }
-                                    s.tree_drag
-                                });
-                                if held.unwrap_or(false) {
-                                    cx.stop_propagation();
-                                }
-                            }
-                        });
-                        window.on_mouse_event(move |_: &MouseUpEvent, phase, _, cx| {
-                            if phase == DispatchPhase::Capture {
-                                let _ = lifter.update(cx, |s, cx| s.tree_drag_end(cx));
-                            }
-                        });
                         window.on_mouse_event(move |e: &ScrollWheelEvent, phase, window, cx| {
                             if phase == DispatchPhase::Capture {
                                 match router.update(cx, |s, _| s.scrollers.route(e, false)) {
@@ -2327,7 +2451,7 @@ pub(crate) fn probe(step: &str, cx: &mut App) {
                 });
             }
         }
-        ":vaults" => note.update(cx, |n, cx| n.vault_menu(point(px(60.), px(46.)), cx)),
+        ":vaults" => note.update(cx, |n, cx| n.vault_menu(cx)),
         r if r.starts_with(":vault=") => note.update(cx, |n, cx| n.set_vault(Some(PathBuf::from(&r[":vault=".len()..])), cx)),
         r if r.starts_with(":fold=") => note.update(cx, |n, cx| n.toggle_folder(PathBuf::from(&r[":fold=".len()..]), cx)),
         r if r.starts_with(":pick=") => note.update(cx, |n, cx| n.pick_note(PathBuf::from(&r[":pick=".len()..]), cx)),
