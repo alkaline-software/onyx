@@ -256,7 +256,11 @@ mod tests {
 
     #[test]
     fn a_path_goes_to_the_view_and_back_the_same() {
-        let file = Path::new("/Users/a/Vault/.assets/旅行 video (1).mp4");
+        let file = if cfg!(target_os = "windows") {
+            Path::new(r"C:\Users\a\Vault\.assets\旅行 video (1).mp4")
+        } else {
+            Path::new("/Users/a/Vault/.assets/旅行 video (1).mp4")
+        };
         let url = url_of(file);
         let path = url.split("localhost").nth(1).unwrap();
         assert_eq!(file_of(path), file);
