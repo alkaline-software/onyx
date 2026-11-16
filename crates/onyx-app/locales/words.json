@@ -206,15 +206,6 @@
     "de": "Fenster schließen",
     "es": "Cerrar ventana"
   },
-  "Code": {
-    "zh-Hans": "代码",
-    "zh-Hant": "程式碼",
-    "ja": "コード",
-    "ko": "코드",
-    "fr": "Code",
-    "de": "Code",
-    "es": "Código"
-  },
   "Code font": {
     "zh-Hans": "代码字体",
     "zh-Hant": "程式碼字體",
@@ -719,15 +710,6 @@
     "de": "Querformat",
     "es": "Horizontal"
   },
-  "Language": {
-    "zh-Hans": "语言",
-    "zh-Hant": "語言",
-    "ja": "言語",
-    "ko": "언어",
-    "fr": "Langue",
-    "de": "Sprache",
-    "es": "Idioma"
-  },
   "Large": {
     "zh-Hans": "大",
     "zh-Hant": "大",
@@ -835,15 +817,6 @@
     "fr": "Médias",
     "de": "Medien",
     "es": "Multimedia"
-  },
-  "Medium": {
-    "zh-Hans": "中",
-    "zh-Hant": "中",
-    "ja": "中",
-    "ko": "보통",
-    "fr": "Moyen",
-    "de": "Mittel",
-    "es": "Mediano"
   },
   "Medium Card": {
     "zh-Hans": "中卡片",
@@ -1016,15 +989,6 @@
     "de": "Nächster (↩)",
     "es": "Siguiente (↩)"
   },
-  "No assets yet. Paste or drop a file into a note.": {
-    "zh-Hans": "还没有资源。把文件粘贴或拖进笔记即可。",
-    "zh-Hant": "還沒有資源。把檔案貼上或拖進筆記即可。",
-    "ja": "アセットはまだありません。ファイルをノートにペーストかドロップしてください。",
-    "ko": "아직 에셋이 없습니다. 파일을 노트에 붙여넣거나 끌어다 놓으세요.",
-    "fr": "Aucune ressource. Collez ou déposez un fichier dans une note.",
-    "de": "Noch keine Assets. Füge eine Datei in eine Notiz ein oder zieh sie hinein.",
-    "es": "Aún no hay recursos. Pega o suelta un archivo en una nota."
-  },
   "No matches.": {
     "zh-Hans": "没有匹配。",
     "zh-Hant": "沒有符合。",
@@ -1060,15 +1024,6 @@
     "fr": "Normale",
     "de": "Normal",
     "es": "Normal"
-  },
-  "Note text": {
-    "zh-Hans": "笔记正文",
-    "zh-Hant": "筆記正文",
-    "ja": "ノートの本文",
-    "ko": "노트 본문",
-    "fr": "Texte des notes",
-    "de": "Text der Notizen",
-    "es": "Texto de las notas"
   },
   "Note's name": {
     "zh-Hans": "笔记名称",
@@ -2780,22 +2735,58 @@
     "de": "Tresor schließen",
     "es": "Cerrar la bóveda"
   },
-  "Containers": {
+  "Vaults": {
+    "zh-Hans": "仓库",
+    "zh-Hant": "儲存庫",
+    "ja": "保管庫",
+    "ko": "보관소",
+    "fr": "Coffres",
+    "de": "Tresore",
+    "es": "Bóvedas"
+  },
+  "Container": {
     "zh-Hans": "容器",
     "zh-Hant": "容器",
     "ja": "コンテナ",
     "ko": "컨테이너",
-    "fr": "Conteneurs",
+    "fr": "Conteneur",
     "de": "Container",
-    "es": "Contenedores"
+    "es": "Contenedor"
   },
-  "Close Container": {
-    "zh-Hans": "关闭容器",
-    "zh-Hant": "關閉容器",
-    "ja": "コンテナを閉じる",
-    "ko": "컨테이너 닫기",
-    "fr": "Fermer le conteneur",
-    "de": "Container schließen",
-    "es": "Cerrar el contenedor"
+  "Change…": {
+    "zh-Hans": "更改…",
+    "zh-Hant": "更改…",
+    "ja": "変更…",
+    "ko": "변경…",
+    "fr": "Changer…",
+    "de": "Ändern…",
+    "es": "Cambiar…"
+  },
+  "Code": {
+    "zh-Hans": "代码",
+    "zh-Hant": "程式碼",
+    "ja": "コード",
+    "ko": "코드",
+    "fr": "Code",
+    "de": "Code",
+    "es": "Código"
+  },
+  "Pick a vault to start.": {
+    "zh-Hans": "选择一个仓库开始。",
+    "zh-Hant": "選擇一個儲存庫開始。",
+    "ja": "保管庫を選んで始めましょう。",
+    "ko": "시작할 보관소를 선택하세요.",
+    "fr": "Choisissez un coffre pour commencer.",
+    "de": "Wählen Sie einen Tresor, um zu beginnen.",
+    "es": "Elige una bóveda para empezar."
+  },
+  "Create a vault to start.": {
+    "zh-Hans": "新建一个仓库开始。",
+    "zh-Hant": "新增一個儲存庫開始。",
+    "ja": "保管庫を作って始めましょう。",
+    "ko": "시작할 보관소를 만드세요.",
+    "fr": "Créez un coffre pour commencer.",
+    "de": "Erstellen Sie einen Tresor, um zu beginnen.",
+    "es": "Crea una bóveda para empezar."
   }
 }

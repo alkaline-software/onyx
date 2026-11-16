@@ -76,7 +76,7 @@ crates/onyx-app/           the window
   src/main.rs                menus, key bindings, the main window, the probe's variables
   src/shell.rs               the frame, the sidebar (the vault's tree), the strip, the vault's page, a note's life, the tabs
   src/shell/library.rs       the vault's assets: the sidebar's stack of cards, the Assets card, an asset's tab, a rename that follows its links
-  src/shell/places.rs        before a vault is shown: the page, the card of the container's vaults or of the containers, the container's button
+  src/shell/places.rs        before a vault is shown: the page and the card of vaults
   src/tabs.rs                the tabs' drawing and motion, for either window (TabHost): a folder's on one pill, the plate, the widths
   src/export.rs              Export: the sheet, its formats, its preview, the file; printing
   src/media.rs               a video or a sound in the preview, played by the system's web view

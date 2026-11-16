@@ -177,6 +177,15 @@ fn file(root: &Path) -> PathBuf {
     root.join(".onyx").join("folders.json")
 }
 
+/// A folder's key in its vault's looks: its path from the root, and `.`
+/// for the vault itself, whose look is its mark's (`library::vault_badge`).
+fn key(root: &Path, path: &Path) -> Option<String> {
+    if path == root {
+        return Some(".".into());
+    }
+    rel(root, path)
+}
+
 fn rel(root: &Path, path: &Path) -> Option<String> {
     let r = path.strip_prefix(root).ok()?.to_string_lossy().replace('\\', "/");
     (!r.is_empty()).then_some(r)
@@ -204,7 +213,19 @@ pub fn look_of(path: &Path, cx: &App) -> Option<Look> {
     let looks = cx.try_global::<Looks>()?;
     let vaults = looks.vaults.borrow();
     let (root, (_, map)) = vaults.iter().filter(|(root, _)| path.starts_with(root)).max_by_key(|(root, _)| root.components().count())?;
-    map.get(&rel(root, path)?).cloned()
+    map.get(&key(root, path)?).cloned()
+}
+
+/// A vault's own look, its file read first: for the vaults' lists, where
+/// no vault need be open.
+pub fn vault_look(root: &Path, cx: &mut App) -> Look {
+    ensure(root, cx);
+    look_of(root, cx).unwrap_or_default()
+}
+
+/// A glyph by its Tabler name, for a vault's mark.
+pub fn glyph(name: &str) -> SharedString {
+    glyph_path(name)
 }
 
 /// A vault's looks written: whole, through the vault's own write, and
@@ -250,7 +271,7 @@ fn change(root: &Path, cx: &mut App, f: impl FnOnce(&mut BTreeMap<String, Look>)
 
 /// A folder given a look, or its own taken back when the look is plain.
 pub fn set(root: &Path, folder: &Path, look: Look, cx: &mut App) {
-    let Some(key) = rel(root, folder) else { return };
+    let Some(key) = key(root, folder) else { return };
     change(root, cx, |map| {
         let was = map.get(&key).cloned().unwrap_or_default();
         if was == look {
@@ -688,7 +709,7 @@ impl Picker {
     }
 
     /// The icons, a row of `COLS` at a time, those in view drawn: the
-    /// first square is the folder's own default.
+    /// first square is the folder's own default, a vault's its letter.
     fn render_grid(&self, rows_shown: f32, theme: &gpui_component::Theme, cx: &mut Context<Self>) -> AnyElement {
         let ink = self.look.color.as_deref().and_then(parse_hex).unwrap_or(theme.foreground.opacity(0.8));
         let count = self.found.len() + 1;
@@ -711,7 +732,14 @@ impl Picker {
                     break;
                 }
                 if i == 0 {
-                    let mark = drawn(None, self.look.color.as_deref().and_then(parse_hex), "folder", false, theme.mode.is_dark(), 18., theme);
+                    let ink = self.look.color.as_deref().and_then(parse_hex);
+                    let mark = if self.folder == self.root {
+                        let name = self.root.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default();
+                        let letter: String = name.chars().next().map(|c| c.to_uppercase().collect()).unwrap_or_default();
+                        div().text_size(px(16.)).font_weight(FontWeight::SEMIBOLD).text_color(ink.unwrap_or(theme.primary)).child(letter).into_any_element()
+                    } else {
+                        drawn(None, ink, "folder", false, theme.mode.is_dark(), 18., theme)
+                    };
                     line = line.child(cell("look-icon-default".into(), self.look.icon.is_none(), mark).on_click(cx.listener(|this, _, window, cx| {
                         swallow_click(window, cx);
                         this.choose_icon(None, cx);
@@ -767,7 +795,9 @@ impl Render for Picker {
         let name = self.folder.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
         let label = |words: &str| div().text_size(px(11.5)).font_weight(FontWeight::SEMIBOLD).text_color(theme.muted_foreground).child(words.to_string());
         let search_focus = self.search.read(cx).focus_handle(cx);
-        let preview = icon(&self.folder, &name, false, theme.mode.is_dark(), &theme, cx);
+        // A vault's sheet shows its mark, and its color is not a folder's.
+        let vault = self.folder == self.root;
+        let preview = if vault { crate::shell::library::vault_badge(&self.root, &name, 20., &theme, cx).into_any_element() } else { icon(&self.folder, &name, false, theme.mode.is_dark(), &theme, cx) };
         let colors = self.render_colors(&theme, cx);
         let making = self.render_making(&theme, cx);
         let grid = self.render_grid(rows_shown, &theme, cx);
@@ -802,7 +832,7 @@ impl Render for Picker {
                         .border_color(theme.border)
                         .shadow(crate::widgets::float_shadow(&theme))
                         .child(h_flex().gap(px(8.)).items_center().child(div().size(px(16.)).child(preview)).child(div().min_w_0().truncate().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).child(name)))
-                        .child(v_flex().gap(px(8.)).child(label(t("Folder Color"))).child(colors).children(making))
+                        .child(v_flex().gap(px(8.)).child(label(if vault { t("Color") } else { t("Folder Color") })).child(colors).children(making))
                         .child(
                             v_flex()
                                 .gap(px(8.))

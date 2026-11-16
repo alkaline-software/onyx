@@ -309,10 +309,11 @@ impl Shell {
     /// Folder, always there: the last two in the columns a folder's own
     /// stand in under the pointer. A right click gives the vault's menu (Rename,
     /// Reveal in Finder); a row let go on it goes to the vault's top.
-    pub(crate) fn render_vault_row(&self, theme: &gpui_component::Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(crate) fn render_vault_row(&self, ground: Hsla, theme: &gpui_component::Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
         let root = self.vault_root()?.to_path_buf();
+        let root_mark = root.clone();
         let name: SharedString = self.vault.as_ref().map(|v| v.tree.name.clone()).unwrap_or_default().into();
-        let (lit, muted) = (theme.foreground, theme.muted_foreground);
+        let lit = theme.foreground;
         let listed = self.menus.open.as_ref().is_some_and(|m| m.what == "vault");
         let tools = h_flex()
             .flex_shrink_0()
@@ -338,20 +339,30 @@ impl Shell {
                 }
             })));
         let wash = theme.primary.opacity(0.22);
+        // A block of the vault's ink over the tree, taller than a folder's
+        // row and with the vault's pile for its mark: the thing the
+        // folders are in, never one of them.
+        let ink = vault_ink(&root, theme, cx);
+        let dim = ground.l < 0.5;
+        let block = ground.blend(ink.opacity(if dim { 0.13 } else { 0.09 }));
+        let mark = vault_stack(&root_mark, &name, 22., block, theme, cx);
         Some(
             h_flex()
                 .id("vault-row")
                 .flex_shrink_0()
                 .mx(px(8.))
-                .mt(px(6.))
-                .h(px(TREE_ROW_H))
-                .pl(px(8.))
-                .pr(px(4.))
-                .gap(px(6.))
+                .mt(px(8.))
+                .mb(px(4.))
+                .h(px(VAULT_BLOCK_H))
+                .pl(px(10.))
+                .pr(px(6.))
+                .gap(px(10.))
                 .items_center()
-                .rounded(px(7.))
-                .text_size(px(13.))
-                .when(listed, |d| d.bg(lit.opacity(0.08)))
+                .rounded(px(10.))
+                .border_1()
+                .border_color(ink.opacity(if dim { 0.28 } else { 0.22 }))
+                .bg(if listed { block.blend(lit.opacity(0.06)) } else { block })
+                .text_size(px(14.))
                 .on_mouse_down(MouseButton::Right, cx.listener(|this, ev: &MouseDownEvent, window, cx| {
                     swallow_click(window, cx);
                     this.show_vault_menu(ev.position, cx);
@@ -362,7 +373,8 @@ impl Shell {
                     this.tree_drop(drag, root.clone(), window, cx)
                 }))
                 // In the chevrons' column, as the menu bar note's vault is.
-                .child(div().w(px(12.)).flex_shrink_0().flex().justify_center().child(Icon::default().path("icons/folder-open.svg").with_size(px(15.)).text_color(muted)))
+                // The vault's own mark, never a folder's: over the chevrons' column.
+                .child(mark)
                 .child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::SEMIBOLD).text_color(lit).child(name))
                 .child(tools)
                 .into_any_element(),
@@ -380,6 +392,7 @@ impl Shell {
         let listed = self.menus.open.as_ref().is_some_and(|m| m.what == "vaults");
         let place = self.vaults_at.clone();
         let name: SharedString = self.vault.as_ref().map(|v| v.tree.name.clone()).unwrap_or_default().into();
+        let badge = self.vault_root().map(Path::to_path_buf).map(|root| vault_badge(&root, &name, 20., theme, cx));
         h_flex()
             .id("vaults-button")
             .relative()
@@ -410,7 +423,7 @@ impl Shell {
             }))
             // Where the list rises from: the button as it was last drawn.
             .child(canvas(move |b, _, _| place.set(b), |_, _, _, _| ()).absolute().top_0().left_0().size_full())
-            .child(div().w(px(22.)).flex().justify_center().child(Icon::default().path("icons/book-open.svg").with_size(px(15.)).text_color(theme.primary)))
+            .children(badge)
             .child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::SEMIBOLD).text_color(lit).child(name))
             .child(Icon::default().path("icons/chevrons-up-down.svg").with_size(px(12.)).text_color(muted))
             .into_any_element()
@@ -463,7 +476,6 @@ impl Shell {
             let body = v_flex().children(files.iter().map(|p| self.render_asset_row(p, kind == Kind::Picture, theme, cx))).into_any_element();
             sections.push(v_flex().child(label).child(body).into_any_element());
         }
-        let empty = sections.is_empty();
         div()
             .relative()
             .flex_1()
@@ -476,8 +488,7 @@ impl Shell {
                     .pb(px(12.))
                     .overflow_y_scroll()
                     .track_scroll(&self.library.scroll)
-                    .children(sections)
-                    .when(empty, |d| d.child(div().px(px(10.)).py(px(8.)).text_size(px(12.)).text_color(theme.muted_foreground).child(t("No assets yet. Paste or drop a file into a note.")))),
+                    .children(sections),
             )
             .child(edge_fade(&self.library.scroll, ground, true, px(0.)))
             .child(edge_fade(&self.library.scroll, ground, false, px(9.)))
@@ -849,6 +860,52 @@ pub(crate) fn vault_name(path: &Path) -> String {
 
 /// A small square button on a row of the tree: an icon in the muted ink,
 /// lit under the pointer, its words with it.
+/// A vault's mark: its first letter on a rounded tile of the accent, as a
+/// space has its tile in Craft. Wherever the sidebar names a vault it
+/// wears this, so a vault never reads as a folder or a note.
+pub(crate) fn vault_badge(root: &Path, name: &str, size: f32, theme: &gpui_component::Theme, cx: &mut App) -> Div {
+    let look = crate::folder_look::vault_look(root, cx);
+    let ink = vault_ink(root, theme, cx);
+    let tile = div().size(px(size)).flex_shrink_0().rounded(px(size * 0.3)).bg(ink.opacity(if theme.mode.is_dark() { 0.3 } else { 0.18 })).flex().items_center().justify_center();
+    match look.icon {
+        Some(glyph) => tile.child(Icon::default().path(crate::folder_look::glyph(&glyph)).with_size(px((size * 0.62).round())).text_color(ink)),
+        None => {
+            let letter: String = name.chars().next().map(|c| c.to_uppercase().collect()).unwrap_or_default();
+            tile.text_size(px(size * 0.58)).font_weight(FontWeight::SEMIBOLD).text_color(ink).child(letter)
+        }
+    }
+}
+
+/// A vault's block: its row over its tree, and its row in the list of
+/// vaults, each well taller than a folder's.
+pub(crate) const VAULT_BLOCK_H: f32 = 48.;
+
+/// A vault's ink: the color it was given, else the accent.
+pub(crate) fn vault_ink(root: &Path, theme: &gpui_component::Theme, cx: &mut App) -> Hsla {
+    crate::folder_look::vault_look(root, cx).color.as_deref().and_then(crate::folder_look::parse_hex).unwrap_or(theme.primary)
+}
+
+/// A vault's mark where a vault stands as a block: its badge at the front
+/// of a deck of two more of its shape, each a step up and to the right in
+/// a fainter wash of its ink, so it reads as a store of many things and
+/// never as one folder. `under` is the ground it stands on, which the
+/// badge is made opaque over so the cards behind do not show through it.
+pub(crate) fn vault_stack(root: &Path, name: &str, size: f32, under: Hsla, theme: &gpui_component::Theme, cx: &mut App) -> Div {
+    let ink = vault_ink(root, theme, cx);
+    let dim = under.l < 0.5;
+    let step = (size * 0.12).round().max(2.);
+    let card = |at: f32, alpha: f32| div().absolute().left(px(at)).top(px(step * 2. - at)).size(px(size)).rounded(px(size * 0.3)).bg(under.blend(ink.opacity(alpha)));
+    let face = under.blend(ink.opacity(if dim { 0.34 } else { 0.2 }));
+    div()
+        .relative()
+        .flex_shrink_0()
+        .w(px(size + step * 2.))
+        .h(px(size + step * 2.))
+        .child(card(step * 2., if dim { 0.14 } else { 0.08 }))
+        .child(card(step, if dim { 0.22 } else { 0.13 }))
+        .child(div().absolute().top(px(step * 2.)).left_0().child(vault_badge(root, name, size, theme, cx).bg(face)))
+}
+
 pub(crate) fn row_tool(id: impl Into<ElementId>, icon: &'static str, words: SharedString, theme: &gpui_component::Theme) -> Stateful<Div> {
     let (lit, wash, muted) = (theme.foreground, theme.foreground.opacity(0.1), theme.muted_foreground);
     div()

@@ -435,13 +435,85 @@ impl Shell {
             .child(small_pill("avatar-choose", "icons/image.svg", t("Choose…"), Press::Quiet, false, &theme).h(CONTROL_H).on_click(cx.listener(|this, _, _, cx| this.pick_avatar(cx))))
             .when(!self.cfg.app.avatar.is_empty(), |d| d.child(small_pill("avatar-remove", "icons/trash.svg", t("Remove"), Press::Danger, false, &theme).h(CONTROL_H).on_click(cx.listener(|this, _, _, cx| this.set_avatar(String::new(), cx)))))
             .into_any_element();
-        let mut text = self.size_rows(cx);
-        text.extend(self.spelling_rows(cx));
+        let text = vec![self.size_row(cx), self.spelling_row(cx)];
         vec![
             group(Some(t("You").into()), None, vec![line(t("Avatar").into(), None, avatar, &theme), line(t("Name").into(), None, self.name_field(cx), &theme)], &theme),
+            group(Some(t("Container").into()), None, vec![self.container_row(cx)], &theme),
             group(Some(t("Window").into()), None, vec![line(t("Theme").into(), None, theme_choice, &theme), line(t("Accent").into(), Some(accent_name), accents, &theme)], &theme),
             group(Some(t("Text").into()), None, text, &theme),
         ]
+    }
+
+    /// The container's row: the card's one edge split in two by a
+    /// hairline, the path at the left as a path reads (the code face,
+    /// iCloud's cloud or a folder before it, the separators lighter than
+    /// the names), a press on it showing it in the Finder; Change… at the
+    /// right, the system's panel, answered in the main window, whose vault
+    /// it closes if the vault is not in the new one. Each half lights whole under the pointer, rounded where it
+    /// meets the card's corners.
+    fn container_row(&self, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+        let lit = theme.foreground.opacity(if theme.mode.is_dark() { 0.06 } else { 0.045 });
+        let inner = CARD_R - px(1.);
+        let path = match self.container() {
+            None => div().text_size(px(13.)).text_color(theme.muted_foreground).child(t("None")).into_any_element(),
+            Some(dir) => {
+                let shown = crate::sys::short_path(&dir);
+                let icon = if shown.starts_with("iCloud Drive") { "icons/cloud.svg" } else { "icons/folder.svg" };
+                let sep = std::path::MAIN_SEPARATOR;
+                let mut parts: Vec<AnyElement> = Vec::new();
+                for (i, part) in shown.split(sep).enumerate() {
+                    if i > 0 {
+                        parts.push(div().px(px(3.)).text_color(theme.muted_foreground.opacity(0.7)).child(sep.to_string()).into_any_element());
+                    }
+                    parts.push(div().child(part.to_string()).into_any_element());
+                }
+                let words: SharedString = t("Reveal in Finder").into();
+                h_flex()
+                    .id("container-path")
+                    .size_full()
+                    .px(px(14.))
+                    .py(px(8.))
+                    .gap(px(9.))
+                    .items_center()
+                    .rounded_l(inner)
+                    .cursor_pointer()
+                    .hover(move |s| s.bg(lit))
+                    .managed_tooltip(move |window, cx| tip(words.clone(), window, cx))
+                    .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                    .on_click(move |_, _, _| crate::sys::reveal(&dir))
+                    .child(Icon::default().path(icon).with_size(px(15.)).text_color(theme.primary))
+                    .child(h_flex().flex_wrap().min_w_0().font_family(self.look.mono_family.clone()).text_size(px(12.5)).text_color(theme.foreground).children(parts))
+                    .into_any_element()
+            }
+        };
+        let change = h_flex()
+            .id("container-change")
+            .flex_shrink_0()
+            .px(px(16.))
+            .gap(px(7.))
+            .items_center()
+            .rounded_r(inner)
+            .text_size(px(13.))
+            .cursor_pointer()
+            .hover(move |s| s.bg(lit))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(|_, _, _, cx| {
+                let me = cx.entity();
+                let Some(main) = cx.try_global::<crate::MainShell>().map(|m| m.1) else { return };
+                cx.defer(move |cx| {
+                    let _ = main.update(cx, |_, window, cx| me.update(cx, |s, cx| s.choose_container(window, cx)));
+                });
+            }))
+            .child(Icon::default().path("icons/folder-open.svg").with_size(px(15.)).text_color(theme.muted_foreground))
+            .child(t("Change…"));
+        h_flex()
+            .min_h(px(46.))
+            .items_stretch()
+            .child(div().flex_1().min_w_0().flex().items_center().child(path))
+            .child(div().w(px(1.)).flex_shrink_0().bg(theme.border))
+            .child(change)
+            .into_any_element()
     }
 
     /// The person's name, in a field the controls' width: on the page's
@@ -960,53 +1032,37 @@ impl Shell {
     /// place's size under it, which a preset sets. Custom is the person's
     /// own, set here by a step, and kept while a preset is chosen; under a
     /// preset the sizes are its and are only shown.
-    fn size_rows(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    /// The words' size and code's, a stepper each on one row, with a
+    /// button back to Medium's beside them once either left it.
+    fn size_row(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
         let sizes = self.cfg.editor.text_sizes();
-        let now = match self.cfg.editor.text_size.as_str() {
-            "small" => "small",
-            "large" => "large",
-            "custom" => "custom",
-            _ => "medium",
-        };
-        let presets = div()
-            .w(CONTROL_W)
-            .child(self.motion.segmented(
-                "text-size",
-                vec![("small", "", t("Small").into()), ("medium", "", t("Medium").into()), ("large", "", t("Large").into()), ("custom", "", t("Custom").into())],
-                now,
-                true,
-                Rc::new(|this: &mut Self, key, _, cx| this.set_text_size(key, cx)),
-                cx,
-            ))
+        let place = |this: &Self, key: &'static str, name: &str, value: f32, cx: &mut Context<Self>| h_flex().gap(px(8.)).items_center().child(div().text_size(px(12.5)).text_color(theme.muted_foreground).child(name.to_string())).child(this.stepper(key, value, true, cx));
+        let control = h_flex()
+            .gap(px(16.))
+            .items_center()
+            .children(self.size_reset(sizes, cx))
+            .child(place(self, "note", t("Text"), sizes.note, cx))
+            .child(place(self, "code", t("Code"), sizes.code, cx))
             .into_any_element();
-        let custom = now == "custom";
-        let places: [(&'static str, SharedString, f32); 2] = [("note", t("Note text").into(), sizes.note), ("code", t("Code").into(), sizes.code)];
-        let mut rows = vec![line(t("Size").into(), None, presets, &theme)];
-        rows.extend(places.into_iter().map(|(key, name, value)| {
-            let control = h_flex().gap(px(8.)).items_center().children(self.size_reset(key, value, custom, cx)).child(self.stepper(key, value, custom, cx)).into_any_element();
-            line(name, None, control, &theme)
-        }));
-        rows
+        line(t("Size").into(), None, control, &theme)
     }
 
-    /// Under Custom, beside a size not Medium's: a button that puts it
-    /// back to Medium's, which is Custom's own until it is changed. It
-    /// comes and goes in motion (`presence`).
-    fn size_reset(&self, key: &'static str, value: f32, custom: bool, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// Beside the sizes once either is not Medium's: a button that puts
+    /// both back. It comes and goes in motion (`presence`).
+    fn size_reset(&self, sizes: onyx_core::config::TextSizes, cx: &mut Context<Self>) -> Option<AnyElement> {
         use onyx_core::config::TextSizes;
-        let medium = size_of(&TextSizes::MEDIUM, key);
-        let shown = custom && value != medium;
-        let id = format!("size-reset-{key}");
-        let moving = self.motion.presence(&id, shown, cx);
+        let shown = sizes != TextSizes::MEDIUM;
+        let id = "size-reset";
+        let moving = self.motion.presence(id, shown, cx);
         if !shown && moving.is_none() {
             return None;
         }
         let theme = cx.theme().clone();
         let hover = theme.foreground.opacity(0.07);
-        let tip: SharedString = tf("Reset to {size} pt", &[("size", &size_words(medium))]).into();
+        let tip: SharedString = tf("Reset to {size} pt", &[("size", &format!("{} / {}", size_words(TextSizes::MEDIUM.note), size_words(TextSizes::MEDIUM.code)))]).into();
         let button = div()
-            .id(SharedString::from(id.clone()))
+            .id(id)
             .size(px(26.))
             .flex_shrink_0()
             .rounded(px(7.))
@@ -1016,7 +1072,7 @@ impl Shell {
             .when(shown, |d| {
                 d.cursor_pointer().hover(move |s| s.bg(hover)).on_click(cx.listener(move |this, _, window, cx| {
                     crate::widgets::swallow_click(window, cx);
-                    this.set_sizes(|s| *size_field(s, key) = medium, cx);
+                    this.set_sizes(|s| *s = TextSizes::MEDIUM, cx);
                 }))
             })
             .managed_tooltip(move |window, cx| crate::widgets::tip(tip.clone(), window, cx))
@@ -1033,7 +1089,7 @@ impl Shell {
     fn stepper(&self, key: &'static str, value: f32, live: bool, cx: &mut Context<Self>) -> AnyElement {
         use onyx_core::config::TextSizes;
         let (down, up) = (TextSizes::step(value, false), TextSizes::step(value, true));
-        self.stepper_of(key, value, live, down, up, Rc::new(move |this: &mut Self, to, cx| this.set_sizes(|s| *size_field(s, key) = to, cx)), cx)
+        self.stepper_of(key, value, live, down, up, Rc::new(move |this: &mut Self, to, cx| this.set_sizes(|s| if key == "code" { s.code = to } else { s.note = to }, cx)), cx)
     }
 
     /// A size with a press down and a press up, for a sheet.
@@ -1112,31 +1168,11 @@ impl Shell {
         cx.notify();
     }
 
-    /// A preset chosen, or Custom: Custom begins as Medium's sizes the
-    /// first time, and keeps its own after.
-    fn set_text_size(&mut self, key: &'static str, cx: &mut Context<Self>) {
-        if key == "custom" && self.cfg.editor.sizes.is_none() {
-            self.cfg.editor.sizes = Some(onyx_core::config::TextSizes::MEDIUM);
-        }
-        self.cfg.editor.text_size = key.to_string();
-        let e = self.cfg.editor.clone();
-        let _ = Config::edit(|c| c.editor = e);
-        self.push_look(cx);
-        cx.notify();
-    }
-
-    /// One place's own size changed, under Custom, where they are set.
+    /// A size changed.
     fn set_sizes(&mut self, change: impl FnOnce(&mut onyx_core::config::TextSizes), cx: &mut Context<Self>) {
-        if self.cfg.editor.text_size != "custom" {
-            return;
-        }
-        let mut sizes = self.cfg.editor.text_sizes();
-        change(&mut sizes);
-        self.cfg.editor.sizes = Some(sizes.clamped());
-        let e = self.cfg.editor.clone();
-        let _ = Config::edit(|c| c.editor = e);
-        self.push_look(cx);
-        cx.notify();
+        change(&mut self.cfg.editor.size);
+        self.cfg.editor.size = self.cfg.editor.size.clamped();
+        self.save_editor(cx);
     }
 
     /// About, the same in every product: the title card, set as a film's
@@ -1243,11 +1279,11 @@ impl Shell {
             .into_any_element()
     }
 
-    /// General, Text's spelling and grammar: the check on or off, and
-    /// what it reads in.
+    /// General, Text's spelling and grammar: what it reads in, and the
+    /// check on or off, on one row.
     /// English is read here, for grammar too; the others are the system's
     /// spelling (`docs/editor.md`).
-    fn spelling_rows(&mut self, cx: &mut Context<Self>) -> Vec<AnyElement> {
+    fn spelling_row(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
         let on = self.cfg.editor.check_writing;
         let check = self.motion.switch(
@@ -1286,8 +1322,8 @@ impl Shell {
             .child(t(name))
             .child(Icon::default().path("icons/chevron-down.svg").with_size(px(12.)).text_color(theme.muted_foreground))
             .into_any_element();
-        let language = div().when(!on, |d| d.opacity(0.45).occlude()).child(pill).into_any_element();
-        vec![line(t("Check spelling and grammar").into(), None, check, &theme), line(t("Language").into(), None, language, &theme)]
+        let language = div().when(!on, |d| d.opacity(0.45).occlude()).child(pill);
+        line(t("Check spelling and grammar").into(), None, h_flex().gap(px(12.)).items_center().child(language).child(check).into_any_element(), &theme)
     }
 
     /// The terminal's look and behavior, as Emaki's Settings, Terminal
@@ -1588,21 +1624,6 @@ fn drag_region(el: Div) -> Div {
             window.start_window_move();
         }
     })
-}
-
-/// A place's size in the sizes, by the row's key.
-fn size_field<'a>(s: &'a mut onyx_core::config::TextSizes, key: &str) -> &'a mut f32 {
-    match key {
-        "code" => &mut s.code,
-        _ => &mut s.note,
-    }
-}
-
-fn size_of(s: &onyx_core::config::TextSizes, key: &str) -> f32 {
-    match key {
-        "code" => s.code,
-        _ => s.note,
-    }
 }
 
 /// A size as words: whole when it is, else with its tenth.

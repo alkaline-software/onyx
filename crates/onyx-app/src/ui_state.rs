@@ -40,8 +40,6 @@ pub struct UiState {
     pub note: Option<PathBuf>,
     /// The vaults shown before, the latest first, for the vaults' lists.
     pub recent_vaults: Vec<PathBuf>,
-    /// The containers used before, the last first, for stage one's list.
-    pub recent_containers: Vec<PathBuf>,
     /// The folders open in the sidebar's tree, by their path; the rest
     /// are shut. Only the vault shown last has any.
     pub unfolded: Vec<PathBuf>,
@@ -148,13 +146,6 @@ impl UiState {
         if let Some(last) = writer().last.lock().ok().and_then(|l| l.clone()) {
             last.save();
         }
-    }
-
-    /// A container taken: first among those used before.
-    pub fn remember_container(&mut self, dir: &std::path::Path) {
-        self.recent_containers.retain(|d| d != dir);
-        self.recent_containers.insert(0, dir.to_path_buf());
-        self.recent_containers.truncate(RECENT);
     }
 
     /// A vault shown: first among the recent ones.

@@ -67,12 +67,15 @@ pub struct EditorConfig {
     /// own default, a new install's, is true.
     #[serde(default)]
     pub custom_keyed: bool,
-    /// `small`, `medium`, `large` or `custom`: a preset for every place
-    /// at once, or the person's own sizes (`sizes`).
-    pub text_size: String,
-    /// The person's own sizes, kept while a preset is chosen so Custom
-    /// comes back to them; `None` until Custom was chosen once.
-    pub sizes: Option<TextSizes>,
+    /// The size of a note's words and of its code, in points.
+    pub size: TextSizes,
+    /// From before the presets went: `small`, `medium`, `large` or
+    /// `custom`, and the sizes Custom had. Read once into `size` (`one_size`), never
+    /// written.
+    #[serde(skip_serializing)]
+    text_size: String,
+    #[serde(skip_serializing)]
+    sizes: Option<TextSizes>,
     /// Whether a note's spelling and grammar are marked.
     pub check_writing: bool,
     /// The language they are checked in, by its key in `check::LANGUAGES`.
@@ -83,6 +86,7 @@ impl EditorConfig {
     /// A file from before `custom` was a key: a name in a custom field
     /// stood over the chosen face, so its key is `custom` now.
     pub fn key_custom(&mut self) {
+        self.one_size();
         if self.custom_keyed {
             return;
         }
@@ -97,14 +101,29 @@ impl EditorConfig {
 
 impl Default for EditorConfig {
     fn default() -> Self {
-        Self { text_face: "inter".into(), mono_face: "jetbrains".into(), cjk_face: "auto".into(), text_custom: String::new(), mono_custom: String::new(), cjk_custom: String::new(), custom_keyed: true, text_size: "medium".into(), sizes: None, check_writing: true, writing_language: "en-US".into() }
+        Self { text_face: "inter".into(), mono_face: "jetbrains".into(), cjk_face: "auto".into(), text_custom: String::new(), mono_custom: String::new(), cjk_custom: String::new(), custom_keyed: true, size: TextSizes::MEDIUM, text_size: String::new(), sizes: None, check_writing: true, writing_language: "en-US".into() }
     }
 }
 
 impl EditorConfig {
-    /// The sizes in force: the preset's, or the person's own under Custom.
+    /// The sizes in force.
     pub fn text_sizes(&self) -> TextSizes {
-        TextSizes::preset(&self.text_size).unwrap_or_else(|| self.sizes.unwrap_or(TextSizes::MEDIUM).clamped())
+        self.size.clamped()
+    }
+
+    /// A file from before the presets went: its preset's sizes, or
+    /// Custom's.
+    fn one_size(&mut self) {
+        let was = std::mem::take(&mut self.text_size);
+        let sizes = match was.as_str() {
+            "" => return,
+            "small" => TextSizes { note: 14., code: 13. },
+            "large" => TextSizes { note: 18., code: 16. },
+            "custom" => self.sizes.unwrap_or(TextSizes::MEDIUM),
+            _ => TextSizes::MEDIUM,
+        };
+        self.size = sizes.clamped();
+        self.sizes = None;
     }
 }
 
@@ -125,34 +144,21 @@ impl Default for TextSizes {
 }
 
 impl TextSizes {
-    /// The default: a note at Obsidian's own body size, code a step
-    /// under, as a Mac's editors set monospace. Every preset's sizes are
-    /// whole points.
+    /// The default: a note at Obsidian's own body size, code two points
+    /// under, as a Mac's editors set monospace.
     pub const MEDIUM: Self = Self { note: 16., code: 14. };
-    pub const SMALL: Self = Self { note: 14., code: 13. };
-    pub const LARGE: Self = Self { note: 18., code: 16. };
     /// What a size may be set to.
     pub const LEAST: f32 = 9.;
     pub const MOST: f32 = 32.;
 
-    /// A preset by its name; `custom` and anything else is none.
-    pub fn preset(name: &str) -> Option<Self> {
-        match name {
-            "small" => Some(Self::SMALL),
-            "medium" => Some(Self::MEDIUM),
-            "large" => Some(Self::LARGE),
-            _ => None,
-        }
+    pub fn clamped(self) -> Self {
+        Self { note: self.note.clamp(Self::LEAST, Self::MOST), code: self.code.clamp(Self::LEAST, Self::MOST) }
     }
 
     /// A step up or down from `value`: a whole point.
     pub fn step(value: f32, up: bool) -> f32 {
         let to = if up { value.floor() + 1. } else { value.ceil() - 1. };
         to.clamp(Self::LEAST, Self::MOST)
-    }
-
-    pub fn clamped(self) -> Self {
-        Self { note: self.note.clamp(Self::LEAST, Self::MOST), code: self.code.clamp(Self::LEAST, Self::MOST) }
     }
 }
 

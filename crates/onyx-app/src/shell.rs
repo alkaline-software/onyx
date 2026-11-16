@@ -39,7 +39,7 @@ use crate::tabs::{Item as TabItem, Tabs};
 use crate::ui_state::{Rect, UiState};
 use crate::widgets::{choice_pill, float_shadow, kbd_hint, key_text, page_in, small_pill, swallow_click, tip, Fig, Motion, Press, FOLD_ANIM, SLIDE};
 
-actions!(onyx, [ExportPdf, PrintNote, ToggleSidebar, OpenSettings, Escape, NewNote, NewFolder, NewVault, CloseVault, ChooseContainer, CloseContainer, ToggleSource, ToggleTerminal, ToggleSearch, FindInNote, FindNext, FindPrev, CloseTab, ReopenTab, ZoomIn, ZoomOut, ZoomReset, Tab1, Tab2, Tab3, Tab4, Tab5, Tab6, Tab7, Tab8, Tab9]);
+actions!(onyx, [ExportPdf, PrintNote, ToggleSidebar, OpenSettings, Escape, NewNote, NewFolder, NewVault, CloseVault, ChooseContainer, ToggleSource, ToggleTerminal, ToggleSearch, FindInNote, FindNext, FindPrev, CloseTab, ReopenTab, ZoomIn, ZoomOut, ZoomReset, Tab1, Tab2, Tab3, Tab4, Tab5, Tab6, Tab7, Tab8, Tab9]);
 
 /// The key context of the main window.
 pub const KEY_CONTEXT: &str = "Shell";
@@ -220,6 +220,8 @@ pub struct Shell {
     side_scroll: ScrollHandle,
     /// The list on the sidebar's card before a vault is shown (`places.rs`).
     place_scroll: ScrollHandle,
+    /// The page before a vault, when its vaults outgrow it.
+    place_page_scroll: ScrollHandle,
     vault: Option<Vault>,
     /// The open notes, in the row's order: a folder's together.
     tabs: Vec<Tab>,
@@ -553,6 +555,7 @@ impl Shell {
             side_drag: false,
             side_scroll: ScrollHandle::new(),
             place_scroll: ScrollHandle::new(),
+            place_page_scroll: ScrollHandle::new(),
             vault: None,
             tabs: Vec::new(),
             shown: None,
@@ -903,6 +906,12 @@ impl Shell {
     /// A folder's icon and color, chosen on a sheet of their own.
     fn open_folder_look(&mut self, folder: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         let Some(root) = self.vault_root().map(Path::to_path_buf) else { return };
+        self.open_look(root, folder, window, cx);
+    }
+
+    /// The sheet for a folder of `root`, or for the vault itself when the
+    /// two are one: its mark's icon and color.
+    fn open_look(&mut self, root: PathBuf, folder: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         let picker = cx.new(|cx| crate::folder_look::Picker::new(root, folder, 90., 0., window, cx));
         let sub = cx.subscribe_in(&picker, window, |this, _, _: &crate::folder_look::Dismissed, window, cx| {
             this.folder_look = None;
@@ -943,16 +952,13 @@ impl Shell {
 
     /// The container kept in the settings.
     fn set_container(&mut self, dir: PathBuf) {
-        let mut ui = UiState::load();
-        ui.remember_container(&dir);
-        ui.save_later();
         let path = dir.to_string_lossy().to_string();
         self.cfg.app.container = path.clone();
         let _ = Config::edit(move |c| c.app.container = path);
     }
 
-    /// A container taken, from the picker, the card or the container's
-    /// list: a vault shown from another closes.
+    /// A container taken from the system's panel (the page, Settings,
+    /// File): a vault shown from another closes.
     pub(crate) fn use_container(&mut self, dir: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         self.menus.close(cx);
         self.set_container(dir.clone());
@@ -962,19 +968,7 @@ impl Shell {
         cx.notify();
     }
 
-    /// Close Container: the vault closed first, then the container, back
-    /// to the page with none. It stays among the containers used before.
-    fn close_container(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.menus.close(cx);
-        if self.vault.is_some() {
-            self.close_vault(window, cx);
-        }
-        self.cfg.app.container.clear();
-        let _ = Config::edit(|c| c.app.container.clear());
-        cx.notify();
-    }
-
-    /// Close Vault: back to the container's page, its vaults on the card.
+    /// Close Vault: back to the page before a vault, the vaults on the card.
     fn close_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.menus.close(cx);
         self.save_all(cx);
@@ -1693,7 +1687,7 @@ impl Shell {
         if self.vault.is_none() {
             return self.show_vaults_at(at, None, false, cx);
         }
-        let entries = vec![Entry::choice("rename", "icons/pencil-simple.svg", t("Rename")), Entry::Rule, Entry::choice("reveal", "icons/folder-open.svg", t(crate::sys::REVEAL_LABEL))];
+        let entries = vec![Entry::choice("rename", "icons/pencil-simple.svg", t("Rename")), Entry::choice("look", "tabler/palette.svg", t("Icon and Color…")), Entry::Rule, Entry::choice("reveal", "icons/folder-open.svg", t(crate::sys::REVEAL_LABEL))];
         self.menus.show("vault", at, entries);
         cx.notify();
     }
@@ -1778,7 +1772,7 @@ impl Shell {
 
     /// A vault offered on the landing page.
     fn show_recent_menu(&mut self, path: PathBuf, at: Point<Pixels>, cx: &mut Context<Self>) {
-        let entries = vec![Entry::choice("copy-path", "icons/link.svg", t("Copy Path")), Entry::Rule, Entry::choice("open-finder", "icons/folder-open.svg", t(crate::sys::OPEN_FOLDER_LABEL))];
+        let entries = vec![Entry::choice("look", "tabler/palette.svg", t("Icon and Color…")), Entry::choice("copy-path", "icons/link.svg", t("Copy Path")), Entry::Rule, Entry::choice("open-finder", "icons/folder-open.svg", t(crate::sys::OPEN_FOLDER_LABEL))];
         self.pressed = Some(path);
         self.menus.show("recent", at, entries);
         cx.notify();
@@ -1940,13 +1934,6 @@ impl Shell {
             ("entry", "collapse") => self.collapse_all(window, cx),
             ("vault" | "vaults", "new") => self.start_new_vault(window, cx),
             ("vaults", "close") => self.close_vault(window, cx),
-            ("container", "choose") => self.choose_container(window, cx),
-            ("container", "close") => self.close_container(window, cx),
-            ("container", path) => {
-                if self.container().as_deref() != Some(Path::new(path)) {
-                    self.use_container(PathBuf::from(path), window, cx);
-                }
-            }
             ("vaults", path) => {
                 if self.vault_root() != Some(Path::new(path)) {
                     self.show_vault(PathBuf::from(path), window, cx);
@@ -2023,6 +2010,16 @@ impl Shell {
             ("vault", "rename") => {
                 if let Some(root) = self.vault_root().map(Path::to_path_buf) {
                     self.start_rename(root, window, cx);
+                }
+            }
+            ("vault", "look") => {
+                if let Some(root) = self.vault_root().map(Path::to_path_buf) {
+                    self.open_look(root.clone(), root, window, cx);
+                }
+            }
+            ("recent", "look") => {
+                if let Some(p) = pressed {
+                    self.open_look(p.clone(), p, window, cx);
                 }
             }
             ("vault", "reveal") => {
@@ -2492,7 +2489,7 @@ impl Shell {
             return self.render_side_stack(div().flex().flex_col().child(assets), ground, theme, cx);
         }
         let rows = self.render_tree(theme, cx);
-        let list = div().flex().flex_col().children(self.render_vault_row(theme, cx)).child(
+        let list = div().flex().flex_col().children(self.render_vault_row(ground, theme, cx)).child(
                 div()
                     .relative()
                     .flex_1()
@@ -2616,22 +2613,33 @@ impl Shell {
     /// The sidebar folded: a column at the window's left with the New
     /// Note button and the notes card's button, and the app's icon and
     /// the person's picture at its foot. It fades as the sidebar comes.
-    fn render_rail(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+    /// The sidebar folded to a rail, with what the sidebar has, each as
+    /// an entry with its tip at the right. In a vault: New Note, then
+    /// Notes and Assets, each flying the sidebar's card out beside the
+    /// rail on its tab (`render_rail_fly`), and at the foot the vault's
+    /// mark, a press on which lists the vaults as the vault's button does.
+    /// Before a vault: the container's vaults by their marks, a press
+    /// showing one and a right click giving its menu, then New Vault…; a
+    /// list longer than the rail ends in an entry that lists them all.
+    /// With no container, Choose Container…. The app's icon and the
+    /// person's picture stand at the foot of either.
+    fn render_rail(&self, window: &Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         let shown = (1. - self.side_t() * 1.6).max(0.);
         if shown <= 0. {
             return None;
         }
         let theme = self.frame_theme(cx);
+        let under = cx.theme().title_bar;
         let accent = theme.foreground.opacity(0.1);
         let mid = RAIL_W / 2.;
         let top = RAIL_TOP + (RAIL_ENTRY + RAIL_GAP) * 2. + px(12.);
         let fly = self.rail_fly.is_some_and(|(_, open)| open);
-        let entry = |id: &'static str, glyph: AnyElement, words: SharedString, active: bool, i: f32| {
+        let at = move |i: f32| top + (RAIL_ENTRY + RAIL_GAP) * i;
+        let entry = |id: ElementId, glyph: AnyElement, words: SharedString, active: bool| {
             div()
                 .id(id)
                 .absolute()
                 .left(mid - RAIL_ENTRY / 2.)
-                .top(top + (RAIL_ENTRY + RAIL_GAP) * i)
                 .size(RAIL_ENTRY)
                 .rounded(px(9.))
                 .flex()
@@ -2646,21 +2654,86 @@ impl Shell {
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(glyph)
         };
-        let plus = div().size(px(24.)).rounded_full().bg(theme.primary).flex().items_center().justify_center().child(Icon::default().path("icons/plus.svg").with_size(px(14.)).text_color(theme.primary_foreground)).into_any_element();
-        let notes = Icon::default().path("icons/folder.svg").with_size(px(18.)).text_color(if fly { theme.foreground } else { theme.muted_foreground }).into_any_element();
+        let glyph = |path: &'static str, lit: bool| Icon::default().path(path).with_size(px(18.)).text_color(if lit { theme.foreground } else { theme.muted_foreground }).into_any_element();
         let rule = |y: Pixels| div().absolute().left(mid - px(12.)).top(y).w(px(24.)).h(px(1.)).bg(accent);
-        let mut rail = Self::drag_region(div(), cx).absolute().top_0().left_0().h_full().w(RAIL_W).opacity(shown);
-        if self.vault.is_some() {
+        let mut rail = Self::drag_region(div(), cx).absolute().top_0().left_0().h_full().w(RAIL_W).opacity(shown).child(rule(top - px(7.)));
+        // The foot: the vault's mark in a vault, then the icon and the picture.
+        let foot = px(104.);
+        if let Some(root) = self.vault_root().map(Path::to_path_buf) {
+            let plus = div().size(px(24.)).rounded_full().bg(theme.primary).flex().items_center().justify_center().child(Icon::default().path("icons/plus.svg").with_size(px(14.)).text_color(theme.primary_foreground)).into_any_element();
+            let notes_on = fly && self.side_view == SideView::Notes;
+            let assets_on = fly && self.side_view == SideView::Assets;
+            let listed = self.menus.open.as_ref().is_some_and(|m| m.what == "vaults");
+            let name = self.vault.as_ref().map(|v| v.tree.name.clone()).unwrap_or_default();
+            let mark = library::vault_stack(&root, &name, 22., under, &theme, cx).into_any_element();
             rail = rail
-                .child(rule(top - px(7.)))
-                .child(entry("rail-new", plus, t("New Note (⌘N)").into(), false, 0.).on_click(cx.listener(|this, _, window, cx| {
+                .child(entry("rail-new".into(), plus, t("New Note (⌘N)").into(), false).top(at(0.)).on_click(cx.listener(|this, _, window, cx| {
                     swallow_click(window, cx);
                     this.new_note(&NewNote, window, cx);
                 })))
-                .child(entry("rail-notes", notes, t("Notes").into(), fly, 1.).on_click(cx.listener(|this, _, window, cx| {
+                .child(entry("rail-notes".into(), glyph("icons/folder.svg", notes_on), t("Notes").into(), notes_on).top(at(1.)).on_click(cx.listener(|this, _, window, cx| {
                     swallow_click(window, cx);
-                    this.rail_fly_toggle(cx);
+                    this.rail_fly_to(SideView::Notes, window, cx);
+                })))
+                .child(entry("rail-assets".into(), glyph("icons/image.svg", assets_on), t("Assets").into(), assets_on).top(at(2.)).on_click(cx.listener(|this, _, window, cx| {
+                    swallow_click(window, cx);
+                    this.rail_fly_to(SideView::Assets, window, cx);
+                })))
+                // The list rises beside the rail, its foot level with the mark's.
+                .child(entry("rail-vault".into(), mark, name.into(), listed).bottom(foot).on_click(cx.listener(move |this, _, window, cx| {
+                    swallow_click(window, cx);
+                    if this.menus.open.as_ref().is_some_and(|m| m.what == "vaults") {
+                        this.menus.close(cx);
+                        cx.notify();
+                        return;
+                    }
+                    let y = window.viewport_size().height - foot;
+                    this.show_vaults_at(point(RAIL_W + px(6.), y), Some(px(240.)), true, cx);
                 })));
+        } else if let Some(dir) = self.container() {
+            // As many vaults as the rail has room for above its foot, the
+            // last place given to the whole list when they do not all fit.
+            let room = window.viewport_size().height - top - px(150.);
+            let fit = ((f32::from(room) / f32::from(RAIL_ENTRY + RAIL_GAP)).floor() as usize).max(2) - 1;
+            let vaults = library::vault_list(Some(&dir), None);
+            let more = vaults.len() > fit;
+            let take = if more { fit - 1 } else { vaults.len() };
+            let mut i = 0.;
+            for p in vaults.into_iter().take(take) {
+                let name = library::vault_name(&p);
+                let mark = library::vault_stack(&p, &name, 22., under, &theme, cx).into_any_element();
+                let menu_p = p.clone();
+                rail = rail.child(
+                    entry(ElementId::Name(format!("rail-vault-{}", p.display()).into()), mark, name.into(), false)
+                        .top(at(i))
+                        .on_mouse_down(MouseButton::Right, cx.listener(move |this, ev: &MouseDownEvent, window, cx| {
+                            swallow_click(window, cx);
+                            this.show_recent_menu(menu_p.clone(), ev.position, cx);
+                        }))
+                        .on_click(cx.listener(move |this, _, window, cx| {
+                            swallow_click(window, cx);
+                            this.show_vault(p.clone(), window, cx);
+                        })),
+                );
+                i += 1.;
+            }
+            if more {
+                let y = at(i) + RAIL_ENTRY;
+                rail = rail.child(entry("rail-vaults".into(), glyph("icons/ellipsis.svg", false), t("Vaults").into(), false).top(at(i)).on_click(cx.listener(move |this, _, window, cx| {
+                    swallow_click(window, cx);
+                    this.show_vaults_at(point(RAIL_W + px(6.), y), Some(px(240.)), true, cx);
+                })));
+                i += 1.;
+            }
+            rail = rail.child(entry("rail-new-vault".into(), glyph("icons/plus.svg", false), t("New Vault…").into(), false).top(at(i)).on_click(cx.listener(|this, _, window, cx| {
+                swallow_click(window, cx);
+                this.start_new_vault(window, cx);
+            })));
+        } else {
+            rail = rail.child(entry("rail-container".into(), glyph("icons/folder-open.svg", false), t("Choose Container…").into(), false).top(at(0.)).on_click(cx.listener(|this, _, window, cx| {
+                swallow_click(window, cx);
+                this.choose_container(window, cx);
+            })));
         }
         rail = rail.child(img("icon/icon-128.png").absolute().left(mid - px(16.)).bottom(px(60.)).size(px(32.))).child(
             self.avatar(28., &theme)
@@ -2678,6 +2751,20 @@ impl Shell {
                 })),
         );
         Some(rail.into_any_element())
+    }
+
+    /// The card flown out on a tab: Notes or Assets. A press on the entry
+    /// of the tab showing puts it away; on the other, it turns to that
+    /// tab and stays.
+    fn rail_fly_to(&mut self, view: SideView, window: &mut Window, cx: &mut Context<Self>) {
+        let open = self.rail_fly.is_some_and(|(_, open)| open);
+        if open && self.side_view == view {
+            return self.rail_fly_close(cx);
+        }
+        self.set_side_view(view, window, cx);
+        if !open {
+            self.rail_fly_toggle(cx);
+        }
     }
 
     fn rail_fly_toggle(&mut self, cx: &mut Context<Self>) {
@@ -4630,7 +4717,7 @@ impl Render for Shell {
         let sheet = self.render_new_vault(cx).or_else(|| self.render_rename(cx)).or_else(|| self.render_export(window, cx));
         let search = self.search_open.then(|| self.render_search(window, cx));
         let viewer = self.render_viewer(window, cx);
-        let rail = self.render_rail(cx);
+        let rail = self.render_rail(window, cx);
         let fly = self.render_rail_fly(window, cx);
         let strip = self.render_strip(cx);
         let this = cx.entity().downgrade();
@@ -4649,7 +4736,6 @@ impl Render for Shell {
             .on_action(cx.listener(Self::new_folder))
             .on_action(cx.listener(|this, _: &NewVault, window, cx| this.start_new_vault(window, cx)))
             .on_action(cx.listener(|this, _: &CloseVault, window, cx| this.close_vault(window, cx)))
-            .on_action(cx.listener(|this, _: &CloseContainer, window, cx| this.close_container(window, cx)))
             .on_action(cx.listener(|this, _: &ChooseContainer, window, cx| this.choose_container(window, cx)))
             .on_action(cx.listener(|this, _: &ExportPdf, window, cx| {
                 if let Some(path) = this.shown.clone() {

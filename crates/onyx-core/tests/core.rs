@@ -46,16 +46,20 @@ fn an_override_is_never_written_back() {
 }
 
 #[test]
-fn text_sizes_are_a_preset_or_the_persons_own() {
+fn text_sizes_are_the_persons_own() {
     use onyx_core::config::{EditorConfig, TextSizes};
     let mut e = EditorConfig::default();
     assert_eq!(e.text_sizes(), TextSizes::MEDIUM);
-    e.text_size = "large".into();
-    assert_eq!(e.text_sizes(), TextSizes::LARGE);
-    e.text_size = "custom".into();
-    assert_eq!(e.text_sizes(), TextSizes::MEDIUM, "custom with nothing set is medium");
-    e.sizes = Some(TextSizes { note: 40., code: 3. });
+    e.size = TextSizes { note: 40., code: 3. };
     assert_eq!(e.text_sizes(), TextSizes { note: TextSizes::MOST, code: TextSizes::LEAST }, "a size out of range is held in");
+    // A file from the presets keeps what it showed.
+    for (old, sizes) in [(serde_json::json!({ "text_size": "large" }), TextSizes { note: 18., code: 16. }), (serde_json::json!({ "text_size": "custom", "sizes": { "note": 20., "code": 15. } }), TextSizes { note: 20., code: 15. }), (serde_json::json!({ "text_size": "medium", "sizes": null }), TextSizes::MEDIUM)] {
+        let mut e: EditorConfig = serde_json::from_value(old).unwrap();
+        e.key_custom();
+        assert_eq!(e.size, sizes);
+        let written = serde_json::to_value(&e).unwrap();
+        assert!(written.get("text_size").is_none() && written.get("sizes").is_none(), "the old keys are not written back");
+    }
     assert_eq!(TextSizes::step(16., true), 17.);
     assert_eq!(TextSizes::step(16.4, false), 16.);
     assert_eq!(TextSizes::step(TextSizes::MOST, true), TextSizes::MOST);
