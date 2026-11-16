@@ -197,15 +197,6 @@
     "de": "Tabs schließen",
     "es": "Cerrar pestañas"
   },
-  "Close Vault": {
-    "zh-Hans": "关闭仓库",
-    "zh-Hant": "關閉儲存庫",
-    "ja": "保管庫を閉じる",
-    "ko": "보관소 닫기",
-    "fr": "Fermer le coffre",
-    "de": "Tresor schließen",
-    "es": "Cerrar la bóveda"
-  },
   "Close Window": {
     "zh-Hans": "关闭窗口",
     "zh-Hant": "關閉視窗",
@@ -1043,15 +1034,6 @@
     "de": "Keine Treffer.",
     "es": "Sin coincidencias."
   },
-  "No notes yet. Make one with the button above.": {
-    "zh-Hans": "还没有笔记。用上面的按钮新建一条。",
-    "zh-Hant": "還沒有筆記。用上面的按鈕新增一則。",
-    "ja": "まだノートがありません。上のボタンで作れます。",
-    "ko": "아직 노트가 없습니다. 위의 버튼으로 만들 수 있습니다.",
-    "fr": "Pas encore de note. Créez-en une avec le bouton ci-dessus.",
-    "de": "Noch keine Notizen. Mit der Taste oben eine anlegen.",
-    "es": "Aún no hay notas. Crea una con el botón de arriba."
-  },
   "No spelling found": {
     "zh-Hans": "未找到拼写建议",
     "zh-Hant": "找不到拼字建議",
@@ -1105,15 +1087,6 @@
     "fr": "Notes",
     "de": "Notizen",
     "es": "Notas"
-  },
-  "Notes live in a folder of your own, a vault, as plain markdown files.": {
-    "zh-Hans": "笔记以纯 Markdown 文件存放在你自己的文件夹里，也就是仓库。",
-    "zh-Hant": "筆記以純 Markdown 檔案存放在你自己的檔案夾裡，也就是儲存庫。",
-    "ja": "ノートはあなた自身のフォルダ、保管庫に、プレーンな Markdown ファイルとして置かれます。",
-    "ko": "노트는 보관소라는 자신의 폴더에 일반 Markdown 파일로 저장됩니다.",
-    "fr": "Les notes vivent dans un dossier à vous, un coffre, sous forme de simples fichiers Markdown.",
-    "de": "Notizen liegen in einem eigenen Ordner, einem Tresor, als einfache Markdown-Dateien.",
-    "es": "Las notas viven en una carpeta tuya, una bóveda, como simples archivos Markdown."
   },
   "Nothing was moved: {why}": {
     "zh-Hans": "没有移动任何内容：{why}",
@@ -1187,14 +1160,14 @@
     "de": "Notiz öffnen",
     "es": "Abrir nota"
   },
-  "Open Folder as Vault…": {
-    "zh-Hans": "将文件夹作为仓库打开…",
-    "zh-Hant": "將檔案夾作為儲存庫打開…",
-    "ja": "フォルダを保管庫として開く…",
-    "ko": "폴더를 보관소로 열기…",
-    "fr": "Ouvrir un dossier comme coffre…",
-    "de": "Ordner als Tresor öffnen…",
-    "es": "Abrir carpeta como bóveda…"
+  "Choose Container…": {
+    "zh-Hans": "选择容器…",
+    "zh-Hant": "選擇容器…",
+    "ja": "コンテナを選択…",
+    "ko": "컨테이너 선택…",
+    "fr": "Choisir le conteneur…",
+    "de": "Container wählen…",
+    "es": "Elegir el contenedor…"
   },
   "Open folder": {
     "zh-Hans": "打开文件夹",
@@ -1366,15 +1339,6 @@
     "fr": "Quitter Onyx",
     "de": "Onyx beenden",
     "es": "Salir de Onyx"
-  },
-  "Recent": {
-    "zh-Hans": "最近",
-    "zh-Hant": "最近",
-    "ja": "最近",
-    "ko": "최근",
-    "fr": "Récents",
-    "de": "Zuletzt",
-    "es": "Recientes"
   },
   "Redo": {
     "zh-Hans": "重做",
@@ -2789,15 +2753,6 @@
     "de": "Shell-Terminal (⌘⇧S)",
     "es": "Terminal de shell (⌘⇧S)"
   },
-  "New Folder (⌘⇧N)": {
-    "zh-Hans": "新建文件夹 (⌘⇧N)",
-    "zh-Hant": "新增檔案夾 (⌘⇧N)",
-    "ja": "新規フォルダ (⌘⇧N)",
-    "ko": "새로운 폴더 (⌘⇧N)",
-    "fr": "Nouveau dossier (⌘⇧N)",
-    "de": "Neuer Ordner (⌘⇧N)",
-    "es": "Nueva carpeta (⌘⇧N)"
-  },
   "Auto-Hide Window (⌘⇧P)": {
     "zh-Hans": "自动隐藏窗口 (⌘⇧P)",
     "zh-Hant": "自動隱藏視窗 (⌘⇧P)",
@@ -2825,15 +2780,6 @@
     "de": "Fenster anheften (⌘⇧P)",
     "es": "Fijar la ventana (⌘⇧P)"
   },
-  "Vaults": {
-    "zh-Hans": "仓库",
-    "zh-Hant": "儲存庫",
-    "ja": "保管庫",
-    "ko": "보관소",
-    "fr": "Coffres",
-    "de": "Tresore",
-    "es": "Bóvedas"
-  },
   "Rename Vault": {
     "zh-Hans": "重命名仓库",
     "zh-Hant": "重新命名儲存庫",
@@ -2842,5 +2788,50 @@
     "fr": "Renommer le coffre",
     "de": "Tresor umbenennen",
     "es": "Renombrar bóveda"
+  },
+  "New Container…": {
+    "zh-Hans": "新建容器…",
+    "zh-Hant": "新增容器…",
+    "ja": "新しいコンテナ…",
+    "ko": "새 컨테이너…",
+    "fr": "Nouveau conteneur…",
+    "de": "Neuer Container…",
+    "es": "Nuevo contenedor…"
+  },
+  "New Container": {
+    "zh-Hans": "新建容器",
+    "zh-Hant": "新增容器",
+    "ja": "新しいコンテナ",
+    "ko": "새 컨테이너",
+    "fr": "Nouveau conteneur",
+    "de": "Neuer Container",
+    "es": "Nuevo contenedor"
+  },
+  "Close Vault": {
+    "zh-Hans": "关闭仓库",
+    "zh-Hant": "關閉儲存庫",
+    "ja": "保管庫を閉じる",
+    "ko": "보관소 닫기",
+    "fr": "Fermer le coffre",
+    "de": "Tresor schließen",
+    "es": "Cerrar la bóveda"
+  },
+  "Containers": {
+    "zh-Hans": "容器",
+    "zh-Hant": "容器",
+    "ja": "コンテナ",
+    "ko": "컨테이너",
+    "fr": "Conteneurs",
+    "de": "Container",
+    "es": "Contenedores"
+  },
+  "The container was not made: {why}": {
+    "zh-Hans": "容器未能创建：{why}",
+    "zh-Hant": "容器未能建立：{why}",
+    "ja": "コンテナを作成できませんでした：{why}",
+    "ko": "컨테이너를 만들지 못했습니다: {why}",
+    "fr": "Le conteneur n'a pas été créé : {why}",
+    "de": "Der Container wurde nicht erstellt: {why}",
+    "es": "El contenedor no se creó: {why}"
   }
 }

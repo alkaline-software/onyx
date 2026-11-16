@@ -19,13 +19,19 @@ pub fn open(target: &str) {
 /// Show `path` selected in the file manager. macOS and Windows can select
 /// a file; on Linux the folder opens, as close as xdg gets without D-Bus.
 /// A path as a person reads it: a path in iCloud Drive from `iCloud
-/// Drive`, as the Finder names the folder, the home folder as `~`, and
+/// Drive`, as the Finder names the folder, Onyx's own library in it as
+/// `iCloud Drive/Onyx`, the home folder as `~`, and
 /// the system's own separator. The same on every system but the
 /// separator and where iCloud Drive is.
 pub fn short_path(path: &std::path::Path) -> String {
     let home = onyx_core::paths::home();
     let sep = std::path::MAIN_SEPARATOR;
     let cloud = home.join("Library").join("Mobile Documents").join("com~apple~CloudDocs");
+    // Onyx's own iCloud library, which the Finder shows in iCloud Drive as Onyx.
+    let library = home.join("Library").join("Mobile Documents").join("iCloud~com~alkalinesoftware~onyx").join("Documents");
+    if let Some(rest) = icloud_container().into_iter().chain([library]).find_map(|lib| path.strip_prefix(&lib).ok().map(std::path::Path::to_path_buf)) {
+        return if rest.as_os_str().is_empty() { format!("iCloud Drive{sep}Onyx") } else { format!("iCloud Drive{sep}Onyx{sep}{}", rest.display()) };
+    }
     if let Ok(rest) = path.strip_prefix(&cloud) {
         return if rest.as_os_str().is_empty() { "iCloud Drive".to_string() } else { format!("iCloud Drive{sep}{}", rest.display()) };
     }

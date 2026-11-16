@@ -189,6 +189,15 @@ pub fn new_folder(dir: &Path, name: &str) -> io::Result<PathBuf> {
     Ok(path)
 }
 
+/// The vaults in the container: each folder at its top but dotted
+/// ones, by name as the file manager orders them. Nothing in them is read
+/// or made.
+pub fn vaults_in(folder: &Path) -> Vec<PathBuf> {
+    let mut out: Vec<PathBuf> = fs::read_dir(folder).into_iter().flatten().flatten().map(|e| e.path()).filter(|p| p.is_dir() && !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.'))).collect();
+    out.sort_by_key(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase()));
+    out
+}
+
 /// A new vault: a folder named `name` in `parent`, made along with the
 /// folders above it. The name is refused when empty or with a path
 /// separator; a folder of that name that is there already becomes the

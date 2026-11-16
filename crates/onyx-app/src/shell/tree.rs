@@ -92,20 +92,20 @@ pub(crate) struct Choice {
 }
 
 impl Shell {
-    /// The rows the tree shows, top to bottom, a folder before what it
-    /// holds and a folded one without it.
+    /// The rows the tree shows, top to bottom, an open folder before what
+    /// it holds and a shut one without it.
     pub(crate) fn visible_rows(&self) -> Vec<(PathBuf, bool)> {
-        fn walk(entries: &[vault::Entry], folded: &std::collections::HashSet<PathBuf>, out: &mut Vec<(PathBuf, bool)>) {
+        fn walk(entries: &[vault::Entry], unfolded: &std::collections::HashSet<PathBuf>, out: &mut Vec<(PathBuf, bool)>) {
             for e in entries {
                 out.push((e.path.clone(), e.dir));
-                if e.dir && !folded.contains(&e.path) {
-                    walk(&e.children, folded, out);
+                if e.dir && unfolded.contains(&e.path) {
+                    walk(&e.children, unfolded, out);
                 }
             }
         }
         let mut out = Vec::new();
         if let Some(v) = &self.vault {
-            walk(&v.tree.children, &v.folded, &mut out);
+            walk(&v.tree.children, &v.unfolded, &mut out);
         }
         out
     }
@@ -160,8 +160,8 @@ impl Shell {
 
     fn toggle_fold(&mut self, path: &Path, window: &mut Window) {
         if let Some(v) = self.vault.as_mut() {
-            if !v.folded.remove(path) {
-                v.folded.insert(path.to_path_buf());
+            if !v.unfolded.remove(path) {
+                v.unfolded.insert(path.to_path_buf());
             }
         }
         self.save_ui(window);
@@ -265,7 +265,7 @@ impl Shell {
         let rows = self.visible_rows();
         let Some(ix) = self.choice.cursor.as_ref().and_then(|c| rows.iter().position(|(p, _)| p == c)) else { return };
         let (path, dir) = rows[ix].clone();
-        let open = dir && !self.vault.as_ref().is_some_and(|v| v.folded.contains(&path));
+        let open = dir && self.vault.as_ref().is_some_and(|v| v.unfolded.contains(&path));
         let go = |s: &mut Self, to: PathBuf| {
             s.choice.marked = vec![to.clone()];
             s.choice.anchor = Some(to.clone());
@@ -404,7 +404,7 @@ impl Shell {
                 }
                 // The folder moved into opens, so what moved is in sight.
                 if let Some(v) = self.vault.as_mut() {
-                    v.folded.remove(&into);
+                    v.unfolded.insert(into.clone());
                 }
                 self.choice.marked = moves.iter().map(|(_, to)| to.clone()).collect();
                 self.follow_moves(&moves, window, cx);
@@ -460,7 +460,7 @@ impl Shell {
             }
         }
         if let Some(v) = self.vault.as_mut() {
-            v.folded = v.folded.iter().map(|f| vault::moved_path(f, moves)).collect();
+            v.unfolded = v.unfolded.iter().map(|f| vault::moved_path(f, moves)).collect();
         }
         self.sort_tabs();
         self.reread_tree(cx);

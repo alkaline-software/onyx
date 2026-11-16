@@ -40,7 +40,7 @@ use gpui_component::Root;
 
 use i18n::t;
 use onyx_core::config::Config;
-use shell::{ZoomIn, ZoomOut, ZoomReset, CloseTab, CloseVault, Escape, ExportPdf, PrintNote, FindInNote, FindNext, FindPrev, NewFolder, NewNote, NewVault, ReopenTab, Tab1, Tab2, Tab3, Tab4, Tab5, Tab6, Tab7, Tab8, Tab9, OpenSettings, OpenVault, Shell, ToggleSearch, ToggleSidebar, ToggleSource, ToggleTerminal, KEY_CONTEXT, MIN_W};
+use shell::{ZoomIn, ZoomOut, ZoomReset, CloseTab, Escape, ExportPdf, PrintNote, FindInNote, FindNext, FindPrev, NewFolder, NewNote, NewVault, CloseVault, NewContainer, ReopenTab, Tab1, Tab2, Tab3, Tab4, Tab5, Tab6, Tab7, Tab8, Tab9, OpenSettings, ChooseContainer, Shell, ToggleSearch, ToggleSidebar, ToggleSource, ToggleTerminal, KEY_CONTEXT, MIN_W};
 
 actions!(onyx_app, [Quit, CloseWindow, Hide, HideOthers, ShowAll, Minimize, Zoom, ToggleFullScreen]);
 
@@ -55,7 +55,7 @@ fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("secondary-shift-o", menubar::OpenInOnyx, Some(menubar::CONTEXT)),
         KeyBinding::new("secondary-n", NewNote, None),
         KeyBinding::new("secondary-shift-n", NewFolder, None),
-        KeyBinding::new("secondary-shift-o", OpenVault, None),
+        KeyBinding::new("secondary-shift-o", ChooseContainer, None),
         KeyBinding::new("secondary-shift-e", ExportPdf, None),
         KeyBinding::new("secondary-p", PrintNote, None),
         KeyBinding::new("secondary-=", ZoomIn, None),
@@ -127,8 +127,10 @@ pub(crate) fn app_menus() -> Vec<Menu> {
                 MenuItem::action(t("New Folder"), NewFolder),
                 MenuItem::separator(),
                 MenuItem::action(t("New Vault…"), NewVault),
-                MenuItem::action(t("Open Folder as Vault…"), OpenVault),
                 MenuItem::action(t("Close Vault"), CloseVault),
+                MenuItem::separator(),
+                MenuItem::action(t("New Container…"), NewContainer),
+                MenuItem::action(t("Choose Container…"), ChooseContainer),
                 MenuItem::separator(),
                 MenuItem::action(t("Export…"), ExportPdf),
                 MenuItem::action(t("Print…"), PrintNote),

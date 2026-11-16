@@ -1545,15 +1545,12 @@ impl MenuNote {
     /// window to open one.
     fn render_tree(&mut self, ground: Hsla, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
-        let quiet = |words: SharedString| div().text_center().text_size(px(12.5)).text_color(theme.muted_foreground).child(words);
         let Some(root) = self.browse.vault.clone() else {
             return v_flex()
                 .flex_1()
                 .px(px(16.))
                 .items_center()
                 .justify_center()
-                .gap(px(14.))
-                .child(quiet(t("Notes live in a folder of your own, a vault, as plain markdown files.").into()))
                 .child(choice_pill("menu-note-onyx-vault", "icons/app-window.svg", t("Open Onyx"), Press::Primary, false, &theme).on_click(cx.listener(|this, _, window, cx| {
                     swallow_click(window, cx);
                     this.show_onyx(cx);
@@ -1563,7 +1560,7 @@ impl MenuNote {
         let Some(tree) = self.browse.tree.clone() else { return div().flex_1().into_any_element() };
         let naming_root = self.browse.naming.as_ref().is_some_and(|n| n.dir == root);
         if tree.children.is_empty() && !naming_root {
-            return v_flex().flex_1().px(px(16.)).items_center().justify_center().child(quiet(t("No notes yet. Make one with the button above.").into())).into_any_element();
+            return div().flex_1().into_any_element();
         }
         let mut rows = Vec::new();
         if naming_root {
@@ -2127,9 +2124,17 @@ fn main_text(path: &Path, cx: &App) -> Option<String> {
     main_shell(cx).and_then(|s| s.read(cx).text_of_tab(path, cx))
 }
 
-/// The vault a note is in: the open one or one opened before that holds
-/// it, the deepest, else the note's own folder.
+/// The vault a note is in: the folder at the top of the container
+/// that holds it; else the open one or one opened before that holds it,
+/// the deepest, else the note's own folder.
 pub(crate) fn vault_of(path: &Path) -> Option<PathBuf> {
+    if let Some(folder) = crate::shell::library::container_of(&Config::load()) {
+        if let Ok(rest) = path.strip_prefix(&folder) {
+            if let Some(top) = rest.components().next().filter(|_| rest.components().count() > 1) {
+                return Some(folder.join(top));
+            }
+        }
+    }
     let ui = UiState::load();
     ui.vault.iter().chain(ui.recent_vaults.iter()).filter(|v| path.starts_with(v)).max_by_key(|v| v.components().count()).cloned().or_else(|| path.parent().map(Path::to_path_buf))
 }
@@ -2140,17 +2145,12 @@ fn writing_language() -> Option<String> {
     cfg.editor.check_writing.then(|| cfg.editor.writing_language.clone())
 }
 
-/// The vaults Onyx knows: the main window's, then the ones opened before,
-/// the latest first, each once and each still there.
+/// The vaults Onyx knows, as the main window's list has them: the main
+/// window's, then the container's, the last opened first
+/// (`library::vault_list`).
 fn known_vaults() -> Vec<PathBuf> {
     let ui = UiState::load();
-    let mut out: Vec<PathBuf> = Vec::new();
-    for v in ui.vault.iter().chain(ui.recent_vaults.iter()) {
-        if v.is_dir() && !out.contains(v) {
-            out.push(v.clone());
-        }
-    }
-    out
+    crate::shell::library::vault_list(crate::shell::library::container_of(&Config::load()).as_deref(), ui.vault.as_deref())
 }
 
 fn vault_name(path: &Path) -> String {

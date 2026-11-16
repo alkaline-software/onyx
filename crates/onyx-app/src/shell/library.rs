@@ -3,8 +3,8 @@
 //! in a tab of its own beside the notes.
 //!
 //! The sidebar is the vault's card, after Emaki's computers
-//! (`render_side_stack`): the vault on its head, the tabs of Notes and
-//! Assets under it, and the button for every vault at the foot. The
+//! (`render_side_stack`): the tabs of Notes and Assets at its top, the
+//! vault's own row over the tree, and the vault's button at the foot. The
 //! assets' card lists every file of the folder
 //! by its kind (`preview::kind`), a row each: a picture's with its small
 //! square in the icon's place, on a taller row. A press opens the file in a
@@ -35,12 +35,6 @@ use crate::widgets::{small_pill, swallow_click, Press, FOLD_ANIM};
 /// A picture's row: taller than a file's, so its small square is large
 /// enough to tell one picture from another.
 const PICTURE_ROW_H: f32 = 47.;
-/// The vault's band: the room at its every edge, and the height of its
-/// head's chip and buttons.
-const BAND_INSET: f32 = 4.;
-const HEAD_CHIP: f32 = 26.;
-/// Onyx's iCloud container as the disk names it, under Mobile Documents.
-const ICLOUD_CONTAINER: &str = "iCloud~com~alkalinesoftware~onyx";
 const THUMB: f32 = 34.;
 /// The pixels a square is drawn from: three times its size, for a Retina screen and a little more.
 const THUMB_PX: u32 = 102;
@@ -250,20 +244,16 @@ impl Shell {
 
     // -- the stack ----------------------------------------------------------
 
-    /// The vault's card, and under it the other vaults. The card's head
-    /// is the vault itself, after Emaki's computers: its name, whose press
-    /// opens the vault's list, and the buttons that make a note and a
-    /// folder and fold every folder (`render_vault_head`). Under it a pair
-    /// of tabs, Notes and Assets, each half the width, after a design of
-    /// Emaki's: the one open stands on a plate, which slides to the other
-    /// at a press, and the card's content fades in under it. The head and
-    /// the tabs share one tinted band, its top rounded as the card's, since
-    /// the card's own corner does not cut what is drawn in it.
+    /// The vault's card, and under it the vault's button. The card's top
+    /// is a pair of tabs, Notes and Assets, each half the width, after a
+    /// design of Emaki's: the one open stands on a plate, which slides to
+    /// the other at a press, and the card's content fades in under it. The
+    /// tabs stand on a tinted band, its top rounded as the card's, since
+    /// the card's own corner does not cut what is drawn in it. Under the
+    /// card, the button that names the vault open and lists the others
+    /// (`render_vaults_button`).
     pub(crate) fn render_side_stack(&self, content: Div, ground: Hsla, theme: &gpui_component::Theme, cx: &mut Context<Self>) -> AnyElement {
-        // With no vault, the row that says so, and nothing under it.
-        if self.vault.is_none() {
-            return v_flex().flex_1().min_h_0().child(self.render_vault_switch(ground, theme, cx)).into_any_element();
-        }
+        let button = self.render_vaults_button(ground, theme, cx);
         let moved = self.side_moved.filter(|(_, at)| at.elapsed() < FOLD_ANIM);
         let serial = self.side_view.key();
         let fading = moved.is_some();
@@ -307,148 +297,96 @@ impl Shell {
                 .child(div().min_w_0().truncate().child(name))
         };
         let tabs = div().relative().h(px(30.)).child(plate).child(h_flex().size_full().child(tab(SideView::Notes)).child(tab(SideView::Assets)));
-        // One inset for the band's every edge, so the head's name and its
-        // last button stand where the tabs' plate begins and ends.
-        let band = v_flex()
-            .flex_shrink_0()
-            .p(px(BAND_INSET))
-            .gap(px(2.))
-            .rounded_t(px(9.))
-            .bg(track_bg)
-            .border_b_1()
-            .border_color(theme.foreground.opacity(0.1))
-            .child(self.render_vault_head(theme, cx))
-            .child(tabs);
+        let band = div().flex_shrink_0().p(px(4.)).rounded_t(px(9.)).bg(track_bg).border_b_1().border_color(theme.foreground.opacity(0.1)).child(tabs);
         let content = fade_in(content.flex_1().min_h_0(), format!("side-card-{serial}"));
         let card = v_flex().mx(px(8.)).mt(px(10.)).mb(px(8.)).flex_1().min_h_0().rounded(px(10.)).border_1().border_color(theme.foreground.opacity(0.1)).bg(ground).overflow_hidden().child(band).child(content);
-        v_flex().flex_1().min_h_0().child(card).child(self.render_vaults_button(ground, theme, cx)).into_any_element()
+        v_flex().flex_1().min_h_0().child(card).child(button).into_any_element()
     }
 
-    /// The card's head, as tall as the tabs under it: the vault's mark and
-    /// name on a chip that is as wide as they are, a press or a right
-    /// click on which opens the vault's menu (Rename, Reveal in Finder),
-    /// and at the right New Note, New Folder and Collapse All Folders, as
-    /// Emaki's files have over their tree. The chip and the buttons are
-    /// one kind of thing: as tall, as round, lit alike under the pointer.
-    fn render_vault_head(&self, theme: &gpui_component::Theme, cx: &mut Context<Self>) -> AnyElement {
+    /// The vault at the top of the notes, as the menu bar note has it: a
+    /// folder's row over the tree that does not scroll with it, the vault's
+    /// name, and at its right Collapse All Folders, New Note and New
+    /// Folder, always there: the last two in the columns a folder's own
+    /// stand in under the pointer. A right click gives the vault's menu (Rename,
+    /// Reveal in Finder); a row let go on it goes to the vault's top.
+    pub(crate) fn render_vault_row(&self, theme: &gpui_component::Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let root = self.vault_root()?.to_path_buf();
         let name: SharedString = self.vault.as_ref().map(|v| v.tree.name.clone()).unwrap_or_default().into();
-        let (lit, wash, muted) = (theme.foreground, theme.foreground.opacity(0.08), theme.muted_foreground);
+        let (lit, muted) = (theme.foreground, theme.muted_foreground);
         let listed = self.menus.open.as_ref().is_some_and(|m| m.what == "vault");
-        let tool = |id: &'static str, icon: &'static str, words: SharedString| {
-            div()
-                .id(id)
-                .size(px(HEAD_CHIP))
-                .flex_shrink_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .rounded(px(6.))
-                .cursor_pointer()
-                .text_color(muted)
-                .hover(move |s| s.bg(wash).text_color(lit))
-                .active(move |s| s.bg(lit.opacity(0.11)))
-                .managed_tooltip(move |window, cx| crate::widgets::tip(words.clone(), window, cx))
-                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                .child(Icon::default().path(icon).with_size(px(15.)))
-        };
-        let chip = h_flex()
-            .id("vault-switch")
-            .min_w_0()
-            .h(px(HEAD_CHIP))
-            .px(px(8.))
-            .gap(px(7.))
-            .items_center()
-            .rounded(px(6.))
-            .cursor_pointer()
-            .when(listed, |d| d.bg(wash))
-            .hover(move |s| s.bg(wash))
-            .active(move |s| s.bg(lit.opacity(0.11)))
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(cx.listener(|this, ev: &ClickEvent, window, cx| {
-                swallow_click(window, cx);
-                this.show_vault_menu(ev.position() + point(px(-8.), px(14.)), cx);
-            }))
-            .on_mouse_down(MouseButton::Right, cx.listener(|this, ev: &MouseDownEvent, window, cx| {
-                swallow_click(window, cx);
-                this.show_vault_menu(ev.position, cx);
-            }))
-            .child(Icon::default().path("icons/book-open.svg").with_size(px(15.)).text_color(theme.primary).flex_shrink_0())
-            .child(div().min_w_0().truncate().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).text_color(lit).child(name));
-        h_flex()
-            .h(px(30.))
-            .items_center()
-            .child(chip)
-            .child(div().flex_1().min_w(px(8.)))
-            .child(
-                h_flex()
-                    .flex_shrink_0()
-                    .gap(px(2.))
-                    .child(tool("vault-new-note", "icons/file-plus.svg", t("New Note (⌘N)").into()).on_click(cx.listener(|this, _, window, cx| {
-                        swallow_click(window, cx);
-                        this.new_note(&super::NewNote, window, cx);
-                    })))
-                    .child(tool("vault-new-folder", "icons/folder-plus.svg", t("New Folder (⌘⇧N)").into()).on_click(cx.listener(|this, _, window, cx| {
-                        swallow_click(window, cx);
-                        this.new_folder(&super::NewFolder, window, cx);
-                    })))
-                    .child(tool("vault-collapse", "icons/copy-minus.svg", t("Collapse All Folders").into()).on_click(cx.listener(|this, _, window, cx| {
-                        swallow_click(window, cx);
-                        this.collapse_all(window, cx);
-                    }))),
-            )
-            .into_any_element()
-    }
-
-    /// The vault the window has open, as a row of its own, with none
-    /// open: it says so, and a press opens the vault's list.
-    fn render_vault_switch(&self, ground: Hsla, theme: &gpui_component::Theme, cx: &mut Context<Self>) -> AnyElement {
-        h_flex()
-            .id("vault-switch")
-            .mx(px(8.))
-            .mt(px(10.))
-            .h(px(36.))
+        let tools = h_flex()
             .flex_shrink_0()
-            .px(px(10.))
-            .gap(px(10.))
-            .items_center()
-            .rounded(px(10.))
-            .border_1()
-            .border_color(theme.foreground.opacity(0.1))
-            .bg(ground)
-            .cursor_pointer()
-            .hover(|s| s.bg(theme.foreground.opacity(0.08)))
-            .active(|s| s.bg(theme.foreground.opacity(0.11)))
-            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .on_click(cx.listener(|this, ev: &ClickEvent, window, cx| {
+            .gap(px(2.))
+            .child(row_tool("vault-collapse", "icons/copy-minus.svg", t("Collapse All Folders").into(), theme).on_click(cx.listener(|this, _, window, cx| {
                 swallow_click(window, cx);
-                this.show_vault_menu(ev.position() + point(px(-8.), px(14.)), cx);
-            }))
-            .on_mouse_down(MouseButton::Right, cx.listener(|this, ev: &MouseDownEvent, window, cx| {
-                swallow_click(window, cx);
-                this.show_vault_menu(ev.position, cx);
-            }))
-            .child(div().w(px(22.)).flex().justify_center().child(Icon::default().path("icons/book-open.svg").with_size(px(15.)).text_color(theme.muted_foreground)))
-            .child(div().flex_1().min_w_0().truncate().text_size(px(13.)).font_weight(FontWeight::SEMIBOLD).text_color(theme.muted_foreground).child(t("No vault")))
-            .child(Icon::default().path("icons/chevrons-up-down.svg").with_size(px(12.)).text_color(theme.muted_foreground))
-            .into_any_element()
+                this.collapse_all(window, cx);
+            })))
+            // At the vault's top, as a folder's make in the folder; ⌘N
+            // makes beside the note showing.
+            .child(row_tool("vault-new-note", "icons/file-plus.svg", t("New Note").into(), theme).on_click(cx.listener({
+                let root = root.clone();
+                move |this, _, window, cx| {
+                    swallow_click(window, cx);
+                    this.new_note_in(root.clone(), window, cx);
+                }
+            })))
+            .child(row_tool("vault-new-folder", "icons/folder-plus.svg", t("New Folder").into(), theme).on_click(cx.listener({
+                let root = root.clone();
+                move |this, _, window, cx| {
+                    swallow_click(window, cx);
+                    this.new_folder_in(root.clone(), window, cx);
+                }
+            })));
+        let wash = theme.primary.opacity(0.22);
+        Some(
+            h_flex()
+                .id("vault-row")
+                .flex_shrink_0()
+                .mx(px(8.))
+                .mt(px(6.))
+                .h(px(TREE_ROW_H))
+                .pl(px(8.))
+                .pr(px(4.))
+                .gap(px(6.))
+                .items_center()
+                .rounded(px(7.))
+                .text_size(px(13.))
+                .when(listed, |d| d.bg(lit.opacity(0.08)))
+                .on_mouse_down(MouseButton::Right, cx.listener(|this, ev: &MouseDownEvent, window, cx| {
+                    swallow_click(window, cx);
+                    this.show_vault_menu(ev.position, cx);
+                }))
+                .drag_over::<super::TreeDrag>(move |style, _, _, _| style.bg(wash))
+                .on_drop(cx.listener(move |this, drag: &super::TreeDrag, window, cx| {
+                    cx.stop_propagation();
+                    this.tree_drop(drag, root.clone(), window, cx)
+                }))
+                // In the chevrons' column, as the menu bar note's vault is.
+                .child(div().w(px(12.)).flex_shrink_0().flex().justify_center().child(Icon::default().path("icons/folder-open.svg").with_size(px(15.)).text_color(muted)))
+                .child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::SEMIBOLD).text_color(lit).child(name))
+                .child(tools)
+                .into_any_element(),
+        )
     }
 
-    /// The button under the card, a slim card of its own: a press lists
-    /// the vaults in a menu as wide as the button that rises from its top
-    /// (`show_vaults_at`), and a press while it shows puts it away. It
-    /// stays lit while the list shows.
+    /// The button under the card, a slim card of its own: the vault shown,
+    /// its mark and its name, and the arrows of a list. A press lists the
+    /// vaults in a menu as wide as the button that rises from its top
+    /// (`show_vaults_at`); a press while it shows puts it away. It stays
+    /// lit while the list shows.
     fn render_vaults_button(&self, ground: Hsla, theme: &gpui_component::Theme, cx: &mut Context<Self>) -> AnyElement {
         let (lit, muted, edge) = (theme.foreground, theme.muted_foreground, theme.foreground.opacity(0.1));
         let hover = ground.blend(theme.foreground.opacity(0.05));
         let listed = self.menus.open.as_ref().is_some_and(|m| m.what == "vaults");
         let place = self.vaults_at.clone();
+        let name: SharedString = self.vault.as_ref().map(|v| v.tree.name.clone()).unwrap_or_default().into();
         h_flex()
             .id("vaults-button")
             .relative()
             .flex_shrink_0()
             .mx(px(8.))
             .mb(px(10.))
-            .h(px(34.))
+            .h(px(36.))
             .px(px(10.))
             .gap(px(10.))
             .items_center()
@@ -457,9 +395,8 @@ impl Shell {
             .border_color(edge)
             .bg(if listed { hover } else { ground })
             .text_size(px(13.))
-            .text_color(if listed { lit } else { muted })
             .cursor_pointer()
-            .hover(move |s| s.bg(hover).text_color(lit))
+            .hover(move |s| s.bg(hover))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(|this, _, window, cx| {
                 swallow_click(window, cx);
@@ -473,46 +410,30 @@ impl Shell {
             }))
             // Where the list rises from: the button as it was last drawn.
             .child(canvas(move |b, _, _| place.set(b), |_, _, _, _| ()).absolute().top_0().left_0().size_full())
-            .child(div().w(px(22.)).flex().justify_center().child(Icon::default().path("icons/books.svg").with_size(px(16.))))
-            .child(div().flex_1().min_w_0().truncate().child(t("Vaults")))
-            .child(Icon::default().path("icons/chevron-up.svg").with_size(px(12.)))
+            .child(div().w(px(22.)).flex().justify_center().child(Icon::default().path("icons/book-open.svg").with_size(px(15.)).text_color(theme.primary)))
+            .child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::SEMIBOLD).text_color(lit).child(name))
+            .child(Icon::default().path("icons/chevrons-up-down.svg").with_size(px(12.)).text_color(muted))
             .into_any_element()
     }
 
-    /// The vaults' list: the open one first and ticked, then those opened
-    /// before, the last opened first, then the other folders in Onyx's
-    /// own folders for vaults (`vault_homes`) by name; then New Vault…
-    /// and Open Folder as Vault…, which takes any folder on the computer.
+    /// The vaults' list (`vault_list`), the open one ticked; then New
+    /// Vault…, made in the container, and Choose Container….
     pub(crate) fn show_vaults_at(&mut self, at: Point<Pixels>, width: Option<Pixels>, above: bool, cx: &mut Context<Self>) {
         let open = self.vault_root().map(Path::to_path_buf);
-        let mut vaults: Vec<PathBuf> = open.iter().cloned().collect();
-        for p in crate::ui_state::UiState::load().recent_vaults.into_iter().filter(|p| p.is_dir()) {
-            if !vaults.contains(&p) {
-                vaults.push(p);
-            }
-        }
-        let mut found: Vec<PathBuf> = Self::vault_homes()
-            .iter()
-            .flat_map(|home| std::fs::read_dir(home).into_iter().flatten().flatten())
-            .map(|e| e.path())
-            .filter(|p| p.is_dir() && !p.file_name().is_some_and(|n| n.to_string_lossy().starts_with('.')) && !vaults.contains(p))
-            .collect();
-        found.sort_by_key(|p| p.file_name().map(|n| n.to_string_lossy().to_lowercase()));
-        found.dedup();
-        vaults.extend(found);
-        let mut entries: Vec<Entry> = vaults
+        let mut entries: Vec<Entry> = vault_list(self.container().as_deref(), open.as_deref())
             .into_iter()
             .map(|p| {
-                let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| p.display().to_string());
                 let chosen = open.as_ref() == Some(&p);
-                Entry::Choice { id: p.to_string_lossy().to_string().into(), icon: "icons/book-open.svg", label: name.into(), picture: false, chosen }
+                Entry::Choice { id: p.to_string_lossy().to_string().into(), icon: "icons/book-open.svg", label: vault_name(&p).into(), picture: false, chosen }
             })
             .collect();
         if !entries.is_empty() {
             entries.push(Entry::Rule);
         }
         entries.push(Entry::choice("new", "icons/plus.svg", t("New Vault…")));
-        entries.push(Entry::choice("open-other", "icons/folder-open.svg", t("Open Folder as Vault…")));
+        if open.is_some() {
+            entries.push(Entry::choice("close", "icons/close.svg", t("Close Vault")));
+        }
         if above {
             self.menus.show_above("vaults", at, width, entries);
         } else {
@@ -521,18 +442,9 @@ impl Shell {
         cx.notify();
     }
 
-    /// Where Onyx keeps vaults: where a new one goes in iCloud
-    /// (`cloud_place`), and Onyx's own iCloud container where it is on the
-    /// disk though this bundle cannot ask for it (the dev build), so the
-    /// list has the vaults a released Onyx made.
-    fn vault_homes() -> Vec<PathBuf> {
-        let mut homes: Vec<PathBuf> = Self::cloud_place().into_iter().collect();
-        if let Some(container) = onyx_core::paths::icloud_drive().and_then(|d| d.parent().map(|m| m.join(ICLOUD_CONTAINER).join("Documents"))) {
-            if container.is_dir() && !homes.contains(&container) {
-                homes.push(container);
-            }
-        }
-        homes
+    /// The container chosen (`AppConfig::container`), while it is there.
+    pub(crate) fn container(&self) -> Option<PathBuf> {
+        container_of(&self.cfg)
     }
 
     // -- the assets' card ---------------------------------------------------
@@ -906,3 +818,52 @@ impl Shell {
     }
 }
 
+/// The container a configuration names, while it is there.
+pub(crate) fn container_of(cfg: &onyx_core::config::Config) -> Option<PathBuf> {
+    Some(PathBuf::from(&cfg.app.container)).filter(|p| !cfg.app.container.is_empty() && p.is_dir())
+}
+
+/// The vaults to offer, for the sidebar's list, the landing page and the
+/// menu bar note's: the one open first, then those in the container
+/// opened before, the last opened first, then the rest of the folder's by
+/// name (`vault::vaults_in`). With no folder, the ones opened before.
+pub(crate) fn vault_list(folder: Option<&Path>, open: Option<&Path>) -> Vec<PathBuf> {
+    let in_folder: Vec<PathBuf> = folder.map(vault::vaults_in).unwrap_or_default();
+    let mut out: Vec<PathBuf> = open.filter(|o| o.is_dir()).map(Path::to_path_buf).into_iter().collect();
+    for p in crate::ui_state::UiState::load().recent_vaults {
+        if p.is_dir() && (folder.is_none() || in_folder.contains(&p)) && !out.contains(&p) {
+            out.push(p);
+        }
+    }
+    for p in in_folder {
+        if !out.contains(&p) {
+            out.push(p);
+        }
+    }
+    out
+}
+
+pub(crate) fn vault_name(path: &Path) -> String {
+    path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.display().to_string())
+}
+
+/// A small square button on a row of the tree: an icon in the muted ink,
+/// lit under the pointer, its words with it.
+pub(crate) fn row_tool(id: impl Into<ElementId>, icon: &'static str, words: SharedString, theme: &gpui_component::Theme) -> Stateful<Div> {
+    let (lit, wash, muted) = (theme.foreground, theme.foreground.opacity(0.1), theme.muted_foreground);
+    div()
+        .id(id.into())
+        .size(px(24.))
+        .flex_shrink_0()
+        .flex()
+        .items_center()
+        .justify_center()
+        .rounded(px(6.))
+        .cursor_pointer()
+        .text_color(muted)
+        .hover(move |s| s.bg(wash).text_color(lit))
+        .active(move |s| s.bg(lit.opacity(0.14)))
+        .managed_tooltip(move |window, cx| crate::widgets::tip(words.clone(), window, cx))
+        .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+        .child(Icon::default().path(icon).with_size(px(14.)))
+}

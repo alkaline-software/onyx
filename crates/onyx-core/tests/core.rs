@@ -833,3 +833,16 @@ mod attached {
         });
     }
 }
+
+#[test]
+fn every_folder_at_the_top_of_the_container_is_a_vault() {
+    let dir = tempfile::tempdir().unwrap();
+    for name in ["travel", "Books", ".hidden"] {
+        std::fs::create_dir(dir.path().join(name)).unwrap();
+    }
+    std::fs::write(dir.path().join("loose.md"), "a note at the top").unwrap();
+    let found: Vec<String> = vault::vaults_in(dir.path()).iter().map(|p| p.file_name().unwrap().to_string_lossy().to_string()).collect();
+    assert_eq!(found, ["Books", "travel"]);
+    // Reading them makes nothing in them: no assets folder until an asset comes.
+    assert!(!vault::assets(&dir.path().join("travel")).exists());
+}

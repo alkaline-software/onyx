@@ -38,10 +38,13 @@ pub struct UiState {
     pub vault: Option<PathBuf>,
     pub tabs: Vec<PathBuf>,
     pub note: Option<PathBuf>,
-    /// The vaults opened before, the latest first, for the landing page.
+    /// The vaults shown before, the latest first, for the vaults' lists.
     pub recent_vaults: Vec<PathBuf>,
-    /// The folders folded shut in the sidebar's tree, by their path.
-    pub folded: Vec<PathBuf>,
+    /// The containers used before, the last first, for stage one's list.
+    pub recent_containers: Vec<PathBuf>,
+    /// The folders open in the sidebar's tree, by their path; the rest
+    /// are shut. Only the vault shown last has any.
+    pub unfolded: Vec<PathBuf>,
     /// Whether the note's source shows beside it, and the share of the
     /// page it takes, the app's own, not a note's.
     pub source_open: Option<bool>,
@@ -147,7 +150,14 @@ impl UiState {
         }
     }
 
-    /// A vault opened: first among the recent ones.
+    /// A container taken: first among those used before.
+    pub fn remember_container(&mut self, dir: &std::path::Path) {
+        self.recent_containers.retain(|d| d != dir);
+        self.recent_containers.insert(0, dir.to_path_buf());
+        self.recent_containers.truncate(RECENT);
+    }
+
+    /// A vault shown: first among the recent ones.
     pub fn remember_vault(&mut self, vault: &std::path::Path) {
         self.recent_vaults.retain(|v| v != vault);
         self.recent_vaults.insert(0, vault.to_path_buf());

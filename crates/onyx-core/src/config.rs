@@ -29,11 +29,15 @@ pub struct AppConfig {
     /// The colors the person made for folders, as `#rrggbb`, offered
     /// after the app's own in every vault.
     pub folder_colors: Vec<String>,
+    /// The container: the one folder the vaults are in, each folder at
+    /// its top a vault. Empty until it is chosen, or taken from the vault
+    /// shown before there was one.
+    pub container: String,
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
-        Self { appearance: "system".into(), accent: "teal".into(), language: "system".into(), check_updates: true, user_name: String::new(), avatar: String::new(), folder_colors: Vec::new() }
+        Self { appearance: "system".into(), accent: "teal".into(), language: "system".into(), check_updates: true, user_name: String::new(), avatar: String::new(), folder_colors: Vec::new(), container: String::new() }
     }
 }
 

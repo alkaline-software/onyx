@@ -39,14 +39,15 @@ use crate::tabs::{Item as TabItem, Tabs};
 use crate::ui_state::{Rect, UiState};
 use crate::widgets::{choice_pill, float_shadow, kbd_hint, key_text, page_in, small_pill, swallow_click, tip, Fig, Motion, Press, FOLD_ANIM, SLIDE};
 
-actions!(onyx, [ExportPdf, PrintNote, ToggleSidebar, OpenSettings, Escape, NewNote, NewFolder, NewVault, OpenVault, CloseVault, ToggleSource, ToggleTerminal, ToggleSearch, FindInNote, FindNext, FindPrev, CloseTab, ReopenTab, ZoomIn, ZoomOut, ZoomReset, Tab1, Tab2, Tab3, Tab4, Tab5, Tab6, Tab7, Tab8, Tab9]);
+actions!(onyx, [ExportPdf, PrintNote, ToggleSidebar, OpenSettings, Escape, NewNote, NewFolder, NewVault, CloseVault, NewContainer, ChooseContainer, ToggleSource, ToggleTerminal, ToggleSearch, FindInNote, FindNext, FindPrev, CloseTab, ReopenTab, ZoomIn, ZoomOut, ZoomReset, Tab1, Tab2, Tab3, Tab4, Tab5, Tab6, Tab7, Tab8, Tab9]);
 
 /// The key context of the main window.
 pub const KEY_CONTEXT: &str = "Shell";
 /// The key context of a sheet over the window.
 pub(crate) const SHEET_CONTEXT: &str = "Sheet";
 
-mod library;
+pub(crate) mod library;
+mod places;
 mod tree;
 pub(crate) use tree::{Choice, TreeDrag};
 
@@ -155,19 +156,19 @@ const SHEET_MARGIN: Pixels = px(16.);
 /// the terminal's: half the page's margin, so the three read as one row.
 const PANE_GAP: f32 = 8.;
 /// The vaults the landing page offers, the last opened first.
-const LANDING_VAULTS: usize = 6;
 const SHEET_GUTTER: f32 = 32.;
 /// The least the window is dragged to.
 pub const MIN_W: Pixels = px(720.);
 /// How often the vault's changes are looked for.
 const WATCH_POLL: Duration = Duration::from_millis(300);
 
-/// The vault open: its folder, its tree as last read, the folders folded
-/// shut, and the watcher that says when to read it again.
+/// The vault shown: its folder, its tree as last read, the folders open
+/// in it (the rest are shut), and the watcher that says when to read it
+/// again.
 struct Vault {
     root: PathBuf,
     tree: vault::Entry,
-    folded: HashSet<PathBuf>,
+    unfolded: HashSet<PathBuf>,
     _watcher: Option<vault::Watcher>,
     changes: Rc<std::sync::mpsc::Receiver<Vec<PathBuf>>>,
 }
@@ -205,9 +206,11 @@ enum Place {
     Folder,
 }
 
-/// The new-vault sheet while it is up: the place chosen, and the folder
-/// the vault goes in when the place is a folder of the person's own.
+/// The new-vault sheet while it is up, or the new container's: for a
+/// container, the place chosen, and the folder it is when the place is a
+/// folder of the person's own.
 struct NewVaultSheet {
+    container: bool,
     place: Place,
     folder: PathBuf,
 }
@@ -229,7 +232,12 @@ pub struct Shell {
     /// The sidebar's edge is held.
     side_drag: bool,
     side_scroll: ScrollHandle,
-    page_scroll: ScrollHandle,
+    /// The list on the sidebar's card before a vault is shown (`places.rs`).
+    place_scroll: ScrollHandle,
+    /// The new container's sheet, which has no field, for its ↩.
+    place_focus: FocusHandle,
+    /// The containers on the card turned from how they begin, open or shut (`places.rs`).
+    place_turned: HashSet<PathBuf>,
     vault: Option<Vault>,
     /// The open notes, in the row's order: a folder's together.
     tabs: Vec<Tab>,
@@ -320,6 +328,8 @@ pub struct Shell {
     side_moved: Option<(SideView, Instant)>,
     /// Where the vaults' list rises from: the button, as it was last drawn.
     vaults_at: Rc<std::cell::Cell<Bounds<Pixels>>>,
+    /// The folder's row the pointer is on, which shows its New Note and New Folder.
+    hover_row: Option<PathBuf>,
     library: Library,
     /// The field a text field's menu was opened on, for what is chosen.
     pub(crate) menu_focus: Option<FocusHandle>,
@@ -550,6 +560,7 @@ impl Shell {
             side_view: SideView::from_key(ui.side_view.as_deref().unwrap_or("notes")),
             side_moved: None,
             vaults_at: Rc::default(),
+            hover_row: None,
             choice: Choice::default(),
             tree_focus: cx.focus_handle(),
             lit_joins: RefCell::new(std::collections::HashMap::new()),
@@ -559,7 +570,9 @@ impl Shell {
             side_w_anim: None,
             side_drag: false,
             side_scroll: ScrollHandle::new(),
-            page_scroll: ScrollHandle::new(),
+            place_scroll: ScrollHandle::new(),
+            place_focus: cx.focus_handle(),
+            place_turned: HashSet::new(),
             vault: None,
             tabs: Vec::new(),
             shown: None,
@@ -619,9 +632,22 @@ impl Shell {
         shell.user_name = Self::name_of(&shell.cfg);
         // A probe's vault stands over the remembered one.
         let probing = std::env::var_os("ONYX_VAULT").is_some();
-        let vault = std::env::var_os("ONYX_VAULT").map(PathBuf::from).or_else(|| ui.vault.clone());
-        if let Some(root) = vault.filter(|p| p.is_dir()) {
-            shell.open_vault(root, window, cx);
+        let vault = std::env::var_os("ONYX_VAULT").map(PathBuf::from).or_else(|| ui.vault.clone()).filter(|p| p.is_dir());
+        // Before there was a container, the vault open was anywhere:
+        // the folder it is in becomes the container, so it opens as before.
+        if shell.cfg.app.container.is_empty() {
+            if let Some(parent) = vault.as_ref().and_then(|v| v.parent()) {
+                shell.set_container(parent.to_path_buf());
+            }
+        }
+        // A vault remembered from another container stays shut; a probe's opens.
+        let in_folder = |v: &PathBuf| probing || library::container_of(&shell.cfg).is_some_and(|f| v.parent() == Some(f.as_path()));
+        if let Some(root) = vault.filter(in_folder) {
+            shell.show_vault(root.clone(), window, cx);
+            if let Some(v) = shell.vault.as_mut() {
+                v.unfolded = ui.unfolded.iter().filter(|p| p.starts_with(&root)).cloned().collect();
+            }
+            shell.save_ui(window);
             // A probe names a note to open (`ONYX_NOTE`); otherwise the
             // tabs that were open are opened again, and the one that
             // showed shows.
@@ -668,7 +694,7 @@ impl Shell {
             ui.vault = self.vault.as_ref().map(|v| v.root.clone());
             ui.note = self.shown.clone();
             ui.tabs = self.tabs.iter().map(|t| t.path.clone()).collect();
-            ui.folded = self.vault.as_ref().map(|v| v.folded.iter().cloned().collect()).unwrap_or_default();
+            ui.unfolded = self.vault.as_ref().map(|v| v.unfolded.iter().cloned().collect()).unwrap_or_default();
         }
         ui
     }
@@ -720,18 +746,17 @@ impl Shell {
         self.vault.as_ref().map(|v| v.root.as_path())
     }
 
-    fn open_vault(&mut self, root: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+    fn show_vault(&mut self, root: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         self.save_all(cx);
         self.tabs.clear();
         self.shown = None;
         self.closed_tabs.clear();
-        let ui = UiState::load();
-        let folded: HashSet<PathBuf> = ui.folded.iter().filter(|p| p.starts_with(&root)).cloned().collect();
         let (watcher, changes) = self.watch_vault(&root, cx);
         let tree = vault::tree(&root);
         crate::folder_look::ensure(&root, cx);
-        self.vault = Some(Vault { root: root.clone(), tree, folded, _watcher: watcher, changes });
-        let mut ui = ui;
+        // Its folders come shut (at launch, `Shell::new` opens again the ones left open).
+        self.vault = Some(Vault { root: root.clone(), tree, unfolded: HashSet::new(), _watcher: watcher, changes });
+        let mut ui = UiState::load();
         ui.remember_vault(&root);
         ui.save_later();
         self.watch_changes(cx);
@@ -783,7 +808,7 @@ impl Shell {
         }
         self.watch_changes(cx);
         let mut ui = UiState::load();
-        for p in ui.recent_vaults.iter_mut().chain(ui.folded.iter_mut()) {
+        for p in ui.recent_vaults.iter_mut().chain(ui.unfolded.iter_mut()) {
             *p = vault::moved_path(p, &[(old.clone(), new.clone())]);
         }
         ui.save_later();
@@ -917,20 +942,48 @@ impl Shell {
         cx.notify();
     }
 
-    /// Ask the system for a folder to be the vault.
-    pub(crate) fn choose_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let rx = cx.prompt_for_paths(PathPromptOptions { files: false, directories: true, multiple: false, prompt: Some(t("Open").into()) });
+    /// Ask the system for the container: a new one, or one with
+    /// folders in it already, each of which is then a vault as it is.
+    /// A vault shown from another container gives way to the landing
+    /// page, which lists the new one's vaults.
+    pub(crate) fn choose_container(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let rx = cx.prompt_for_paths(PathPromptOptions { files: false, directories: true, multiple: false, prompt: Some(t("Choose").into()) });
         cx.spawn_in(window, async move |this, cx| {
             let Ok(Ok(Some(paths))) = rx.await else { return };
             let Some(dir) = paths.into_iter().next() else { return };
             let _ = cx.update(|window, cx| {
-                let _ = this.update(cx, |s, cx| s.open_vault(dir, window, cx));
+                let _ = this.update(cx, |s, cx| {
+                    s.use_container(dir.clone(), window, cx);
+                });
             });
         })
         .detach();
     }
 
+    /// The container kept in the settings.
+    fn set_container(&mut self, dir: PathBuf) {
+        let mut ui = UiState::load();
+        ui.remember_container(&dir);
+        ui.save_later();
+        let path = dir.to_string_lossy().to_string();
+        self.cfg.app.container = path.clone();
+        let _ = Config::edit(move |c| c.app.container = path);
+    }
+
+    /// A container taken, from the picker, the card or a new one made: a
+    /// vault shown from another gives way to the page before a vault.
+    pub(crate) fn use_container(&mut self, dir: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        self.menus.close(cx);
+        self.set_container(dir.clone());
+        if self.vault_root().is_some_and(|v| v.parent() != Some(dir.as_path())) {
+            self.close_vault(window, cx);
+        }
+        cx.notify();
+    }
+
+    /// Close Vault: back to the page before a vault, the container's vaults.
     fn close_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.menus.close(cx);
         self.save_all(cx);
         self.library = Library::default();
         self.tabs.clear();
@@ -952,14 +1005,38 @@ impl Shell {
     /// The new-vault sheet: a name, and where it goes. iCloud Drive is the
     /// first choice where the machine has it, else the documents folder.
     fn start_new_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if self.container().is_none() {
+            return self.start_new_container(window, cx);
+        }
         self.menus.close(cx);
-        let place = if Self::cloud_place().is_some() { Place::Cloud } else { Place::Folder };
-        self.new_vault = Some(NewVaultSheet { place, folder: onyx_core::paths::documents() });
+        self.new_vault = Some(NewVaultSheet { container: false, place: Place::Folder, folder: PathBuf::new() });
         self.vault_input.update(cx, |i, cx| {
             i.set_value(t("Notes"), window, cx);
             i.select_all(window, cx);
         });
         window.focus(&self.vault_input.read(cx).focus_handle(cx), cx);
+        cx.notify();
+    }
+
+    /// The new container's sheet: where it goes, iCloud Drive first where
+    /// the machine has it, else an Onyx folder in Documents (Documents
+    /// itself would make each of its folders a vault).
+    fn start_new_container(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.menus.close(cx);
+        let place = if Self::cloud_place().is_some() { Place::Cloud } else { Place::Folder };
+        self.new_vault = Some(NewVaultSheet { container: true, place, folder: onyx_core::paths::documents().join("Onyx") });
+        window.focus(&self.place_focus, cx);
+        cx.notify();
+    }
+
+    /// The container made where the sheet says, and taken.
+    fn finish_new_container(&mut self, sheet: NewVaultSheet, window: &mut Window, cx: &mut Context<Self>) {
+        let dir = Self::new_vault_parent(&sheet);
+        match std::fs::create_dir_all(&dir) {
+            Ok(()) => self.use_container(dir, window, cx),
+            Err(e) => self.say(tf("The container was not made: {why}", &[("why", &e.to_string())]), cx),
+        }
+        self.focus_editor_or_shell(window, cx);
         cx.notify();
     }
 
@@ -991,7 +1068,7 @@ impl Shell {
                         sheet.folder = dir;
                         sheet.place = Place::Folder;
                     }
-                    window.focus(&s.vault_input.read(cx).focus_handle(cx), cx);
+                    window.focus(&s.place_focus, cx);
                     cx.notify();
                 });
             });
@@ -1001,9 +1078,13 @@ impl Shell {
 
     fn finish_new_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(sheet) = self.new_vault.take() else { return };
+        if sheet.container {
+            return self.finish_new_container(sheet, window, cx);
+        }
         let name = self.vault_input.read(cx).value().to_string();
-        match vault::new_vault(&Self::new_vault_parent(&sheet), &name) {
-            Ok(root) => self.open_vault(root, window, cx),
+        let Some(parent) = self.container() else { return };
+        match vault::new_vault(&parent, &name) {
+            Ok(root) => self.show_vault(root, window, cx),
             Err(e) => {
                 self.say(tf("The vault was not made: {why}", &[("why", &e)]), cx);
                 self.focus_editor_or_shell(window, cx);
@@ -1379,7 +1460,7 @@ impl Shell {
         let inside = self.vault_root().is_some_and(|r| path.starts_with(r));
         if !inside {
             if let Some(root) = crate::menubar::vault_of(&path) {
-                self.open_vault(root, window, cx);
+                self.show_vault(root, window, cx);
             }
         }
         self.open_note(path, window, cx);
@@ -1439,7 +1520,7 @@ impl Shell {
                 if let Some(v) = self.vault.as_mut() {
                     let mut up = if folder { Some(path.as_path()) } else { path.parent() };
                     while let Some(d) = up {
-                        v.folded.remove(d);
+                        v.unfolded.insert(d.to_path_buf());
                         up = d.parent();
                     }
                 }
@@ -1763,12 +1844,7 @@ impl Shell {
 
     /// A vault offered on the landing page.
     fn show_recent_menu(&mut self, path: PathBuf, at: Point<Pixels>, cx: &mut Context<Self>) {
-        let entries = vec![
-            Entry::choice("copy-path", "icons/link.svg", t("Copy Path")),
-            Entry::Rule,
-            Entry::choice("open", "icons/external-link.svg", t("Open")),
-            Entry::choice("open-finder", "icons/folder-open.svg", t(crate::sys::OPEN_FOLDER_LABEL)),
-        ];
+        let entries = vec![Entry::choice("copy-path", "icons/link.svg", t("Copy Path")), Entry::Rule, Entry::choice("open-finder", "icons/folder-open.svg", t(crate::sys::OPEN_FOLDER_LABEL))];
         self.pressed = Some(path);
         self.menus.show("recent", at, entries);
         cx.notify();
@@ -1849,17 +1925,10 @@ impl Shell {
         }
     }
 
-    /// Every folder of the vault folded.
+    /// Every folder of the vault shut.
     fn collapse_all(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        fn folders(entries: &[vault::Entry], into: &mut HashSet<PathBuf>) {
-            for e in entries.iter().filter(|e| e.dir) {
-                into.insert(e.path.clone());
-                folders(&e.children, into);
-            }
-        }
         if let Some(v) = self.vault.as_mut() {
-            let children = v.tree.children.clone();
-            folders(&children, &mut v.folded);
+            v.unfolded.clear();
         }
         self.save_ui(window);
         cx.notify();
@@ -1936,10 +2005,10 @@ impl Shell {
             }
             ("entry", "collapse") => self.collapse_all(window, cx),
             ("vault" | "vaults", "new") => self.start_new_vault(window, cx),
-            ("vault" | "vaults", "open-other") => self.choose_vault(window, cx),
+            ("vaults", "close") => self.close_vault(window, cx),
             ("vaults", path) => {
                 if self.vault_root() != Some(Path::new(path)) {
-                    self.open_vault(PathBuf::from(path), window, cx);
+                    self.show_vault(PathBuf::from(path), window, cx);
                 }
             }
             ("found", "open") => {
@@ -1951,11 +2020,6 @@ impl Shell {
             ("found", "reveal") => {
                 if let Some(p) = pressed {
                     crate::sys::reveal(&p);
-                }
-            }
-            ("recent", "open") => {
-                if let Some(p) = pressed {
-                    self.open_vault(p, window, cx);
                 }
             }
             ("canvas", id) => match self.canvas.pick(id, window, cx) {
@@ -2112,9 +2176,9 @@ impl Shell {
         // gaps (`render_row`).
         const CHROME: f32 = 2. * (8. + 1. + 8.) + 8. + 12. + 6. + 16. + 6. + 8.;
         const DEPTH: f32 = 14.;
-        fn widest(entries: &[vault::Entry], depth: usize, folded: &HashSet<PathBuf>, measure: &dyn Fn(&str) -> f32) -> f32 {
+        fn widest(entries: &[vault::Entry], depth: usize, unfolded: &HashSet<PathBuf>, measure: &dyn Fn(&str) -> f32) -> f32 {
             entries.iter().fold(0., |most: f32, e| {
-                let inside = if e.dir && !folded.contains(&e.path) { widest(&e.children, depth + 1, folded, measure) } else { 0. };
+                let inside = if e.dir && unfolded.contains(&e.path) { widest(&e.children, depth + 1, unfolded, measure) } else { 0. };
                 most.max(DEPTH * depth as f32 + measure(&e.name)).max(inside)
             })
         }
@@ -2123,7 +2187,7 @@ impl Shell {
             let run = TextRun { len: text.len(), font: font.clone(), color: gpui::black(), background_color: None, underline: None, strikethrough: None };
             f32::from(window.text_system().shape_line(SharedString::from(text.to_string()), px(13.), &[run], None).width())
         };
-        let names = self.vault.as_ref().map_or(0., |v| widest(&v.tree.children, 0, &v.folded, &measure));
+        let names = self.vault.as_ref().map_or(0., |v| widest(&v.tree.children, 0, &v.unfolded, &measure));
         px((CHROME + names).ceil()).clamp(SIDEBAR_MIN, SIDEBAR_FIT_MAX)
     }
 
@@ -2235,13 +2299,13 @@ impl Shell {
     /// children after its row, and a folder's on their way in or out as
     /// one piece, so the fold is drawn as a box wherever it stands.
     fn tree_pieces<'a>(&self, entries: &'a [vault::Entry], depth: usize, cx: &mut Context<Self>, out: &mut Vec<Piece<'a>>) {
-        let folded = self.vault.as_ref().map(|v| &v.folded);
+        let unfolded = self.vault.as_ref().map(|v| &v.unfolded);
         for e in entries {
             out.push(Piece::Row(e, depth));
             if !e.dir {
                 continue;
             }
-            let open = !folded.is_some_and(|f| f.contains(&e.path));
+            let open = unfolded.is_some_and(|f| f.contains(&e.path));
             let key = fold_key(&e.path);
             match self.motion.presence(&key, open, cx) {
                 Some((opening, serial)) => {
@@ -2287,9 +2351,9 @@ impl Shell {
     /// empty and its rows squeezed.
     fn render_row(&self, e: &vault::Entry, depth: usize, theme: &gpui_component::Theme, cx: &mut Context<Self>) -> AnyElement {
         let dark = true;
-        let folded = self.vault.as_ref().map(|v| &v.folded);
+        let unfolded = self.vault.as_ref().map(|v| &v.unfolded);
         let path = e.path.clone();
-        let is_open_folder = e.dir && !folded.is_some_and(|f| f.contains(&e.path));
+        let is_open_folder = e.dir && unfolded.is_some_and(|f| f.contains(&e.path));
         let chosen = self.row_lit(&e.path);
         // Rows lit one under another are one block, round at its two ends.
         let (joined_up, joined_down) = self.lit_joins.borrow().get(&e.path).copied().unwrap_or((false, false));
@@ -2320,7 +2384,29 @@ impl Shell {
                 .when(self.pressed.as_ref() == Some(&e.path), |d| d.bg(theme.foreground.opacity(0.1)))
                 .child(div().w(px(12.)).flex_shrink_0().flex().justify_center().when(e.dir, |d| d.child(Icon::default().path(if is_open_folder { "icons/chevron-down.svg" } else { "icons/chevron-right.svg" }).with_size(px(12.)).text_color(theme.muted_foreground))))
                 .children(icon)
-                .child(div().flex_1().min_w_0().truncate().child(e.name.clone()));
+                .child(div().flex_1().min_w_0().truncate().child(e.name.clone()))
+                // A folder's New Note and New Folder, there while the
+                // pointer is on its row (`hover_row`): no room is kept for
+                // them else, so a name is cut only while they show. A hover
+                // style cannot do it, being applied as the row is painted,
+                // after its layout.
+                .when(e.dir && self.hover_row.as_ref() == Some(&e.path), |d| {
+                    let (note_in, folder_in) = (path.clone(), path.clone());
+                    d.child(
+                        h_flex()
+                            .flex_shrink_0()
+                            .mr(px(-4.))
+                            .gap(px(2.))
+                            .child(library::row_tool(ElementId::Name(format!("row-note-{}", e.path.display()).into()), "icons/file-plus.svg", t("New Note").into(), theme).on_click(cx.listener(move |this, _, window, cx| {
+                                swallow_click(window, cx);
+                                this.new_note_in(note_in.clone(), window, cx);
+                            })))
+                            .child(library::row_tool(ElementId::Name(format!("row-folder-{}", e.path.display()).into()), "icons/folder-plus.svg", t("New Folder").into(), theme).on_click(cx.listener(move |this, _, window, cx| {
+                                swallow_click(window, cx);
+                                this.new_folder_in(folder_in.clone(), window, cx);
+                            }))),
+                    )
+                });
             let row = div()
                 .id(id)
                 .group("tree-row")
@@ -2333,6 +2419,17 @@ impl Shell {
                 .when(cut, |d| d.opacity(0.45))
                 .cursor_pointer()
                 .child(plate)
+                .when(e.dir, |d| {
+                    let hovered = path.clone();
+                    d.on_hover(cx.listener(move |this, on: &bool, _, cx| {
+                        if *on {
+                            this.hover_row = Some(hovered.clone());
+                        } else if this.hover_row.as_ref() == Some(&hovered) {
+                            this.hover_row = None;
+                        }
+                        cx.notify();
+                    }))
+                })
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener({
                     let path = path.clone();
@@ -2445,14 +2542,16 @@ impl Shell {
         let frame = cx.theme().title_bar;
         let dark = cx.theme().mode.is_dark();
         let ground = frame.blend(if dark { cx.theme().background.opacity(0.55) } else { theme.foreground.opacity(0.045) });
+        if self.vault.is_none() {
+            return self.render_place_card(ground, theme, cx);
+        }
         self.scrollers.name(&self.side_scroll);
-        if self.side_view == SideView::Assets && self.vault.is_some() {
+        if self.side_view == SideView::Assets {
             let assets = self.render_assets(theme, ground, cx);
             return self.render_side_stack(div().flex().flex_col().child(assets), ground, theme, cx);
         }
         let rows = self.render_tree(theme, cx);
-        let empty = self.vault.as_ref().is_some_and(|v| v.tree.children.is_empty());
-        let list = div().flex().flex_col().child(
+        let list = div().flex().flex_col().children(self.render_vault_row(theme, cx)).child(
                 div()
                     .relative()
                     .flex_1()
@@ -2490,8 +2589,7 @@ impl Shell {
                             .pb(px(12.))
                             .overflow_y_scroll()
                             .track_scroll(&self.side_scroll)
-                            .children(rows)
-                            .when(empty, |d| d.child(div().px(px(10.)).py(px(8.)).text_size(px(12.)).text_color(theme.muted_foreground).child(t("No notes yet. Make one with the button above.")))),
+                            .children(rows),
                     )
                     .children(self.render_band(theme))
                     // What is cut says so: the list fades into the
@@ -3123,7 +3221,8 @@ impl Shell {
     /// the vault's own place while its page shows, each a press away from
     /// the file manager; at the right how the note is shown and how wide.
     fn render_path_bar(&self, room: Pixels, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let root = self.vault_root()?.to_path_buf();
+        // Before a vault is shown, the container's.
+        let root = self.vault_root().map(Path::to_path_buf).or_else(|| self.container())?;
         let theme = cx.theme().clone();
         let (icon, parents, name, target) = match &self.shown {
             Some(path) => {
@@ -3800,71 +3899,6 @@ impl Shell {
 
     // -- the page ---------------------------------------------------------------
 
-    /// With no vault: the way in. A vault is a folder of notes.
-    fn render_landing(&self, cx: &mut Context<Self>) -> AnyElement {
-        let theme = cx.theme().clone();
-        let recent: Vec<PathBuf> = UiState::load().recent_vaults.into_iter().filter(|p| p.is_dir()).take(LANDING_VAULTS).collect();
-        let rows = recent.into_iter().enumerate().map(|(i, p)| {
-            let name = p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| p.display().to_string());
-            let where_ = p.parent().map(|d| d.display().to_string()).unwrap_or_default();
-            h_flex()
-                .id(("recent", i))
-                .h(px(44.))
-                .px(px(14.))
-                .gap(px(10.))
-                .items_center()
-                .cursor_pointer()
-                .when(i > 0, |d| d.border_t_1().border_color(theme.border))
-                .hover(|s| s.bg(theme.foreground.opacity(0.04)))
-                .on_mouse_down(MouseButton::Right, cx.listener({
-                    let p = p.clone();
-                    move |this, ev: &MouseDownEvent, window, cx| {
-                        swallow_click(window, cx);
-                        this.show_recent_menu(p.clone(), ev.position, cx);
-                    }
-                }))
-                .on_click(cx.listener(move |this, _, window, cx| {
-                    swallow_click(window, cx);
-                    this.open_vault(p.clone(), window, cx)
-                }))
-                .child(Icon::default().path("icons/folder.svg").with_size(px(16.)).text_color(theme.muted_foreground))
-                .child(v_flex().flex_1().min_w_0().child(div().text_size(px(13.)).child(name)).child(div().text_size(px(11.)).text_color(theme.muted_foreground).truncate().child(where_)))
-        });
-        let has_recent = !UiState::load().recent_vaults.iter().any(|p| p.is_dir());
-        v_flex()
-            .w(px(420.))
-            .max_w_full()
-            .mx_auto()
-            .pt(px(80.))
-            .px(px(24.))
-            .gap(px(22.))
-            .items_center()
-            .child(crate::widgets::wordmark("Onyx", 34., theme.primary, cx))
-            .child(div().text_size(px(13.5)).text_color(theme.muted_foreground).text_center().child(t("Notes live in a folder of your own, a vault, as plain markdown files.")))
-            .child(
-                h_flex()
-                    .gap(px(10.))
-                    .child(choice_pill("new-vault", "icons/plus.svg", t("New Vault…"), Press::Primary, false, &theme).on_click(cx.listener(|this, _, window, cx| {
-                        swallow_click(window, cx);
-                        this.start_new_vault(window, cx)
-                    })))
-                    .child(choice_pill("open-vault", "icons/folder-open.svg", t("Open Folder as Vault…"), Press::Quiet, false, &theme).on_click(cx.listener(|this, _, window, cx| {
-                        swallow_click(window, cx);
-                        this.choose_vault(window, cx)
-                    }))),
-            )
-            .when(!has_recent, |d| {
-                d.child(
-                    v_flex()
-                        .w_full()
-                        .gap(px(6.))
-                        .child(div().px(px(14.)).text_size(px(12.)).font_weight(FontWeight::SEMIBOLD).text_color(theme.muted_foreground).child(t("Recent")))
-                        .child(v_flex().w_full().rounded(px(12.)).border_1().border_color(theme.border).bg(if theme.mode.is_dark() { theme.sidebar } else { theme.muted.opacity(0.4) }).overflow_hidden().children(rows)),
-                )
-            })
-            .into_any_element()
-    }
-
     /// A vault with no note open.
     /// The vault's page while no note is open, as emaki's home page is
     /// made and Obsidian's new tab is filled: the drawing, the greeting in
@@ -3897,11 +3931,7 @@ impl Shell {
                             swallow_click(window, cx);
                             this.reopen_tab(window, cx)
                         })))
-                    })
-                    .child(choice("home-open-vault", "icons/folder-open.svg", t("Open Folder as Vault…"), "⌘⇧O", &theme).on_click(cx.listener(|this, _, window, cx| {
-                        swallow_click(window, cx);
-                        this.choose_vault(window, cx)
-                    }))),
+                    }),
             )
             .into_any_element()
     }
@@ -4107,15 +4137,7 @@ impl Shell {
     fn render_page(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         self.sync_players(window);
         if self.vault.is_none() {
-            self.scrollers.name(&self.page_scroll);
-            let theme = cx.theme().clone();
-            return div()
-                .relative()
-                .size_full()
-                .child(div().id("page").size_full().overflow_y_scroll().track_scroll(&self.page_scroll).child(page_in("landing", div().child(self.render_landing(cx)))))
-                .child(edge_fade(&self.page_scroll, page_ground(&theme), false, CARD_R))
-                .vertical_scrollbar(&self.page_scroll)
-                .into_any_element();
+            return page_in("place", div().size_full().child(self.render_place_page(cx)));
         }
         let Some((editor, field, path, reads)) = self.shown_tab().map(|t| (t.editor.clone(), t.title.clone(), t.path.clone(), t.asset.as_ref().map(|a| a.reads_as_words()))) else {
             return page_in("no-note", div().size_full().child(self.render_no_note(cx)));
@@ -4240,7 +4262,7 @@ impl Shell {
                     if let Some(sheet) = this.new_vault.as_mut() {
                         sheet.place = place;
                     }
-                    window.focus(&this.vault_input.read(cx).focus_handle(cx), cx);
+                    window.focus(&this.place_focus, cx);
                     cx.notify();
                 }))
                 .child(Icon::default().path(icon).with_size(px(16.)).text_color(if on { theme.primary } else { theme.muted_foreground }))
@@ -4248,10 +4270,13 @@ impl Shell {
         };
         let folder_where: SharedString = crate::sys::short_path(&sheet.folder).into();
         let mut rows: Vec<AnyElement> = Vec::new();
-        if cloud.is_some() {
+        // A new vault goes in the container and the sheet asks its name
+        // alone; a new container's sheet asks only where it goes.
+        let placed = !sheet.container;
+        if cloud.is_some() && !placed {
             rows.push(row("place-cloud", "icons/cloud.svg", t("iCloud Drive").into(), format!("{} › Onyx", t("iCloud Drive")).into(), Place::Cloud, sheet.place == Place::Cloud, &theme, cx).into_any_element());
         }
-        rows.push(
+        if !placed { rows.push(
             row("place-folder", "icons/device-laptop.svg", t("On this computer").into(), folder_where, Place::Folder, sheet.place == Place::Folder, &theme, cx)
                 .when(cloud.is_some(), |d| d.border_t_1().border_color(theme.border))
                 .child(small_pill("place-choose", "icons/folder-open.svg", t("Choose…"), Press::Quiet, false, &theme).on_click(cx.listener(|this, _, window, cx| {
@@ -4259,18 +4284,32 @@ impl Shell {
                     this.pick_vault_folder(window, cx)
                 })))
                 .into_any_element(),
-        );
-        let body = vec![
-            Self::sheet_field("vault-field", &self.vault_input, &theme, cx),
-            v_flex().w_full().rounded(px(12.)).border_1().border_color(theme.border).overflow_hidden().children(rows).into_any_element(),
+        ); }
+        let places = (!rows.is_empty()).then(|| v_flex().w_full().rounded(px(12.)).border_1().border_color(theme.border).overflow_hidden().children(rows).into_any_element());
+        // The container's sheet has no field: ↩ is heard on the places.
+        let places = places.map(|p| {
+            div()
+                .track_focus(&self.place_focus)
+                .on_key_down(cx.listener(|this, ev: &KeyDownEvent, window, cx| {
+                    if ev.keystroke.key == "enter" {
+                        cx.stop_propagation();
+                        this.finish_new_vault(window, cx);
+                    }
+                }))
+                .child(p)
+                .into_any_element()
+        });
+        let field = (!sheet.container).then(|| Self::sheet_field("vault-field", &self.vault_input, &theme, cx));
+        let body = vec![field, places, Some(
             h_flex()
                 .gap(px(8.))
                 .justify_end()
                 .child(small_pill("vault-cancel", "icons/close.svg", t("Cancel"), Press::Quiet, false, &theme).on_click(cx.listener(|this, _, window, cx| this.cancel_new_vault(window, cx))))
                 .child(small_pill("vault-ok", "icons/check.svg", t("Create"), Press::Primary, false, &theme).on_click(cx.listener(|this, _, window, cx| this.finish_new_vault(window, cx))))
                 .into_any_element(),
-        ];
-        Some(self.render_sheet("vault-sheet", t("New Vault").into(), body, t("↩ to create, Esc to cancel").into(), Self::cancel_new_vault, cx))
+        )].into_iter().flatten().collect();
+        let title = if sheet.container { t("New Container") } else { t("New Vault") };
+        Some(self.render_sheet("vault-sheet", title.into(), body, t("↩ to create, Esc to cancel").into(), Self::cancel_new_vault, cx))
     }
 
     // -- the actions ------------------------------------------------------------
@@ -4278,7 +4317,7 @@ impl Shell {
     pub(crate) fn new_note(&mut self, _: &NewNote, window: &mut Window, cx: &mut Context<Self>) {
         match self.new_note_dir() {
             Some(dir) => self.new_note_in(dir, window, cx),
-            None => self.choose_vault(window, cx),
+            None => self.start_new_vault(window, cx),
         }
     }
 
@@ -4723,8 +4762,9 @@ impl Render for Shell {
             .on_action(cx.listener(Self::new_note))
             .on_action(cx.listener(Self::new_folder))
             .on_action(cx.listener(|this, _: &NewVault, window, cx| this.start_new_vault(window, cx)))
-            .on_action(cx.listener(|this, _: &OpenVault, window, cx| this.choose_vault(window, cx)))
             .on_action(cx.listener(|this, _: &CloseVault, window, cx| this.close_vault(window, cx)))
+            .on_action(cx.listener(|this, _: &NewContainer, window, cx| this.start_new_container(window, cx)))
+            .on_action(cx.listener(|this, _: &ChooseContainer, window, cx| this.choose_container(window, cx)))
             .on_action(cx.listener(|this, _: &ExportPdf, window, cx| {
                 if let Some(path) = this.shown.clone() {
                     this.open_export(path, window, cx);
