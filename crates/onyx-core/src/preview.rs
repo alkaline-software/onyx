@@ -495,16 +495,43 @@ fn read_office(path: &Path, ext: &str, size: u64) -> Preview {
 
 // --------------------------------------------------------------------- PDF
 
-fn open_pdf(path: &Path) -> Result<hayro::hayro_syntax::Pdf, &'static str> {
+/// A PDF read and parsed, kept while its file is as it was: a frame's
+/// pages, its sizes, words and outline each read the whole file again, and
+/// a long PDF scrolled through read it once a page.
+fn open_pdf(path: &Path) -> Result<std::sync::Arc<hayro::hayro_syntax::Pdf>, &'static str> {
     use hayro::hayro_syntax::{LoadPdfError, Pdf};
-    if std::fs::metadata(path).map(|m| m.len()).unwrap_or(0) > PDF_BYTES {
+    use std::sync::{Arc, Mutex};
+    /// The PDFs kept, the last used last.
+    static OPENED: Mutex<Vec<(std::path::PathBuf, Option<std::time::SystemTime>, u64, Arc<Pdf>)>> = Mutex::new(Vec::new());
+    const KEPT: usize = 3;
+    const KEPT_BYTES: u64 = 96 << 20;
+    let meta = std::fs::metadata(path).map_err(|_| UNREADABLE)?;
+    if meta.len() > PDF_BYTES {
         return Err(TOO_LARGE);
     }
+    let (modified, len) = (meta.modified().ok(), meta.len());
+    let mut opened = OPENED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(i) = opened.iter().position(|(p, m, l, _)| p == path && *m == modified && *l == len) {
+        let kept = opened.remove(i);
+        let pdf = kept.3.clone();
+        opened.push(kept);
+        return Ok(pdf);
+    }
+    opened.retain(|(p, ..)| p != path);
+    drop(opened);
     let bytes = std::fs::read(path).map_err(|_| UNREADABLE)?;
-    Pdf::new(bytes).map_err(|e| match e {
+    let pdf = Arc::new(Pdf::new(bytes).map_err(|e| match e {
         LoadPdfError::Decryption(_) => LOCKED,
         _ => PDF_UNREADABLE,
-    })
+    })?);
+    let mut opened = OPENED.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    opened.push((path.to_path_buf(), modified, len, pdf.clone()));
+    // No more than a few, and no more than `KEPT_BYTES` of files together
+    // but the one just read.
+    while opened.len() > KEPT || (opened.len() > 1 && opened.iter().map(|o| o.2).sum::<u64>() > KEPT_BYTES) {
+        opened.remove(0);
+    }
+    Ok(pdf)
 }
 
 /// One PDF page as RGBA8 pixels, `width` pixels wide (height by the page's aspect): (width, height, rgba).
@@ -1290,13 +1317,34 @@ pub fn pdf_text(path: &Path) -> Result<Vec<PdfText>, String> {
     std::panic::catch_unwind(|| read_text(path)).unwrap_or(Err(PDF_UNREADABLE)).map_err(String::from)
 }
 
+/// The text of some of a PDF's pages, as `pdf_text` reads each: the
+/// pages a frame's pointer is over, read as it comes, not the whole file
+/// (a glyph and its place each: 500 MB for a manual of 4,000 pages). A
+/// page out of range is passed over.
+pub fn pdf_text_pages(path: &Path, pages: &[usize]) -> Result<Vec<(usize, PdfText)>, String> {
+    std::panic::catch_unwind(|| {
+        use hayro::hayro_interpret::InterpreterCache;
+        let pdf = open_pdf(path)?;
+        let cache = InterpreterCache::new();
+        let all = pdf.pages();
+        Ok(pages.iter().filter_map(|&n| all.get(n).map(|page| (n, page_text(page, &cache)))).collect())
+    })
+    .unwrap_or(Err(PDF_UNREADABLE))
+    .map_err(String::from)
+}
+
 fn read_text(path: &Path) -> Result<Vec<PdfText>, &'static str> {
-    use hayro::hayro_interpret::{interpret_page, Context, InterpreterCache, InterpreterSettings, TransformExt as _};
-    use hayro::vello_cpu::kurbo::Rect;
+    use hayro::hayro_interpret::InterpreterCache;
     let pdf = open_pdf(path)?;
     let cache = InterpreterCache::new();
-    let mut out = Vec::new();
-    for page in pdf.pages().iter() {
+    Ok(pdf.pages().iter().map(|page| page_text(page, &cache)).collect())
+}
+
+/// One page's glyphs, each marked where a line or a space begins.
+fn page_text<'a>(page: &hayro::hayro_syntax::page::Page<'a>, cache: &hayro::hayro_interpret::InterpreterCache<'a>) -> PdfText {
+    use hayro::hayro_interpret::{interpret_page, Context, InterpreterSettings, TransformExt as _};
+    use hayro::vello_cpu::kurbo::Rect;
+    {
         let (w, h) = page.render_dimensions();
         let mut device = TextDevice { out: Vec::new() };
         let mut context = Context::new(page.initial_transform(true).to_kurbo(), Rect::new(0., 0., w as f64, h as f64), &cache, page.xref(), InterpreterSettings::default());
@@ -1313,9 +1361,8 @@ fn read_text(path: &Path) -> Result<Vec<PdfText>, &'static str> {
             };
             glyphs.push(g);
         }
-        out.push(PdfText { size: (w, h), glyphs });
+        PdfText { size: (w, h), glyphs }
     }
-    Ok(out)
 }
 
 /// Collects a page's glyphs as the interpreter draws them.

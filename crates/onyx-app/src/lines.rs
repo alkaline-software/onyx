@@ -75,6 +75,10 @@ pub struct Edit {
     at: Instant,
 }
 
+/// The steps of undo kept, the oldest let go past them: a tab open for
+/// days kept every step it was given.
+const UNDO_MOST: usize = 1000;
+
 /// Typing within this long of the last keystroke joins the same step.
 const COALESCE: Duration = Duration::from_millis(900);
 
@@ -83,8 +87,15 @@ pub struct Doc {
     lines: Vec<String>,
     undo: Vec<Edit>,
     redo: Vec<Edit>,
-    /// Counts up at every change, so a cache keyed on it knows the text moved.
+    /// A number no other text in this run has had, new at every change, so
+    /// a cache keyed on it knows the text moved, a text read again included.
     pub revision: u64,
+}
+
+/// The next revision, unique in the run (`Doc::revision`).
+fn next_revision() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 impl Default for Doc {
@@ -98,7 +109,7 @@ impl Doc {
     /// note is written back with plain ones.
     pub fn from_text(text: &str) -> Self {
         let text = text.replace("\r\n", "\n").replace('\r', "\n");
-        Self { lines: text.split('\n').map(str::to_string).collect(), undo: Vec::new(), redo: Vec::new(), revision: 0 }
+        Self { lines: text.split('\n').map(str::to_string).collect(), undo: Vec::new(), redo: Vec::new(), revision: next_revision() }
     }
 
     pub fn text(&self) -> String {
@@ -289,7 +300,7 @@ impl Doc {
         let removed = self.slice(from, to);
         let end = self.splice(from, to, text);
         self.redo.clear();
-        self.revision += 1;
+        self.revision = next_revision();
         let sel_after = Sel::caret(end);
         let now = Instant::now();
         if let Some(last) = self.undo.last_mut().filter(|e| e.parts.len() == 1) {
@@ -311,7 +322,7 @@ impl Doc {
                 return end;
             }
         }
-        self.undo.push(Edit { parts: vec![Part { from, removed, inserted: text.to_string() }], sel_before, sel_after, at: now });
+        self.step(Edit { parts: vec![Part { from, removed, inserted: text.to_string() }], sel_before, sel_after, at: now });
         end
     }
 
@@ -331,8 +342,8 @@ impl Doc {
             parts.push(Part { from, removed, inserted: text });
         }
         self.redo.clear();
-        self.revision += 1;
-        self.undo.push(Edit { parts, sel_before, sel_after, at: Instant::now() - COALESCE });
+        self.revision = next_revision();
+        self.step(Edit { parts, sel_before, sel_after, at: Instant::now() - COALESCE });
     }
 
     /// The text spliced, with no step of undo made: the undo and redo
@@ -358,10 +369,19 @@ impl Doc {
             let to = end_of(p.from, &p.inserted);
             self.splice(p.from, to, &p.removed);
         }
-        self.revision += 1;
+        self.revision = next_revision();
         let sel = e.sel_before;
         self.redo.push(e);
         Some(sel)
+    }
+
+    /// A step of undo kept, the oldest let go past `UNDO_MOST`.
+    fn step(&mut self, e: Edit) {
+        self.undo.push(e);
+        if self.undo.len() > UNDO_MOST {
+            let over = self.undo.len() - UNDO_MOST;
+            self.undo.drain(..over);
+        }
     }
 
     pub fn redo(&mut self) -> Option<Sel> {
@@ -370,7 +390,7 @@ impl Doc {
             let to = end_of(p.from, &p.removed);
             self.splice(p.from, to, &p.inserted);
         }
-        self.revision += 1;
+        self.revision = next_revision();
         let sel = e.sel_after;
         self.undo.push(e);
         Some(sel)

@@ -120,6 +120,8 @@ impl Editor {
             let b = Bounds::new(point(bounds.origin.x + px(x), bounds.origin.y + px(top)), size(px(w), px(h)));
             if b.intersects(&view) {
                 out.push((frame, b));
+            } else {
+                frame.update(cx, |m, cx| m.out_of_sight(window, cx));
             }
         }
         out
@@ -226,9 +228,13 @@ impl Editor {
         self.frame_lines().into_iter().find(|(_, p, n)| *p == key.0 && *n == key.1).map(|(l, _, _)| l)
     }
 
-    /// Each PDF's text, read once off the window's thread, for the find
-    /// and for a selection in its frame.
+    /// Each PDF's text, read once off the window's thread, for the find,
+    /// once it has words to look for (a frame reads its own for a
+    /// selection as the pointer comes, `Embed::read_text`).
     pub(super) fn read_pdfs(&mut self, cx: &mut Context<Self>) {
+        if self.find_query.is_empty() {
+            return;
+        }
         let mut texts: Vec<PathBuf> = Vec::new();
         {
             let mut store = self.pictures.borrow_mut();
@@ -247,6 +253,7 @@ impl Editor {
                     if let Some(text) = text {
                         if let Some(f) = e.pictures.borrow_mut().pdfs.get_mut(&path) {
                             f.text = Some(Arc::new(text));
+                            f.text_whole = true;
                         }
                         // A find already open looks in it too, and goes to
                         // the first place when it had found none.

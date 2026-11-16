@@ -14,7 +14,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
@@ -35,6 +35,8 @@ use crate::widgets::{small_pill, swallow_click, Press, FOLD_ANIM};
 /// A picture's row: taller than a file's, so its small square is large
 /// enough to tell one picture from another.
 const PICTURE_ROW_H: f32 = 47.;
+/// A kind's name over its rows in the Assets card.
+const LABEL_H: f32 = 34.;
 const THUMB: f32 = 34.;
 /// The pixels a square is drawn from: three times its size, for a Retina screen and a little more.
 const THUMB_PX: u32 = 102;
@@ -73,6 +75,9 @@ pub(crate) struct Library {
     /// A picture's square: `None` while it is being drawn or could not be.
     pub thumbs: HashMap<PathBuf, Option<Arc<RenderImage>>>,
     pub scroll: ScrollHandle,
+    /// An SVG's square, drawn by the card and let go of with the vault's
+    /// assets, not kept by gpui (`pictures.rs`).
+    pub kept: Option<Entity<crate::pictures::Kept>>,
 }
 
 /// What a tab of an asset holds besides its editor.
@@ -127,9 +132,16 @@ fn render_image(width: u32, height: u32, mut rgba: Vec<u8>) -> Option<Arc<Render
     Some(Arc::new(RenderImage::new(vec![image::Frame::new(buffer)])))
 }
 
-/// A picture's small square, cut from its middle, drawn off the window's thread.
+/// A picture's small square, cut from its middle, drawn off the window's
+/// thread: read no larger than its shorter side needs to fill the square
+/// (`sys::picture_at_most`), never whole.
 fn thumb(path: &Path) -> Option<Arc<RenderImage>> {
-    let picture = image::open(path).ok()?;
+    let most = image::image_dimensions(path).ok().map_or(THUMB_PX * 4, |(w, h)| {
+        let (long, short) = (w.max(h) as f32, w.min(h).max(1) as f32);
+        ((THUMB_PX as f32 * long / short).ceil() as u32).clamp(THUMB_PX, THUMB_PX * 16)
+    });
+    let (w, h, rgba) = crate::sys::picture_at_most(path, most)?;
+    let picture = image::DynamicImage::ImageRgba8(image::RgbaImage::from_raw(w, h, rgba)?);
     let side = picture.width().min(picture.height());
     let square = picture.crop_imm((picture.width() - side) / 2, (picture.height() - side) / 2, side, side);
     let small = square.thumbnail(THUMB_PX, THUMB_PX).into_rgba8();
@@ -177,6 +189,9 @@ impl Shell {
     /// The assets read again, off the main thread; the squares of
     /// pictures still there are kept.
     pub(crate) fn reread_assets(&mut self, cx: &mut Context<Self>) {
+        if self.library.kept.is_none() {
+            self.library.kept = Some(crate::pictures::Kept::new(cx));
+        }
         let Some(root) = self.vault_root().map(Path::to_path_buf) else {
             self.library.files.clear();
             return;
@@ -202,14 +217,22 @@ impl Shell {
         .detach();
     }
 
-    /// Each picture's square not drawn yet, drawn off the main thread.
+    /// Each picture's square not drawn yet, drawn off the main thread, two
+    /// at a time (`layout::DECODING`), and only while the Assets card is
+    /// open: a vault opened on its notes reads none of its pictures.
     fn draw_thumbs(&mut self, cx: &mut Context<Self>) {
+        if self.side_view != SideView::Assets {
+            return;
+        }
         let wanted: Vec<PathBuf> = self.library.files.iter().filter(|(p, k)| *k == Kind::Picture && !is_svg(p) && !self.library.thumbs.contains_key(p)).map(|(p, _)| p.clone()).collect();
         for path in wanted {
             self.library.thumbs.insert(path.clone(), None);
             let task = cx.background_spawn({
                 let path = path.clone();
-                async move { thumb(&path) }
+                async move {
+                    let _turn = crate::layout::DECODING.acquire().await;
+                    thumb(&path)
+                }
             });
             cx.spawn(async move |this, cx| {
                 let drawn = task.await;
@@ -440,15 +463,39 @@ impl Shell {
     /// each under its name; with none, one line.
     pub(crate) fn render_assets(&self, theme: &gpui_component::Theme, ground: Hsla, cx: &mut Context<Self>) -> AnyElement {
         self.scrollers.name(&self.library.scroll);
+        // Only the rows in view, and a little past, are drawn, as the
+        // tree's (`render_tree`): the rest stand as room of their height.
+        let view = f32::from(self.library.scroll.bounds().size.height);
+        let top = -f32::from(self.library.scroll.offset().y);
+        let (from, to) = if view > 0. { (top - super::TREE_OVER, top + view + super::TREE_OVER) } else { (0., super::TREE_FIRST) };
+        let (mut y, mut gap) = (0., 0.);
         let mut sections: Vec<AnyElement> = Vec::new();
         for kind in [Kind::Picture, Kind::Document, Kind::Media, Kind::Other] {
-            let files: Vec<PathBuf> = self.library.files.iter().filter(|(_, k)| *k == kind).map(|(p, _)| p.clone()).collect();
-            if files.is_empty() {
+            let count = self.library.files.iter().filter(|(_, k)| *k == kind).count();
+            if count == 0 {
                 continue;
             }
-            let label = div().px(px(6.)).pt(px(10.)).pb(px(6.)).text_size(px(11.)).font_weight(FontWeight::SEMIBOLD).text_color(theme.muted_foreground).child(format!("{}  {}", kind_title(kind), files.len()));
-            let body = v_flex().children(files.iter().map(|p| self.render_asset_row(p, kind == Kind::Picture, theme, cx))).into_any_element();
-            sections.push(v_flex().child(label).child(body).into_any_element());
+            let label = div().h(px(LABEL_H)).flex_shrink_0().px(px(6.)).pt(px(10.)).pb(px(6.)).text_size(px(11.)).font_weight(FontWeight::SEMIBOLD).text_color(theme.muted_foreground).child(format!("{}  {}", kind_title(kind), count));
+            let row_h = if kind == Kind::Picture { PICTURE_ROW_H } else { TREE_ROW_H };
+            let mut rows: Vec<AnyElement> = Vec::new();
+            y += LABEL_H;
+            for (p, _) in self.library.files.iter().filter(|(_, k)| *k == kind) {
+                if y + row_h > from && y < to {
+                    if gap > 0. {
+                        rows.push(div().h(px(gap)).flex_shrink_0().into_any_element());
+                        gap = 0.;
+                    }
+                    rows.push(self.render_asset_row(p, kind == Kind::Picture, theme, cx));
+                } else {
+                    gap += row_h;
+                }
+                y += row_h;
+            }
+            if gap > 0. {
+                rows.push(div().h(px(gap)).flex_shrink_0().into_any_element());
+                gap = 0.;
+            }
+            sections.push(v_flex().child(label).child(v_flex().children(rows)).into_any_element());
         }
         div()
             .relative()
@@ -478,8 +525,10 @@ impl Shell {
         let mark: AnyElement = if !picture {
             img(crate::file_icons::path(&name, false, false, true)).size(px(16.)).flex_shrink_0().into_any_element()
         } else {
-            let square: AnyElement = if is_svg(path) {
-                img(path.to_path_buf()).size_full().object_fit(ObjectFit::Contain).into_any_element()
+            let square: AnyElement = if let Some(kept) = self.library.kept.as_ref().filter(|_| is_svg(path)) {
+                img(crate::pictures::through(kept, ImageSource::Resource(Resource::Path(path.to_path_buf().into())), THUMB_PX)).size_full().object_fit(ObjectFit::Contain).into_any_element()
+            } else if is_svg(path) {
+                div().into_any_element()
             } else {
                 match self.library.thumbs.get(path).cloned().flatten() {
                     Some(drawn) => fade_keyed(format!("thumb-{}", path.display()), img(drawn).size_full().object_fit(ObjectFit::Cover)).into_any_element(),
@@ -714,14 +763,16 @@ impl Shell {
     pub(crate) fn sync_players(&mut self, window: &mut Window) {
         let over = self.menus.open.is_some() || self.search_open || self.rename.is_some() || self.making.is_some() || self.new_vault.is_some() || self.export.is_some() || self.rail_fly.is_some();
         let shown = self.shown.clone();
+        // The keyboard back to the window as a player goes from sight, not
+        // at every frame one stays hidden: a call into the system a frame.
         let mut hid = false;
         for tab in &mut self.tabs {
             let Some(asset) = tab.asset.as_mut() else { continue };
             let waited = asset.opened.elapsed() >= PLAYER_WAIT;
             if let Body::Play(player) = &mut asset.body {
                 let on = shown.as_deref() == Some(tab.path.as_path()) && !over && waited && player.is_placed();
-                hid |= !on;
-                player.show(on);
+                let first = player.first_sync();
+                hid |= (player.show(on) || first) && !on;
             }
         }
         if hid {
@@ -816,6 +867,49 @@ pub(crate) fn container_of(cfg: &onyx_core::config::Config) -> Option<PathBuf> {
 /// either window.
 pub(crate) fn vault_list(folder: Option<&Path>, open: Option<&Path>) -> Vec<PathBuf> {
     let Some(folder) = folder else { return Vec::new() };
+    // Asked by the page, the card, the rail and the menu bar note, each at
+    // every frame: answered from memory, the disk looked at again no more
+    // often than `LOOK_AGAIN`, and at once after this app's own change
+    // (`forget_vaults`).
+    let key = (folder.to_path_buf(), open.map(Path::to_path_buf));
+    let kept = VAULTS.with_borrow(|k| k.as_ref().filter(|(at, was, _)| at.elapsed() < LOOK_AGAIN && *was == key).map(|(_, _, v)| v.clone()));
+    if let Some(v) = kept {
+        return v;
+    }
+    let listed = list_vaults(folder, open);
+    VAULTS.set(Some((Instant::now(), key, listed.clone())));
+    listed
+}
+
+/// How often the container's folder and the configuration are looked at
+/// again on the disk while the window draws, for another process's change.
+const LOOK_AGAIN: Duration = Duration::from_millis(500);
+
+thread_local! {
+    static VAULTS: std::cell::RefCell<Option<(Instant, (PathBuf, Option<PathBuf>), Vec<PathBuf>)>> = const { std::cell::RefCell::new(None) };
+    static CONTAINER: std::cell::RefCell<Option<(Instant, Option<PathBuf>)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// This app made, renamed or showed a vault, or chose or closed the
+/// container: the lists are read again at their next asking.
+pub(crate) fn forget_vaults() {
+    VAULTS.set(None);
+    CONTAINER.set(None);
+}
+
+/// The container chosen, for a window that holds no configuration of its
+/// own (the menu bar note): the configuration read no more often than
+/// `LOOK_AGAIN`.
+pub(crate) fn container_now() -> Option<PathBuf> {
+    if let Some(c) = CONTAINER.with_borrow(|c| c.as_ref().filter(|(at, _)| at.elapsed() < LOOK_AGAIN).map(|(_, c)| c.clone())) {
+        return c;
+    }
+    let c = container_of(&onyx_core::config::Config::load());
+    CONTAINER.set(Some((Instant::now(), c.clone())));
+    c
+}
+
+fn list_vaults(folder: &Path, open: Option<&Path>) -> Vec<PathBuf> {
     let in_folder: Vec<PathBuf> = vault::vaults_in(folder);
     let mut out: Vec<PathBuf> = open.filter(|o| o.is_dir()).map(Path::to_path_buf).into_iter().collect();
     for p in crate::ui_state::UiState::load().recent_vaults {

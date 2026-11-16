@@ -169,7 +169,14 @@ impl Look {
 #[derive(Default)]
 pub struct Looks {
     vaults: RefCell<HashMap<PathBuf, (Option<SystemTime>, BTreeMap<String, Look>)>>,
+    /// When each vault's file was last looked at on the disk: a block and
+    /// a tile ask for their vault's look several times a frame.
+    looked: RefCell<HashMap<PathBuf, std::time::Instant>>,
 }
+
+/// A vault's file is looked at no more often than this, for another Mac's
+/// write through the cloud: this app's own writes are known at once.
+const LOOK_AGAIN: std::time::Duration = std::time::Duration::from_millis(500);
 
 impl Global for Looks {}
 
@@ -198,8 +205,15 @@ fn modified(root: &Path) -> Option<SystemTime> {
 /// A vault's looks read, or read again when its file changed since: another
 /// Mac may have written it through the cloud.
 pub fn ensure(root: &Path, cx: &mut App) {
-    let at = modified(root);
     let looks = cx.default_global::<Looks>();
+    {
+        let mut looked = looks.looked.borrow_mut();
+        if looked.get(root).is_some_and(|at| at.elapsed() < LOOK_AGAIN) && looks.vaults.borrow().contains_key(root) {
+            return;
+        }
+        looked.insert(root.to_path_buf(), std::time::Instant::now());
+    }
+    let at = modified(root);
     let mut vaults = looks.vaults.borrow_mut();
     if vaults.get(root).is_some_and(|(seen, _)| *seen == at) {
         return;
@@ -409,6 +423,10 @@ pub struct Picker {
     /// window that ground starts: the card keeps inside the window.
     top: f32,
     inset: f32,
+    /// The person's own colors, read as the sheet opens and kept as they
+    /// are added or forgotten here: the sheet draws at every move of a
+    /// color's drag.
+    own_colors: Vec<String>,
     _subs: Vec<Subscription>,
 }
 
@@ -441,7 +459,7 @@ impl Picker {
         ];
         let focus = cx.focus_handle();
         window.focus(&search.read(cx).focus_handle(cx), cx);
-        Self { root, folder, look, search, hex, found: self::search(""), making: None, dragging: None, square: Rc::default(), hue: Rc::default(), scroll: ScrollHandle::new(), focus, top, inset, _subs: subs }
+        Self { root, folder, look, search, hex, found: self::search(""), making: None, dragging: None, square: Rc::default(), hue: Rc::default(), scroll: ScrollHandle::new(), focus, top, inset, own_colors: Config::load().app.folder_colors, _subs: subs }
     }
 
     fn apply(&mut self, cx: &mut Context<Self>) {
@@ -485,12 +503,14 @@ impl Picker {
                 c.app.folder_colors.push(hex.clone());
             }
         });
+        self.own_colors = Config::load().app.folder_colors;
         self.making = None;
         self.choose_color(Some(hex), cx);
     }
 
     fn forget_color(&mut self, hex: String, cx: &mut Context<Self>) {
         let _ = Config::edit(|c| c.app.folder_colors.retain(|h| !h.eq_ignore_ascii_case(&hex)));
+        self.own_colors = Config::load().app.folder_colors;
         cx.notify();
     }
 
@@ -556,7 +576,7 @@ impl Picker {
                 this.choose_color(Some(hex.to_string()), cx);
             })).child(ring(on, dot(hex))));
         }
-        for hex in Config::load().app.folder_colors {
+        for hex in self.own_colors.clone() {
             let on = chosen.as_deref().is_some_and(|c| c.eq_ignore_ascii_case(&hex));
             let (pick, forget) = (hex.clone(), hex.clone());
             let hover = theme.foreground;
@@ -786,7 +806,7 @@ impl Render for Picker {
         let theme = cx.theme().clone();
         // The grid takes what the window leaves: the card's other parts
         // are of known heights, the swatches a row of ten.
-        let swatches = PRESETS.len() + 2 + Config::load().app.folder_colors.len();
+        let swatches = PRESETS.len() + 2 + self.own_colors.len();
         let swatch_rows = swatches.div_ceil(10) as f32;
         let colors_h = 16. + 8. + swatch_rows * (SWATCH + 6.) + (swatch_rows - 1.) * 4. + if self.making.is_some() { 8. + 138. } else { 0. };
         let fixed = 32. + 20. + 12. * 3. + colors_h + (16. + 8. + 32. + 8.) + 28.;

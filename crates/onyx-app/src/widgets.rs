@@ -316,7 +316,11 @@ pub fn swallow_click(window: &mut Window, cx: &mut App) {
 pub struct Motion {
     /// Each thing that is there or is not: whether it is, when that
     /// changed, and how many times it has.
-    presences: RefCell<HashMap<String, (bool, Instant, u32)>>,
+    /// And when it was last asked: one not asked for `FORGET_AFTER` (a
+    /// folder renamed, deleted, in another vault, or under one shut) is
+    /// let go, as one never seen, every `PRUNE_EVERY` askings.
+    presences: RefCell<HashMap<String, (bool, Instant, u32, Instant)>>,
+    asked: std::cell::Cell<u32>,
     /// Each segmented control: the choice it came from, the one it is on,
     /// and when it changed.
     choices: RefCell<HashMap<&'static str, (&'static str, &'static str, Option<Instant>)>>,
@@ -331,11 +335,24 @@ impl Motion {
     /// nothing at rest. What was never drawn before is not played. One
     /// going is drawn until its time is up, and once more then as nothing.
     pub fn presence<V: 'static>(&self, id: &str, on: bool, cx: &mut Context<V>) -> Option<(bool, u32)> {
+        const PRUNE_EVERY: u32 = 4096;
+        const FORGET_AFTER: Duration = Duration::from_secs(30);
         let mut all = self.presences.borrow_mut();
         let now = Instant::now();
-        let p = all.entry(id.to_string()).or_insert_with(|| (on, now.checked_sub(FOLD_ANIM * 2).unwrap_or(now), 0));
+        let n = self.asked.get().wrapping_add(1);
+        self.asked.set(n);
+        if n % PRUNE_EVERY == 0 {
+            all.retain(|_, p| p.3.elapsed() < FORGET_AFTER);
+        }
+        // Looked up before it is made: a key's words were made anew at
+        // every asking, once a folder a frame.
+        if !all.contains_key(id) {
+            all.insert(id.to_string(), (on, now.checked_sub(FOLD_ANIM * 2).unwrap_or(now), 0, now));
+        }
+        let p = all.get_mut(id).expect("just made");
+        p.3 = now;
         if p.0 != on {
-            *p = (on, now, p.2 + 1);
+            *p = (on, now, p.2 + 1, now);
             if !on {
                 cx.spawn(async move |this, cx| {
                     cx.background_executor().timer(FOLD_ANIM + Duration::from_millis(20)).await;

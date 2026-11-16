@@ -29,6 +29,17 @@ pub struct Entry {
     pub children: Vec<Entry>,
 }
 
+impl Entry {
+    /// Whether the tree has an entry at `path`, found down the folders
+    /// that lead to it.
+    pub fn holds(&self, path: &Path) -> bool {
+        if self.path == path {
+            return true;
+        }
+        self.children.iter().any(|c| path.starts_with(&c.path) && c.holds(path))
+    }
+}
+
 pub fn is_note(path: &Path) -> bool {
     path.extension().and_then(|e| e.to_str()).is_some_and(|e| NOTE_EXTS.iter().any(|n| n.eq_ignore_ascii_case(e)))
 }
@@ -260,6 +271,12 @@ pub fn trash(path: &Path) -> Result<(), String> {
 /// link's own folder first, then anywhere in the vault, the shortest
 /// path first.
 pub fn resolve_link(root: &Path, from: &Path, link: &str) -> Option<PathBuf> {
+    resolve_link_with(root, from, link, &mut || std::sync::Arc::new(notes(root)))
+}
+
+/// `resolve_link`, the vault's notes from `notes_of`, asked for only when
+/// the note is not beside the one linking to it.
+pub fn resolve_link_with(root: &Path, from: &Path, link: &str, notes_of: &mut dyn FnMut() -> std::sync::Arc<Vec<PathBuf>>) -> Option<PathBuf> {
     let target = link.split(['#', '|']).next().unwrap_or("").trim();
     if target.is_empty() {
         return None;
@@ -281,7 +298,7 @@ pub fn resolve_link(root: &Path, from: &Path, link: &str) -> Option<PathBuf> {
             return Some(p);
         }
     }
-    let mut found: Vec<PathBuf> = notes(root).into_iter().filter(|p| matches(p)).collect();
+    let mut found: Vec<PathBuf> = notes_of().iter().filter(|p| matches(p)).cloned().collect();
     found.sort_by_key(|p| p.components().count());
     found.into_iter().next()
 }
@@ -325,6 +342,35 @@ pub fn asset_files(root: &Path) -> Vec<PathBuf> {
 /// comes back with its `..` folded away, so it can be told by where it
 /// is: `../.assets/a.png` from a folder is in the assets folder.
 pub fn find_file(root: Option<&Path>, from: &Path, link: &str) -> Option<PathBuf> {
+    find_file_with(root, from, link, &mut || std::sync::Arc::new(root.map(all_files).unwrap_or_default()))
+}
+
+/// Every file of the vault but dotted ones and those in dotted folders,
+/// as `find_file` looks through them.
+pub fn all_files(root: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut folders = vec![root.to_path_buf()];
+    while let Some(folder) = folders.pop() {
+        for entry in fs::read_dir(folder).into_iter().flatten().flatten() {
+            if entry.file_name().to_string_lossy().starts_with('.') {
+                continue;
+            }
+            let path = entry.path();
+            if path.is_dir() {
+                folders.push(path);
+            } else {
+                found.push(path);
+            }
+        }
+    }
+    found
+}
+
+/// `find_file`, the vault's files from `files` (`all_files`), asked for
+/// only when the link is not where it says: a caller that asks many times
+/// (a note's layout, at every key of a link being typed) keeps the list
+/// for a moment rather than walk the vault each time.
+pub fn find_file_with(root: Option<&Path>, from: &Path, link: &str, files: &mut dyn FnMut() -> std::sync::Arc<Vec<PathBuf>>) -> Option<PathBuf> {
     if link.contains("://") {
         return None;
     }
@@ -343,21 +389,8 @@ pub fn find_file(root: Option<&Path>, from: &Path, link: &str) -> Option<PathBuf
     if kept.is_file() {
         return Some(kept);
     }
-    let mut found = Vec::new();
-    let mut folders = vec![root.to_path_buf()];
-    while let Some(folder) = folders.pop() {
-        for entry in fs::read_dir(folder).into_iter().flatten().flatten() {
-            let path = entry.path();
-            if entry.file_name().to_string_lossy().starts_with('.') {
-                continue;
-            }
-            if path.is_dir() {
-                folders.push(path);
-            } else if entry.file_name() == bare {
-                found.push(path);
-            }
-        }
-    }
+    let _ = root;
+    let mut found: Vec<PathBuf> = files().iter().filter(|p| p.file_name() == Some(bare.as_os_str())).cloned().collect();
     found.sort_by_key(|p| p.components().count());
     found.into_iter().next()
 }
@@ -773,11 +806,18 @@ pub type Watcher = notify::RecommendedWatcher;
 /// The vault watched: `on_change` is called, on the watcher's own
 /// thread, with the paths that changed. The watcher is handed back and
 /// watches for as long as it is kept.
+/// A change that changes no file's words and no folder's entries: a read,
+/// or a file's times, rights or extended attributes, which iCloud and
+/// Spotlight touch all day. A change of the words is a change of data too.
+fn quiet(kind: &notify::EventKind) -> bool {
+    matches!(kind, notify::EventKind::Access(_) | notify::EventKind::Modify(notify::event::ModifyKind::Metadata(_)))
+}
+
 pub fn watch(root: &Path, on_change: impl Fn(Vec<PathBuf>) + Send + 'static) -> Result<Watcher, String> {
     use notify::Watcher as _;
     let mut watcher = notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
         if let Ok(ev) = res {
-            if matches!(ev.kind, notify::EventKind::Access(_)) {
+            if quiet(&ev.kind) {
                 return;
             }
             on_change(ev.paths);
@@ -797,7 +837,7 @@ pub fn watch_folder(dir: &Path, on_change: impl Fn(Vec<PathBuf>) + Send + 'stati
     use notify::Watcher as _;
     let mut watcher = notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
         if let Ok(ev) = res {
-            if matches!(ev.kind, notify::EventKind::Access(_)) {
+            if quiet(&ev.kind) {
                 return;
             }
             on_change(ev.paths);

@@ -405,6 +405,9 @@ pub(crate) struct Entry {
 
 #[derive(Default)]
 pub(crate) struct Cache {
+    /// The key of everything the last whole layout read
+    /// (`Editor::layout_inputs`): asked again with the same, it stands.
+    pub inputs: Option<u64>,
     pub width: f32,
     pub look_key: u64,
     pub entries: Vec<Entry>,
@@ -439,7 +442,18 @@ pub(crate) struct Pictures {
     /// The note is itself in a frame: a file it embeds stays its words,
     /// so frames never stand inside frames.
     pub framed: bool,
+    /// The vault's files, when a source was not where it said, and when
+    /// they were listed: kept a moment (`FILES_FOR`), so a link typed a
+    /// letter at a time does not walk the vault at each letter.
+    pub files: Option<(std::time::Instant, Arc<Vec<PathBuf>>)>,
+    /// The sources the last whole layout met: those it did not (a link
+    /// typed a letter at a time, a picture taken out) are let go after it
+    /// (`Editor::relayout`), their pixels with them.
+    pub met: std::collections::HashSet<String>,
 }
+
+/// How long the vault's list of files answers a picture's source.
+const FILES_FOR: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// RGBA pixels as the window draws them, blue first.
 pub(crate) fn bgra(w: u32, h: u32, rgba: Vec<u8>) -> Option<Arc<RenderImage>> {
@@ -450,19 +464,42 @@ pub(crate) fn bgra(w: u32, h: u32, rgba: Vec<u8>) -> Option<Arc<RenderImage>> {
     Some(Arc::new(RenderImage::new(vec![image::Frame::new(buffer)])))
 }
 
-/// A picture's pixels, no larger than a page can use.
+/// A picture's pixels, no larger than a page can use, read at that size
+/// (`sys::picture_at_most`). Taken a turn of `DECODING` by the caller.
 pub(crate) fn read_picture(path: &Path) -> Option<Arc<RenderImage>> {
     const MOST: u32 = 2400;
-    let picture = image::open(path).ok()?;
-    let picture = if picture.width() > MOST || picture.height() > MOST { picture.thumbnail(MOST, MOST) } else { picture };
-    let mut buffer = picture.into_rgba8();
-    for pixel in buffer.pixels_mut() {
-        pixel.0.swap(0, 2);
-    }
-    Some(Arc::new(RenderImage::new(vec![image::Frame::new(buffer)])))
+    let (w, h, rgba) = crate::sys::picture_at_most(path, MOST)?;
+    bgra(w, h, rgba)
 }
 
+/// Two pictures decoded at a time, wherever they are read: a vault's
+/// assets or a note of photos, each read at once, left a peak of hundreds
+/// of megabytes the allocator gave back only over minutes.
+pub(crate) static DECODING: async_lock::Semaphore = async_lock::Semaphore::new(2);
+
 impl Pictures {
+    /// What a layout reads of the pictures, for its key: which sources
+    /// were found where, which sizes, pixels, PDF pages and framed heights
+    /// are known. Small: one entry a picture or frame of the note.
+    pub fn fingerprint(&self, h: &mut impl Hasher) {
+        self.note.hash(h);
+        self.vault.hash(h);
+        self.framed.hash(h);
+        let mut sum = |n: u64| n.hash(h);
+        sum(self.found.len() as u64);
+        sum(self.found.values().filter(|v| v.is_some()).count() as u64);
+        sum(self.found_any.len() as u64);
+        sum(self.found_any.values().filter(|v| v.is_some()).count() as u64);
+        sum(self.sizes.len() as u64);
+        sum(self.sizes.values().fold(0u64, |a, s| a.wrapping_add(s.map_or(1, |(w, h)| ((w as u64) << 32) | h as u64))));
+        sum(self.drawn.len() as u64);
+        sum(self.drawn.values().fold(0u64, |a, d| a.wrapping_add(Arc::as_ptr(d) as u64)));
+        sum(self.pdfs.len() as u64);
+        sum(self.pdfs.values().fold(0u64, |a, f| a.wrapping_add(f.sizes.len() as u64)));
+        sum(self.embed_heights.len() as u64);
+        sum(self.embed_heights.values().fold(0u64, |a, x| a.wrapping_add(x.to_bits() as u64)));
+    }
+
     /// The file a picture's source names, a framed file among them.
     pub fn find_path(&mut self, src: &str) -> Option<PathBuf> {
         self.find(src)
@@ -473,12 +510,16 @@ impl Pictures {
     /// name is found as a wikilink's is. A note never frames itself, and
     /// a note in a frame frames nothing.
     fn find(&mut self, src: &str) -> Option<PathBuf> {
+        if !self.met.contains(src) {
+            self.met.insert(src.to_string());
+        }
         if let Some(found) = self.found.get(src) {
             return found.clone();
         }
-        let vault = self.vault.as_deref();
-        let found = onyx_core::vault::find_file(vault, &self.note, src)
-            .or_else(|| vault.and_then(|v| onyx_core::vault::resolve_link(v, &self.note, src)))
+        let vault = self.vault.clone();
+        let found = self
+            .lookup(src)
+            .or_else(|| vault.as_deref().and_then(|v| self.resolve(v, src)))
             .filter(|p| match is_framed(p) {
                 true => !self.framed && *p != self.note,
                 false => onyx_core::vault::is_picture(p) && p.extension().is_none_or(|e| !e.eq_ignore_ascii_case("svg")),
@@ -492,10 +533,36 @@ impl Pictures {
         if let Some(found) = self.found_any.get(src) {
             return found.clone();
         }
-        let vault = self.vault.as_deref();
-        let found = onyx_core::vault::find_file(vault, &self.note, src).or_else(|| vault.and_then(|v| onyx_core::vault::resolve_link(v, &self.note, src))).filter(|p| p.is_file());
+        let vault = self.vault.clone();
+        let found = self.lookup(src).or_else(|| vault.as_deref().and_then(|v| self.resolve(v, src))).filter(|p| p.is_file());
         self.found_any.insert(src.to_string(), found.clone());
         found
+    }
+
+    /// The vault's files, listed again when the list is older than `FILES_FOR`.
+    fn vault_files(&mut self) -> Arc<Vec<PathBuf>> {
+        if let Some((at, files)) = &self.files {
+            if at.elapsed() < FILES_FOR {
+                return files.clone();
+            }
+        }
+        let files = Arc::new(self.vault.as_deref().map(onyx_core::vault::all_files).unwrap_or_default());
+        self.files = Some((std::time::Instant::now(), files.clone()));
+        files
+    }
+
+    /// The file a source names (`vault::find_file`), the vault's files from
+    /// the kept list.
+    fn lookup(&mut self, src: &str) -> Option<PathBuf> {
+        let (vault, note) = (self.vault.clone(), self.note.clone());
+        onyx_core::vault::find_file_with(vault.as_deref(), &note, src, &mut || self.vault_files())
+    }
+
+    /// The note a bare name names (`vault::resolve_link`), the vault's
+    /// notes from the kept list.
+    fn resolve(&mut self, root: &Path, src: &str) -> Option<PathBuf> {
+        let note = self.note.clone();
+        onyx_core::vault::resolve_link_with(root, &note, src, &mut || Arc::new(self.vault_files().iter().filter(|p| onyx_core::vault::is_note(p)).cloned().collect()))
     }
 
     /// A picture's size in pixels, from the top of its file.
@@ -533,8 +600,15 @@ pub(crate) fn is_framed(path: &Path) -> bool {
 #[derive(Default)]
 pub(crate) struct PdfFile {
     pub sizes: Vec<(f32, f32)>,
+    /// A page each, those not read yet empty.
     pub text: Option<Arc<Vec<onyx_core::preview::PdfText>>>,
+    /// The whole text asked for (the find, Select All, contents made from
+    /// it), and every page read.
     pub text_asked: bool,
+    pub text_whole: bool,
+    /// The pages read or being read on their own, as a frame's pointer
+    /// came over them (`Embed::read_text_near`).
+    pub text_pages: std::collections::HashSet<usize>,
     pub outline: Option<Arc<Vec<onyx_core::preview::PdfMark>>>,
     pub outline_asked: bool,
 }
@@ -593,7 +667,10 @@ impl<'a> Reader<'a> {
 
     fn touches(&self, r: &Range<usize>, inclusive: bool) -> bool {
         let Some((a, b)) = self.sel else { return false };
-        let (ga, gb) = (self.doc.offset_of(a), self.doc.offset_of(b));
+        // From the reading's line starts: `Doc::offset_of` sums every line
+        // above, and this is asked for every span of every line.
+        let offset = |p: Pos| self.analysis.line_starts.get(p.line).map_or_else(|| self.doc.offset_of(p), |s| s + p.col);
+        let (ga, gb) = (offset(a), offset(b));
         if inclusive { ga <= r.end && gb >= r.start } else { ga < r.end && gb > r.start }
     }
 
@@ -681,12 +758,19 @@ impl<'a> Reader<'a> {
     pub fn lay_out_note(&self, cache: &mut Cache, width: f32, theme: &gpui_component::Theme, window: &mut Window) {
         let look_key = self.look_key(theme.mode.is_dark());
         let n = self.doc.line_count();
+        self.pictures.borrow_mut().met.clear();
         if cache.width != width || cache.look_key != look_key {
             cache.entries.clear();
             cache.width = width;
             cache.look_key = look_key;
         }
-        cache.entries.truncate(n);
+        // Lines came or went: each row is found by its key, wherever it
+        // stood. Kept by its index alone, every row under an Enter was
+        // laid out again.
+        let mut spare: HashMap<u64, Entry> = HashMap::new();
+        if cache.entries.len() != n {
+            spare = std::mem::take(&mut cache.entries).into_iter().map(|e| (e.key, e)).collect();
+        }
         self.color_code(cache, theme);
         self.make_grids(&mut cache.grids, width, theme, window);
         let mut tops = Vec::with_capacity(n);
@@ -712,13 +796,17 @@ impl<'a> Reader<'a> {
             info.quote_depth.hash(&mut h);
             revealed.hash(&mut h);
             (line == 0).hash(&mut h);
+            // Ranges from the line's own start, as its row reads them: by
+            // the whole text's, a letter typed made every line under it new.
+            let start = self.analysis.line_starts[line] as i64;
+            let local = |r: &Range<usize>| (r.start as i64 - start, r.end as i64 - start);
             for i in self.issues_on(line) {
-                i.range.hash(&mut h);
+                local(&i.range).hash(&mut h);
                 (i.kind == Kind::Spelling).hash(&mut h);
                 (self.quiet == Some(i.range.end)).hash(&mut h);
             }
             for &ix in &self.analysis.line_spans[line] {
-                self.analysis.spans[ix].range.hash(&mut h);
+                local(&self.analysis.spans[ix].range).hash(&mut h);
             }
             if let LineKind::TableFirst(t) | LineKind::TableRow(t) = info.kind {
                 let first = self.analysis.tables[t].first;
@@ -738,9 +826,14 @@ impl<'a> Reader<'a> {
             let key = h.finish();
             let fresh = cache.entries.get(line).is_none_or(|e| e.key != key);
             if fresh {
-                let row = self.lay_out(line, &hidden, &colors, revealed, width, &cache.grids, theme, window);
-                let height = row.height();
-                let entry = Entry { key, height, row: Rc::new(row) };
+                let entry = match spare.remove(&key) {
+                    Some(kept) => kept,
+                    None => {
+                        let row = self.lay_out(line, &hidden, &colors, revealed, width, &cache.grids, theme, window);
+                        let height = row.height();
+                        Entry { key, height, row: Rc::new(row) }
+                    }
+                };
                 if line < cache.entries.len() {
                     cache.entries[line] = entry;
                 } else {
@@ -766,11 +859,12 @@ impl<'a> Reader<'a> {
     /// grammar for, keeps the plain ink.
     fn color_code(&self, cache: &mut Cache, theme: &gpui_component::Theme) {
         use gpui_component::highlighter::SyntaxHighlighter;
-        let firsts: Vec<usize> = self.analysis.code_blocks.iter().map(|b| b.first).collect();
-        cache.code_colors.retain(|first, _| firsts.contains(first));
+        // A block's colors are found by the key of its text where lines
+        // came or went above it: kept by its first line alone, every block
+        // under a line added was read by its grammar again.
+        let mut old = std::mem::take(&mut cache.code_colors);
         for b in &self.analysis.code_blocks {
             if b.lang.is_empty() {
-                cache.code_colors.remove(&b.first);
                 continue;
             }
             let last = if b.closed { b.last.saturating_sub(1) } else { b.last };
@@ -781,7 +875,10 @@ impl<'a> Reader<'a> {
             code.hash(&mut h);
             theme.mode.is_dark().hash(&mut h);
             let key = h.finish();
-            if cache.code_colors.get(&b.first).is_some_and(|(k, _)| *k == key) {
+            let here = old.get(&b.first).is_some_and(|(k, _)| *k == key);
+            let kept = if here { old.remove(&b.first) } else { old.iter().find(|(_, (k, _))| *k == key).map(|(f, _)| *f).and_then(|f| old.remove(&f)) };
+            if let Some(kept) = kept {
+                cache.code_colors.insert(b.first, kept);
                 continue;
             }
             let hl = cache.highlighters.entry(b.lang.clone()).or_insert_with(|| SyntaxHighlighter::new(&b.lang));
@@ -798,8 +895,14 @@ impl<'a> Reader<'a> {
             }
             for (range, style) in styled {
                 let Some(color) = style.color else { continue };
-                for (ix, l) in lines.iter().enumerate() {
+                // From the line the range begins on, to the one it ends on:
+                // not every line of the block for every range.
+                let first = starts.partition_point(|&s| s <= range.start).saturating_sub(1);
+                for (ix, l) in lines.iter().enumerate().skip(first) {
                     let (ls, le) = (starts[ix], starts[ix] + l.len());
+                    if ls >= range.end {
+                        break;
+                    }
                     let (a, bb) = (range.start.max(ls), range.end.min(le));
                     if a < bb {
                         per_line[ix].push((a - ls..bb - ls, color));

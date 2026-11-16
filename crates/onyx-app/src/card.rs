@@ -84,6 +84,13 @@ pub(crate) struct Card {
 impl Card {
     pub(crate) fn new(href: String, path: PathBuf, web: bool, nth: usize, note: WeakEntity<Editor>, cx: &mut Context<Self>) -> Self {
         let mut me = Self { href, path, web, nth, note, size: (0., 0.), layout: CardSize::Small, words: String::new(), link: None, file: None, icon: None, cover: None, hovered: false };
+        // Its pictures leave the GPU with it: the card gone from the note,
+        // or the note closed. Dropped alone, they stayed until the app quit.
+        cx.on_release(|me: &mut Self, cx| {
+            let gone: Vec<_> = me.icon.take().into_iter().chain(me.cover.take()).collect();
+            cx.defer(move |cx| gone.into_iter().for_each(|image| cx.drop_image(image, None)));
+        })
+        .detach();
         if me.web {
             me.read_page(cx);
         } else {
@@ -99,11 +106,13 @@ impl Card {
         cx.spawn(async move |this, cx| {
             let kept = cx.background_spawn({
                 let href = href.clone();
-                async move { link_card::cached(&href).map(|k| (k.clone(), pictures_of(&k))) }
+                async move { link_card::cached(&href).map(|k| { let p = if k.failed { (None, None) } else { pictures_of(&k) }; (k, p) }) }
             })
             .await;
+            // A page that could not be reached a moment ago is not tried
+            // again yet, and shows as a card with no network does.
             let stale = kept.as_ref().is_none_or(|(k, _)| k.stale());
-            if let Some((k, (icon, cover))) = kept {
+            if let Some((k, (icon, cover))) = kept.filter(|(k, _)| !k.failed) {
                 let _ = this.update(cx, |me, cx| me.show_page(k, icon, cover, cx));
             }
             if stale {
@@ -118,8 +127,9 @@ impl Card {
 
     fn show_page(&mut self, link: LinkCard, icon: Option<Arc<RenderImage>>, cover: Option<Arc<RenderImage>>, cx: &mut Context<Self>) {
         self.link = Some(link);
-        self.icon = icon;
-        self.cover = cover;
+        // The pictures shown before, read again from the network, go.
+        let old: Vec<_> = std::mem::replace(&mut self.icon, icon).into_iter().chain(std::mem::replace(&mut self.cover, cover)).collect();
+        cx.defer(move |cx| old.into_iter().for_each(|image| cx.drop_image(image, None)));
         cx.notify();
     }
 
@@ -127,7 +137,12 @@ impl Card {
     fn read_file(&mut self, cx: &mut Context<Self>) {
         let path = self.path.clone();
         cx.spawn(async move |this, cx| {
-            let (facts, cover) = cx.background_spawn(async move { file_facts(&path) }).await;
+            let (facts, cover) = cx
+                .background_spawn(async move {
+                    let _turn = crate::layout::DECODING.acquire().await;
+                    file_facts(&path)
+                })
+                .await;
             let _ = this.update(cx, |me, cx| {
                 me.file = Some(facts);
                 me.cover = cover;

@@ -26,7 +26,7 @@
 //! itself: two seconds after its first change, and as it closes.
 
 use std::cell::RefCell;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
@@ -138,9 +138,10 @@ struct Held {
     /// (`Shell::make_title`): made the first time the tab is drawn, which
     /// a field needs the window for.
     title: Option<(Entity<TextareaState>, Subscription)>,
-    /// The note's folder watched, and what hears it.
-    _watcher: Option<vault::Watcher>,
-    _watch: Option<Task<()>>,
+    /// The main window's tab typed in the note while this window was
+    /// closed: its editor takes the text as the window opens, not at each
+    /// key, which read and checked the whole note again for no one.
+    behind: bool,
 }
 
 /// The notes page: a vault's folders and notes, for a note to be held
@@ -149,7 +150,7 @@ struct Held {
 struct Browse {
     /// The vault shown, and its tree once read.
     vault: Option<PathBuf>,
-    tree: Option<vault::Entry>,
+    tree: Option<Rc<vault::Entry>>,
     /// The folders open; the rest are shut.
     open: HashSet<PathBuf>,
     naming: Option<Naming>,
@@ -196,6 +197,10 @@ pub(crate) struct MenuNote {
     vault_at: Rc<std::cell::Cell<Bounds<Pixels>>>,
     /// The landing page's scroll, while it lists the vaults.
     landing_scroll: ScrollHandle,
+    /// The tabs' folders watched, one watcher a folder (`rewatch`).
+    watched: HashMap<PathBuf, (vault::Watcher, Task<()>)>,
+    /// The window's alpha as last set on the system's window.
+    alpha_set: std::cell::Cell<Option<f32>>,
     browse: Browse,
     motion: Motion,
     pinned: bool,
@@ -236,6 +241,8 @@ impl MenuNote {
             tree_anim: None,
             vault_at: Rc::default(),
             landing_scroll: ScrollHandle::default(),
+            watched: HashMap::new(),
+            alpha_set: std::cell::Cell::new(None),
             browse: Browse::default(),
             motion: Motion::default(),
             pinned: false,
@@ -267,6 +274,7 @@ impl MenuNote {
         }
         this.shown = (!this.tabs.is_empty()).then(|| ui.menu_note.as_ref().and_then(|n| this.tab_of(n)).unwrap_or(0));
         this.remember();
+        this.rewatch(cx);
         // A quit writes the notes first, as the main window's.
         cx.on_app_quit(|this, cx| {
             this.save(cx);
@@ -332,6 +340,7 @@ impl MenuNote {
         self.going = None;
         // From its first frame, so none of the fade is spent before it.
         self.fade = Fade { from: 0., to: 1., since: None, over: COME };
+        self.catch_up(cx);
         self.refresh_tree(cx);
         self.user_name = Shell::name_of(&Config::load());
         crate::sys::set_menu_bar_open(true);
@@ -377,21 +386,28 @@ impl MenuNote {
                     return;
                 }
             };
-            let _ = this.update(cx, |this, _| this.window = Some(handle));
+            let _ = this.update(cx, |this, _| {
+                this.window = Some(handle);
+                this.alpha_set.set(None);
+            });
             let weak = this.clone();
             let _ = handle.update(cx, |_, window, cx| {
                 // Another window or app took the keyboard: the note goes,
                 // unless it is pinned.
                 cx.observe_window_activation(window, move |_, window, cx| {
-                    if !window.is_window_active() {
-                        let _ = weak.update(cx, |this, cx| {
+                    let active = window.is_window_active();
+                    let _ = weak.update(cx, |this, cx| {
+                        if !active {
                             this.save(cx);
                             if !this.pinned && this.going.is_none() {
                                 this.shut = Some(Instant::now());
                                 this.close(cx);
                             }
-                        });
-                    }
+                        }
+                        // Pinned behind another app, its caret stops; in
+                        // front again, it starts (`Editor::active`).
+                        cx.notify();
+                    });
                 })
                 .detach();
                 let _ = this.update(cx, |this, cx| this.focus_in(window, cx));
@@ -459,8 +475,11 @@ impl MenuNote {
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(GO).await;
             let gone = this
-                .update(cx, |this, _| {
+                .update(cx, |this, cx| {
                     if this.going.take().is_some() {
+                        for h in &this.tabs {
+                            h.editor.update(cx, |e, _| e.window_gone());
+                        }
                         this.window.take()
                     } else {
                         None
@@ -512,6 +531,7 @@ impl MenuNote {
         let at = self.tabs.iter().rposition(|t| t.path.parent() == folder).map_or(self.tabs.len(), |i| i + 1);
         self.tabs.insert(at, h);
         self.closed.retain(|p| *p != path);
+        self.rewatch(cx);
         self.show_tab(at, cx);
     }
 
@@ -537,8 +557,7 @@ impl MenuNote {
             e.set_text(&text, cx);
         });
         let sub = cx.subscribe(&editor, |this, editor, ev: &EditorEvent, cx| this.heard(editor, ev, cx));
-        let (watcher, watch) = self.watch(&path, cx);
-        Some(Held { path, editor, saved: read, dirty: false, save_due: None, _sub: sub, title: None, _watcher: watcher, _watch: watch })
+        Some(Held { path, editor, saved: read, dirty: false, save_due: None, _sub: sub, title: None, behind: false })
     }
 
     fn show_tab(&mut self, i: usize, cx: &mut Context<Self>) {
@@ -568,8 +587,17 @@ impl MenuNote {
         self.keep_name(i, cx);
         self.save_tab(i, cx);
         let h = self.tabs.remove(i);
+        // Its pictures let go of on the window's GPU, as a tab closed in
+        // the main window lets go of its own.
+        let editor = h.editor.clone();
+        self.with_window(move |_, window, cx| editor.update(cx, |e, cx| e.let_pictures_go(window, cx)), cx);
         self.closed.retain(|p| *p != h.path);
         self.closed.push(h.path);
+        // Reopen Closed Tab goes back this far.
+        if self.closed.len() > 32 {
+            self.closed.remove(0);
+        }
+        self.rewatch(cx);
         self.shown = match self.shown {
             _ if self.tabs.is_empty() => None,
             Some(s) if s > i => Some(s - 1),
@@ -600,7 +628,8 @@ impl MenuNote {
     }
 
     fn can_reopen(&self) -> bool {
-        self.closed.iter().any(|p| p.is_file())
+        // The latest first: one look at the disk, as a rule.
+        self.closed.iter().rev().any(|p| p.is_file())
     }
 
     /// The tabs kept for the next launch, and shared with the main window.
@@ -613,10 +642,24 @@ impl MenuNote {
         ui.save_later();
     }
 
-    /// The note's folder watched: a change to the note on the disk is
+    /// The tabs' folders watched, one watcher a folder however many tabs
+    /// hold notes in it (each one a stream of the system's and a thread),
+    /// those no tab needs let go: as the tabs change.
+    fn rewatch(&mut self, cx: &mut Context<Self>) {
+        let needed: HashSet<PathBuf> = self.tabs.iter().filter_map(|h| h.path.parent().map(Path::to_path_buf)).collect();
+        self.watched.retain(|dir, _| needed.contains(dir));
+        for dir in needed {
+            if !self.watched.contains_key(&dir) {
+                if let Some(w) = self.watch(&dir, cx) {
+                    self.watched.insert(dir, w);
+                }
+            }
+        }
+    }
+
+    /// A folder watched: a change to a tab's note in it on the disk is
     /// taken as a tab's is (`take_disk`).
-    fn watch(&self, path: &Path, cx: &mut Context<Self>) -> (Option<vault::Watcher>, Option<Task<()>>) {
-        let Some(dir) = path.parent() else { return (None, None) };
+    fn watch(&self, dir: &Path, cx: &mut Context<Self>) -> Option<(vault::Watcher, Task<()>)> {
         let (tx, mut rx) = futures::channel::mpsc::unbounded::<Vec<PathBuf>>();
         let watcher = match vault::watch_folder(dir, move |paths| {
             let _ = tx.unbounded_send(paths);
@@ -624,31 +667,33 @@ impl MenuNote {
             Ok(w) => w,
             Err(e) => {
                 eprintln!("onyx: the menu bar note is not being watched: {e}");
-                return (None, None);
+                return None;
             }
         };
-        let path = path.to_path_buf();
         let task = cx.spawn(async move |this, cx| {
             while let Some(paths) = rx.next().await {
-                if !paths.iter().any(|p| *p == path) {
+                let Ok(held) = this.read_with(cx, |this, _| this.tabs.iter().map(|h| h.path.clone()).filter(|t| paths.contains(t)).collect::<Vec<_>>()) else { break };
+                if held.is_empty() {
                     continue;
                 }
                 // A write is a temp file and a rename: what the disk has
                 // settles a moment on.
                 cx.background_executor().timer(Duration::from_millis(80)).await;
-                let read = path.clone();
-                let text = cx.background_executor().spawn(async move { vault::read(&read).ok() }).await;
-                let alive = this.update(cx, |this, cx| {
-                    if let Some(text) = text {
-                        this.take_disk(&path, text, cx);
+                for path in held {
+                    let read = path.clone();
+                    let text = cx.background_executor().spawn(async move { vault::read(&read).ok() }).await;
+                    let alive = this.update(cx, |this, cx| {
+                        if let Some(text) = text {
+                            this.take_disk(&path, text, cx);
+                        }
+                    });
+                    if alive.is_err() {
+                        return;
                     }
-                });
-                if alive.is_err() {
-                    break;
                 }
             }
         });
-        (Some(watcher), Some(task))
+        Some((watcher, task))
     }
 
     /// What the disk has for the note. Its own write, come back, is
@@ -772,8 +817,26 @@ impl MenuNote {
 
     /// The main window's tab of the note changed: this one follows.
     fn follow(&mut self, path: &Path, text: &str, cx: &mut Context<Self>) {
-        if let Some(h) = self.tabs.iter().find(|h| h.path == path) {
-            h.editor.update(cx, |e, cx| e.follow_text(text, cx));
+        let shut = self.window.is_none();
+        if let Some(h) = self.tabs.iter_mut().find(|h| h.path == path) {
+            if shut {
+                h.behind = true;
+            } else {
+                h.editor.update(cx, |e, cx| e.follow_text(text, cx));
+            }
+        }
+    }
+
+    /// The tabs the main window typed in while this window was closed take
+    /// its text, or with its tab gone, what was last written.
+    fn catch_up(&mut self, cx: &mut Context<Self>) {
+        for i in 0..self.tabs.len() {
+            if !std::mem::take(&mut self.tabs[i].behind) {
+                continue;
+            }
+            let path = self.tabs[i].path.clone();
+            let text = main_text(&path, cx).unwrap_or_else(|| self.tabs[i].saved.clone());
+            self.tabs[i].editor.update(cx, |e, cx| e.follow_text(&text, cx));
         }
     }
 
@@ -880,10 +943,7 @@ impl MenuNote {
             let root = vault_of(&to);
             let place = to.clone();
             self.tabs[i].editor.update(cx, |e, cx| e.set_place(place, root, cx));
-            let (watcher, watch) = self.watch(&to, cx);
             let h = &mut self.tabs[i];
-            h._watcher = watcher;
-            h._watch = watch;
             h.path = to;
             h.title = None;
         }
@@ -893,6 +953,7 @@ impl MenuNote {
         self.browse.open = self.browse.open.iter().map(|f| vault::moved_path(f, moves)).collect();
         if any {
             self.remember();
+            self.rewatch(cx);
         }
         self.read_tree(cx);
         cx.notify();
@@ -980,7 +1041,7 @@ impl MenuNote {
             let tree = read.await;
             let _ = this.update(cx, |this, cx| {
                 if this.browse.vault.as_deref() == Some(tree.path.as_path()) {
-                    this.browse.tree = Some(tree);
+                    this.browse.tree = Some(Rc::new(tree));
                     cx.notify();
                 }
             });
@@ -1068,7 +1129,7 @@ impl MenuNote {
     /// New Vault…: its name asked where the vault's block stands, the
     /// first free "Notes" offered, as the main window's sheet offers it.
     fn start_vault(&mut self, cx: &mut Context<Self>) {
-        let Some(container) = crate::shell::library::container_of(&Config::load()) else { return };
+        let Some(container) = crate::shell::library::container_now() else { return };
         self.menus.close(cx);
         self.ask(container, true, true, cx);
     }
@@ -1111,6 +1172,7 @@ impl MenuNote {
         let name = n.input.read(cx).value().to_string();
         let folder = n.folder;
         if n.vault {
+            crate::shell::library::forget_vaults();
             match vault::new_vault(&n.dir, &name) {
                 Ok(root) => {
                     self.browse.naming = None;
@@ -1415,7 +1477,7 @@ impl MenuNote {
     /// next, each on a pill with its keys.
     fn render_landing(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
-        if self.browse.vault.is_none() && crate::shell::library::container_of(&Config::load()).is_some() {
+        if self.browse.vault.is_none() && crate::shell::library::container_now().is_some() {
             return self.render_vault_page(cx);
         }
         let choice = |id: &'static str, icon: &'static str, label: &str, keys: &str, theme: &gpui_component::Theme| choice_pill(id, icon, label.to_string(), Press::Quiet, false, theme).min_w(px(220.)).h(px(34.)).px(px(14.)).gap(px(8.)).text_size(px(13.)).child(div().flex_1()).child(kbd_hint(keys, theme));
@@ -1694,7 +1756,7 @@ impl MenuNote {
     /// window to open one.
     fn render_tree(&mut self, ground: Hsla, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
-        if self.browse.vault.is_none() && crate::shell::library::container_of(&Config::load()).is_some() {
+        if self.browse.vault.is_none() && crate::shell::library::container_now().is_some() {
             return self.render_vault_list(ground, cx);
         }
         let Some(root) = self.browse.vault.clone() else {
@@ -2176,7 +2238,12 @@ impl Render for MenuNote {
         if self.fade.since.is_none() {
             self.fade.since = Some(Instant::now());
         }
-        crate::sys::set_window_alpha(window, self.fade.now());
+        // The system's window told only of a change: at every draw it was a
+        // call into the system at every blink and key.
+        let alpha = self.fade.now();
+        if self.alpha_set.replace(Some(alpha)) != Some(alpha) {
+            crate::sys::set_window_alpha(window, alpha);
+        }
         if !self.fade.done() {
             window.request_animation_frame();
         }
@@ -2252,7 +2319,7 @@ fn main_text(path: &Path, cx: &App) -> Option<String> {
 /// that holds it; else the open one or one opened before that holds it,
 /// the deepest, else the note's own folder.
 pub(crate) fn vault_of(path: &Path) -> Option<PathBuf> {
-    if let Some(folder) = crate::shell::library::container_of(&Config::load()) {
+    if let Some(folder) = crate::shell::library::container_now() {
         if let Ok(rest) = path.strip_prefix(&folder) {
             if let Some(top) = rest.components().next().filter(|_| rest.components().count() > 1) {
                 return Some(folder.join(top));
@@ -2274,7 +2341,7 @@ fn writing_language() -> Option<String> {
 /// (`library::vault_list`).
 fn known_vaults() -> Vec<PathBuf> {
     let ui = UiState::load();
-    crate::shell::library::vault_list(crate::shell::library::container_of(&Config::load()).as_deref(), ui.vault.as_deref())
+    crate::shell::library::vault_list(crate::shell::library::container_now().as_deref(), ui.vault.as_deref())
 }
 
 fn vault_name(path: &Path) -> String {

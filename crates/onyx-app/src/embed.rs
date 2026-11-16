@@ -85,6 +85,9 @@ const WORDS_FOOT: f32 = 2.;
 const GAP: f32 = 8.;
 /// How many pages stay drawn around those showing.
 const KEEP: usize = 10;
+/// And no more pixels than this, the pages nearest those showing kept
+/// first: ten pages at 4× zoom held a gigabyte, and as much on the GPU.
+const KEEP_BYTES: usize = 96 << 20;
 /// The widest a page is drawn, in pixels.
 const WIDEST: f32 = 4096.;
 /// The zooms the buttons step through, as points to pixels.
@@ -164,8 +167,15 @@ pub(crate) struct Embed {
     /// Points to pixels; none while the pages fit the frame's width.
     zoom: Option<f32>,
     leaves: HashMap<usize, Leaf>,
+    /// A tab's picture, decoded and kept by the tab, not by gpui
+    /// (`pictures.rs`): it goes with the tab, and a GIF plays a frame at a
+    /// time. Made the first time the picture is drawn.
+    kept: Option<Entity<crate::pictures::Kept>>,
     /// The page being drawn and how wide; one at a time.
     drawing: Option<(usize, u32)>,
+    /// The pages that showed at the last draw, kept when the frame is
+    /// scrolled out of view (`out_of_sight`).
+    seen: std::ops::Range<usize>,
     /// A selection of a PDF's words, from where it began to where it is,
     /// and whether a press is making it.
     sel: Option<(Spot, Spot)>,
@@ -233,7 +243,15 @@ impl Embed {
         } else {
             Body::Picture
         };
-        let mut me = Self { path, nth, note, store, body, focus: cx.focus_handle(), size: (0., 0.), scroll: ScrollHandle::new(), zoom: None, leaves: HashMap::new(), drawing: None, sel: None, selecting: false, page_field: None, shown_page: usize::MAX, want: None, measured: None, last_k: None, side_open: false, side_list: List::Pages, side_at: None, side_scroll: ScrollHandle::new(), thumbs: HashMap::new(), thumbing: false, followed: usize::MAX, folds: HashMap::new(), renaming: None, hovered: false, head_hovered: false, bar_on: false, bar_since: None, card: None, tab: None, _subs: Vec::new() };
+        let mut me = Self { path, nth, note, store, body, focus: cx.focus_handle(), size: (0., 0.), scroll: ScrollHandle::new(), zoom: None, leaves: HashMap::new(), kept: None, drawing: None, seen: 0..0, sel: None, selecting: false, page_field: None, shown_page: usize::MAX, want: None, measured: None, last_k: None, side_open: false, side_list: List::Pages, side_at: None, side_scroll: ScrollHandle::new(), thumbs: HashMap::new(), thumbing: false, followed: usize::MAX, folds: HashMap::new(), renaming: None, hovered: false, head_hovered: false, bar_on: false, bar_since: None, card: None, tab: None, _subs: Vec::new() };
+        // Its pages leave the GPU with it, as `let_go` lets them go.
+        cx.on_release(|me: &mut Self, cx| {
+            let images: Vec<_> = me.leaves.drain().chain(me.thumbs.drain()).map(|(_, leaf)| leaf.image).collect();
+            if !images.is_empty() {
+                cx.defer(move |cx| images.into_iter().for_each(|image| cx.drop_image(image, None)));
+            }
+        })
+        .detach();
         if matches!(me.body, Body::Reading) {
             me.read_words(look, cx);
         }
@@ -246,14 +264,14 @@ impl Embed {
     pub(crate) fn for_tab(path: PathBuf, picture: Option<(u32, u32)>, note: WeakEntity<Editor>, store: Rc<RefCell<Pictures>>, look: Look, cx: &mut Context<Self>) -> Self {
         let mut me = Self::new(path, 0, note, store, look, cx);
         me.tab = Some(picture);
-        if matches!(me.body, Body::Pdf) {
-            me.read_text(cx);
-        }
         me
     }
 
-    /// A PDF's text read off the window's thread, once.
-    fn read_text(&mut self, cx: &mut Context<Self>) {
+    /// A PDF's text read off the window's thread, once, as the pointer
+    /// first comes over its pages or the find first looks: a glyph and its
+    /// place each, it held 500 MB for a manual of 4,000 pages, read for
+    /// every PDF a note showed whether its words were looked at or not.
+    fn read_text(&mut self, then: Option<fn(&mut Self, &mut Context<Self>)>, cx: &mut Context<Self>) {
         {
             let mut store = self.store.borrow_mut();
             let Some(f) = store.pdfs.get_mut(&self.path).filter(|f| !f.text_asked) else { return };
@@ -268,10 +286,62 @@ impl Embed {
             let text = job.await;
             if let (Some(text), Some(f)) = (text, store.borrow_mut().pdfs.get_mut(&path)) {
                 f.text = Some(Arc::new(text));
+                f.text_whole = true;
+            }
+            let _ = this.update(cx, |me, cx| {
+                if let Some(then) = then {
+                    then(me, cx);
+                }
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    /// The text of the page at `page` and those beside it, read as the
+    /// pointer comes over them, for a selection there: the rest of a long
+    /// PDF stays unread until the find or Select All asks for it.
+    fn read_text_near(&mut self, page: usize, cx: &mut Context<Self>) {
+        let wanted: Vec<usize> = {
+            let mut store = self.store.borrow_mut();
+            let Some(f) = store.pdfs.get_mut(&self.path).filter(|f| !f.text_whole && !f.text_asked) else { return };
+            let n = f.sizes.len();
+            let wanted: Vec<usize> = (page.saturating_sub(1)..(page + 2).min(n)).filter(|p| !f.text_pages.contains(p)).collect();
+            f.text_pages.extend(wanted.iter().copied());
+            wanted
+        };
+        if wanted.is_empty() {
+            return;
+        }
+        let (path, store) = (self.path.clone(), self.store.clone());
+        let job = cx.background_spawn({
+            let path = path.clone();
+            async move { preview::pdf_text_pages(&path, &wanted).unwrap_or_default() }
+        });
+        cx.spawn(async move |this, cx| {
+            let read = job.await;
+            if let Some(f) = store.borrow_mut().pdfs.get_mut(&path).filter(|f| !f.text_whole) {
+                let mut pages: Vec<preview::PdfText> = f.text.as_deref().cloned().unwrap_or_else(|| vec![preview::PdfText::default(); f.sizes.len()]);
+                for (n, text) in read {
+                    if let Some(at) = pages.get_mut(n) {
+                        *at = text;
+                    }
+                }
+                f.text = Some(Arc::new(pages));
             }
             let _ = this.update(cx, |_, cx| cx.notify());
         })
         .detach();
+    }
+
+    /// The page under a point of the window, by the pages' places alone.
+    fn page_at(&self, at: Point<Pixels>) -> Option<usize> {
+        let sizes = self.sizes();
+        let k = self.scale(&sizes);
+        let (places, _, _) = self.places(&sizes, k);
+        let origin = self.scroll.bounds().origin + self.scroll.offset();
+        let y = f32::from(at.y - origin.y);
+        Some(places.partition_point(|p| p.1 + p.3 + GAP <= y).min(places.len().checked_sub(1)?))
     }
 
     /// The file it shows, which a rename moves.
@@ -411,6 +481,23 @@ impl Embed {
         }
     }
 
+    /// The frame scrolled out of the note's view: it keeps the pages it
+    /// showed, so it comes back as it went, and lets the rest go, and its
+    /// sidebar's small pages. Kept whole, a long PDF scrolled past held a
+    /// dozen pages until the note closed.
+    pub(crate) fn out_of_sight(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let seen = self.seen.clone();
+        let far: Vec<usize> = self.leaves.keys().copied().filter(|p| !seen.contains(p)).collect();
+        for page in far {
+            if let Some(leaf) = self.leaves.remove(&page) {
+                cx.drop_image(leaf.image, Some(window));
+            }
+        }
+        for (_, leaf) in self.thumbs.drain() {
+            cx.drop_image(leaf.image, Some(window));
+        }
+    }
+
     /// The pages' pixels let go, as the frame goes.
     pub(crate) fn let_go(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         for (_, leaf) in self.leaves.drain().chain(self.thumbs.drain()) {
@@ -486,7 +573,7 @@ impl Embed {
             let mut store = self.store.borrow_mut();
             let Some(f) = store.pdfs.get_mut(&self.path).filter(|f| !f.outline_asked) else { return };
             f.outline_asked = true;
-            f.text.clone()
+            f.text.clone().filter(|_| f.text_whole)
         };
         let (path, store) = (self.path.clone(), self.store.clone());
         let job = cx.background_spawn({
@@ -505,9 +592,10 @@ impl Embed {
             let (marks, read) = job.await;
             if let Some(f) = store.borrow_mut().pdfs.get_mut(&path) {
                 f.outline = Some(Arc::new(marks));
-                if let Some(read) = read.filter(|_| f.text.is_none()) {
+                if let Some(read) = read.filter(|_| !f.text_whole) {
                     f.text = Some(read);
                     f.text_asked = true;
+                    f.text_whole = true;
                 }
             }
             let _ = this.update(cx, |_, cx| cx.notify());
@@ -661,11 +749,25 @@ impl Embed {
     /// time, those showing first; pages far from them let go.
     fn draw_pages(&mut self, places: &[(f32, f32, f32, f32)], showing: std::ops::Range<usize>, scale: f32, window: &mut Window, cx: &mut Context<Self>) {
         let near = showing.start.saturating_sub(1)..(showing.end + 1).min(places.len());
+        self.seen = showing.clone();
         let (lo, hi) = (showing.start.saturating_sub(KEEP / 2), showing.end + KEEP / 2);
-        let far: Vec<usize> = self.leaves.keys().copied().filter(|p| *p < lo || *p >= hi).collect();
-        for page in far {
-            if let Some(leaf) = self.leaves.remove(&page) {
-                cx.drop_image(leaf.image, Some(window));
+        // The nearest first; past the count or the bytes they go, but
+        // those showing and their neighbors.
+        let from = |p: usize| if p < showing.start { showing.start - p } else { p.saturating_sub(showing.end.saturating_sub(1)) };
+        let mut kept: Vec<usize> = self.leaves.keys().copied().collect();
+        kept.sort_by_key(|&p| from(p));
+        let mut bytes = 0;
+        for page in kept {
+            let leaf = &self.leaves[&page];
+            if leaf.width != u32::MAX && leaf.image.frame_count() > 0 {
+                let s = leaf.image.size(0);
+                bytes += (s.width.0.max(0) as usize) * (s.height.0.max(0) as usize) * 4;
+            }
+            let needed = showing.contains(&page) || near.contains(&page);
+            if !needed && (page < lo || page >= hi || bytes > KEEP_BYTES) {
+                if let Some(leaf) = self.leaves.remove(&page) {
+                    cx.drop_image(leaf.image, Some(window));
+                }
             }
         }
         if self.drawing.is_some() {
@@ -987,6 +1089,9 @@ impl Embed {
     fn press(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         window.focus(&self.focus, cx);
         cx.stop_propagation();
+        if let Some(page) = self.page_at(ev.position).filter(|_| matches!(self.body, Body::Pdf)) {
+            self.read_text_near(page, cx);
+        }
         let Some(spot) = self.spot_at(ev.position) else {
             self.sel = None;
             cx.notify();
@@ -1018,6 +1123,10 @@ impl Embed {
     }
 
     fn drag(&mut self, ev: &MouseMoveEvent, _: &mut Window, cx: &mut Context<Self>) {
+        // The words under the pointer read as it comes, ready for a press.
+        if let Some(page) = self.page_at(ev.position).filter(|_| matches!(self.body, Body::Pdf)) {
+            self.read_text_near(page, cx);
+        }
         if !self.selecting || ev.pressed_button != Some(MouseButton::Left) {
             self.selecting = false;
             return;
@@ -1055,6 +1164,15 @@ impl Embed {
     }
 
     fn select_all(&mut self, _: &gpui_component::input::SelectAll, _: &mut Window, cx: &mut Context<Self>) {
+        // Every page's words first, then all of them chosen.
+        if !self.store.borrow().pdfs.get(&self.path).is_some_and(|f| f.text_whole) {
+            self.read_text(Some(|me, cx| me.choose_all(cx)), cx);
+            return;
+        }
+        self.choose_all(cx);
+    }
+
+    fn choose_all(&mut self, cx: &mut Context<Self>) {
         let Some(text) = self.text() else { return };
         let Some(last) = text.len().checked_sub(1) else { return };
         self.sel = Some((Spot { page: 0, at: 0 }, Spot { page: last, at: text[last].glyphs.len() }));
@@ -1365,6 +1483,8 @@ impl Embed {
         if let Some(router) = cx.try_global::<crate::scroll::Router>() {
             router.0.zooms(&scroll);
         }
+        let kept = self.kept.get_or_insert_with(|| crate::pictures::Kept::new(cx)).clone();
+        let source = crate::pictures::through(&kept, ImageSource::Resource(Resource::Path(self.path.clone().into())), 0);
         div()
             .relative()
             .size_full()
@@ -1383,7 +1503,7 @@ impl Embed {
                                 me.view_in_tab(cx);
                             }
                         }))
-                        .child(img(self.path.clone()).absolute().left(px(p.0)).top(px(p.1)).w(px(p.2)).h(px(p.3)).object_fit(ObjectFit::Fill)),
+                        .child(img(source).absolute().left(px(p.0)).top(px(p.1)).w(px(p.2)).h(px(p.3)).object_fit(ObjectFit::Fill)),
                 ),
             )
             .vertical_scrollbar(&scroll)

@@ -159,8 +159,9 @@ const PANE_GAP: f32 = 8.;
 const SHEET_GUTTER: f32 = 32.;
 /// The least the window is dragged to.
 pub const MIN_W: Pixels = px(720.);
-/// How often the vault's changes are looked for.
-const WATCH_POLL: Duration = Duration::from_millis(300);
+/// A burst of the vault's changes, read as one: those that come this long
+/// after the first are read with it.
+const WATCH_GATHER: Duration = Duration::from_millis(300);
 
 /// The vault shown: its folder, its tree as last read, the folders open
 /// in it (the rest are shut), and the watcher that says when to read it
@@ -170,7 +171,6 @@ struct Vault {
     tree: vault::Entry,
     unfolded: HashSet<PathBuf>,
     _watcher: Option<vault::Watcher>,
-    changes: Rc<std::sync::mpsc::Receiver<Vec<PathBuf>>>,
 }
 
 /// An open note, a tab: its file, its own editor (the text, the caret,
@@ -292,6 +292,9 @@ pub struct Shell {
     search_input: Entity<InputState>,
     search_scroll: ScrollHandle,
     search_results: Option<onyx_core::search::Results>,
+    /// The file each size of the person's picture is drawn from, by the
+    /// picture it was found for: two looks at the disk a draw, else.
+    avatar_files: RefCell<HashMap<u32, (String, Option<PathBuf>)>>,
     search_task: Option<Task<()>>,
     /// The find bar over the note, and its field.
     find_open: bool,
@@ -305,6 +308,9 @@ pub struct Shell {
     choice: Choice,
     tree_focus: FocusHandle,
     lit_joins: RefCell<std::collections::HashMap<PathBuf, (bool, bool)>>,
+    /// The rows chosen, as one list every chosen row's drag shares, made
+    /// as the tree is drawn (`TreeDrag`).
+    drag_marked: RefCell<Option<Rc<[PathBuf]>>>,
     /// The sidebar card's view, the vault's assets as it lists them, and
     /// an asset shown over the page.
     side_view: SideView,
@@ -365,6 +371,10 @@ pub struct Shell {
     pub(crate) font_list: Option<(crate::fonts::Slot, usize)>,
     pub(crate) font_families: Option<Rc<crate::fonts::Families>>,
     pub(crate) font_families_reading: bool,
+    /// The font list's rows for the last tile and search asked, kept: they
+    /// were matched against every family of the system at every draw
+    /// while the list is open.
+    pub(crate) font_rows: RefCell<Option<(crate::fonts::Slot, String, usize, Rc<Vec<String>>)>>,
     pub(crate) font_tiles: Rc<RefCell<HashMap<crate::fonts::Slot, Bounds<Pixels>>>>,
     pub(crate) font_scroll: ScrollHandle,
     pub(crate) font_list_box: Rc<Cell<Bounds<Pixels>>>,
@@ -395,10 +405,10 @@ pub(crate) const LIST_TOP: f32 = 6.;
 pub(crate) const ROW_BREATH: f32 = 1.5;
 /// Rows drawn beyond the list's box at either end, so a scroll of a few
 /// rows shows no blank before the next frame.
-const TREE_OVER: f32 = TREE_ROW_H * 6.;
+pub(crate) const TREE_OVER: f32 = TREE_ROW_H * 6.;
 /// Before the list's box has been painted, this much of the tree is
 /// drawn from its top.
-const TREE_FIRST: f32 = 4000.;
+pub(crate) const TREE_FIRST: f32 = 4000.;
 
 /// One piece of the tree as drawn (`Shell::render_tree`).
 enum Piece<'a> {
@@ -436,10 +446,13 @@ impl Shell {
         let ui = UiState::load();
         // Every note with changes is written as the window is left for
         // another app, which may read it next.
+        // Drawn again either way: the caret blinks only in the window in
+        // front (`Editor::active`), and stops or starts here.
         cx.observe_window_activation(window, |this, window, cx| {
             if !window.is_window_active() {
                 this.save_all(cx);
             }
+            cx.notify();
         })
         .detach();
         // The bounds are written as they change, at most every two seconds.
@@ -548,6 +561,7 @@ impl Shell {
             choice: Choice::default(),
             tree_focus: cx.focus_handle(),
             lit_joins: RefCell::new(std::collections::HashMap::new()),
+            drag_marked: RefCell::new(None),
             library: Library::default(),
             side_anim: None,
             sidebar_w: ui.sidebar_w.map(px).unwrap_or(SIDEBAR_W).clamp(SIDEBAR_MIN, SIDEBAR_MAX),
@@ -573,6 +587,7 @@ impl Shell {
             search_input,
             search_scroll: ScrollHandle::new(),
             search_results: None,
+            avatar_files: RefCell::default(),
             search_task: None,
             find_open: false,
             find_input,
@@ -604,6 +619,7 @@ impl Shell {
             font_list: None,
             font_families: None,
             font_families_reading: false,
+            font_rows: RefCell::new(None),
             font_tiles: Rc::default(),
             font_scroll: ScrollHandle::new(),
             font_list_box: Rc::default(),
@@ -729,20 +745,32 @@ impl Shell {
         self.vault.as_ref().map(|v| v.root.as_path())
     }
 
+    /// Every tab goes, as a vault is shown or closed: each one's pictures
+    /// and frames let go of on the GPU too, as a tab closed lets go of its
+    /// own (`close_tab`). Dropped with the tabs alone, they stayed in the
+    /// window's atlas until the app quit.
+    fn let_tabs_go(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        for tab in std::mem::take(&mut self.tabs) {
+            tab.editor.update(cx, |e, cx| e.let_pictures_go(window, cx));
+            Self::let_asset_go(tab.asset, window, cx);
+        }
+    }
+
     fn show_vault(&mut self, root: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         self.save_all(cx);
-        self.tabs.clear();
+        self.let_tabs_go(window, cx);
         self.shown = None;
         self.closed_tabs.clear();
         let (watcher, changes) = self.watch_vault(&root, cx);
         let tree = vault::tree(&root);
+        library::forget_vaults();
         crate::folder_look::ensure(&root, cx);
         // Its folders come shut (at launch, `Shell::new` opens again the ones left open).
-        self.vault = Some(Vault { root: root.clone(), tree, unfolded: HashSet::new(), _watcher: watcher, changes });
+        self.vault = Some(Vault { root: root.clone(), tree, unfolded: HashSet::new(), _watcher: watcher });
         let mut ui = UiState::load();
         ui.remember_vault(&root);
         ui.save_later();
-        self.watch_changes(cx);
+        self.watch_changes(changes, cx);
         self.library = Library::default();
         self.reread_assets(cx);
         self.save_ui(window);
@@ -751,10 +779,10 @@ impl Shell {
     }
 
     /// A watcher on the vault's folder, and where it says what changed.
-    fn watch_vault(&mut self, root: &Path, cx: &mut Context<Self>) -> (Option<vault::Watcher>, Rc<std::sync::mpsc::Receiver<Vec<PathBuf>>>) {
-        let (tx, rx) = std::sync::mpsc::channel::<Vec<PathBuf>>();
+    fn watch_vault(&mut self, root: &Path, cx: &mut Context<Self>) -> (Option<vault::Watcher>, futures::channel::mpsc::UnboundedReceiver<Vec<PathBuf>>) {
+        let (tx, rx) = futures::channel::mpsc::unbounded::<Vec<PathBuf>>();
         let watcher = match vault::watch(root, move |paths| {
-            let _ = tx.send(paths);
+            let _ = tx.unbounded_send(paths);
         }) {
             Ok(w) => Some(w),
             Err(e) => {
@@ -762,7 +790,7 @@ impl Shell {
                 None
             }
         };
-        (watcher, Rc::new(rx))
+        (watcher, rx)
     }
 
     /// The vault's folder takes a new name. The open notes are written
@@ -782,14 +810,14 @@ impl Shell {
         if new == old {
             return;
         }
+        library::forget_vaults();
         let (watcher, changes) = self.watch_vault(&new, cx);
         if let Some(v) = self.vault.as_mut() {
             v.root = new.clone();
             v.tree = vault::tree(&new);
             v._watcher = watcher;
-            v.changes = changes;
         }
-        self.watch_changes(cx);
+        self.watch_changes(changes, cx);
         let mut ui = UiState::load();
         for p in ui.recent_vaults.iter_mut().chain(ui.unfolded.iter_mut()) {
             *p = vault::moved_path(p, &[(old.clone(), new.clone())]);
@@ -799,27 +827,20 @@ impl Shell {
         self.reread_assets(cx);
     }
 
-    /// The vault's changes, looked for every so often; a burst of them is
-    /// one reading of the tree.
-    fn watch_changes(&mut self, cx: &mut Context<Self>) {
-        let Some(rx) = self.vault.as_ref().map(|v| v.changes.clone()) else { return };
+    /// The vault's changes, waited for: the first of a burst wakes the
+    /// task, the rest of it within `WATCH_GATHER` come with it, and they
+    /// are one reading. Nothing wakes while nothing changes, and the task
+    /// ends with its watcher (the vault closed, renamed or another shown).
+    fn watch_changes(&mut self, mut rx: futures::channel::mpsc::UnboundedReceiver<Vec<PathBuf>>, cx: &mut Context<Self>) {
+        use futures::StreamExt as _;
         cx.spawn(async move |this, cx| {
-            loop {
-                cx.background_executor().timer(WATCH_POLL).await;
-                let mut paths: Vec<PathBuf> = Vec::new();
+            while let Some(first) = rx.next().await {
+                cx.background_executor().timer(WATCH_GATHER).await;
+                let mut paths = first;
                 while let Ok(p) = rx.try_recv() {
                     paths.extend(p);
                 }
-                let alive = this
-                    .update(cx, |s, cx| {
-                        let same = s.vault.as_ref().is_some_and(|v| Rc::ptr_eq(&v.changes, &rx));
-                        if same && !paths.is_empty() {
-                            s.disk_changed(&paths, cx);
-                        }
-                        same
-                    })
-                    .unwrap_or(false);
-                if !alive {
+                if this.update(cx, |s, cx| s.disk_changed(&paths, cx)).is_err() {
                     break;
                 }
             }
@@ -837,17 +858,23 @@ impl Shell {
         if !paths.iter().any(|p| Self::change_matters(&root, p)) {
             return;
         }
-        // The open notes the change touched, read again with the tree.
+        // The open notes the change touched, read again with the tree. A
+        // note's own words changed, its own save among them, change no
+        // tree: then the tree is not walked again.
         let touched: Vec<PathBuf> = self.tabs.iter().map(|t| t.path.clone()).filter(|t| paths.iter().any(|p| p == t)).collect();
+        let only_words = self.vault.as_ref().is_some_and(|v| paths.iter().filter(|p| Self::change_matters(&root, p)).all(|p| p.is_file() && v.tree.holds(p)));
+        if only_words && touched.is_empty() {
+            return;
+        }
         let task = cx.background_executor().spawn(async move {
-            let tree = vault::tree(&root);
+            let tree = (!only_words).then(|| vault::tree(&root));
             let texts: Vec<(PathBuf, Option<String>)> = touched.into_iter().map(|p| (p.clone(), vault::read(&p).ok())).collect();
             (tree, texts)
         });
         cx.spawn(async move |this, cx| {
             let (tree, texts) = task.await;
             let _ = this.update(cx, |s, cx| {
-                if let Some(v) = s.vault.as_mut() {
+                if let (Some(v), Some(tree)) = (s.vault.as_mut(), tree) {
                     v.tree = tree;
                 }
                 for (path, text) in texts {
@@ -955,6 +982,7 @@ impl Shell {
         let path = dir.to_string_lossy().to_string();
         self.cfg.app.container = path.clone();
         let _ = Config::edit(move |c| c.app.container = path);
+        library::forget_vaults();
     }
 
     /// A container taken from the system's panel (the page, Settings,
@@ -977,6 +1005,7 @@ impl Shell {
         }
         self.cfg.app.container.clear();
         let _ = Config::edit(|c| c.app.container.clear());
+        library::forget_vaults();
         cx.notify();
     }
 
@@ -985,10 +1014,11 @@ impl Shell {
         self.menus.close(cx);
         self.save_all(cx);
         self.library = Library::default();
-        self.tabs.clear();
+        self.let_tabs_go(window, cx);
         self.shown = None;
         self.closed_tabs.clear();
         self.vault = None;
+        library::forget_vaults();
         let mut ui = UiState::load();
         ui.vault = None;
         ui.note = None;
@@ -1023,6 +1053,7 @@ impl Shell {
         }
         let name = self.vault_input.read(cx).value().to_string();
         let Some(parent) = self.container() else { return };
+        library::forget_vaults();
         match vault::new_vault(&parent, &name) {
             Ok(root) => self.show_vault(root, window, cx),
             Err(e) => {
@@ -2209,7 +2240,12 @@ impl Shell {
         let Some(v) = &self.vault else { return Vec::new() };
         {
             let rows = self.visible_rows();
-            let lit: Vec<bool> = rows.iter().map(|(p, _)| self.row_lit(p)).collect();
+            // The chosen looked up in a set made once, not by a walk of
+            // them for every row: with all of a long tree chosen, that was
+            // rows × rows a frame.
+            let marked: HashSet<&Path> = self.choice.marked.iter().map(PathBuf::as_path).collect();
+            let lit: Vec<bool> = rows.iter().map(|(p, _)| if marked.is_empty() { self.shown.as_deref() == Some(p.as_path()) } else { marked.contains(p.as_path()) }).collect();
+            *self.drag_marked.borrow_mut() = (!self.choice.marked.is_empty()).then(|| Rc::from(self.choice.marked.clone()));
             let mut joins = self.lit_joins.borrow_mut();
             joins.clear();
             for (i, (p, _)) in rows.iter().enumerate() {
@@ -2555,11 +2591,22 @@ impl Shell {
 
     /// The person's picture on a disc, or their initial on the accent.
     pub(crate) fn avatar(&self, size: f32, theme: &gpui_component::Theme) -> Div {
-        let master = PathBuf::from(&self.cfg.app.avatar);
-        let sized = avatar_sized(&master, size as u32);
-        let path = if sized.is_file() { sized } else { master };
+        let found = {
+            let mut files = self.avatar_files.borrow_mut();
+            match files.get(&(size as u32)) {
+                Some((for_, path)) if *for_ == self.cfg.app.avatar => path.clone(),
+                _ => {
+                    let master = PathBuf::from(&self.cfg.app.avatar);
+                    let sized = avatar_sized(&master, size as u32);
+                    let path = if sized.is_file() { sized } else { master };
+                    let path = (!self.cfg.app.avatar.is_empty() && path.is_file()).then_some(path);
+                    files.insert(size as u32, (self.cfg.app.avatar.clone(), path.clone()));
+                    path
+                }
+            }
+        };
         let disc = div().size(px(size)).rounded_full().flex_shrink_0().overflow_hidden();
-        if !self.cfg.app.avatar.is_empty() && path.is_file() {
+        if let Some(path) = found {
             return disc.child(img(path).size(px(size)).rounded_full().object_fit(ObjectFit::Cover));
         }
         let initial = self.user_name.chars().next().map(|c| c.to_uppercase().to_string()).unwrap_or_else(|| "O".into());
@@ -2596,6 +2643,7 @@ impl Shell {
 
     /// Take that file as the picture, or none; the copy kept before goes.
     pub(crate) fn set_avatar(&mut self, path: String, cx: &mut Context<Self>) {
+        self.avatar_files.borrow_mut().clear();
         let old = std::mem::replace(&mut self.cfg.app.avatar, path);
         if !old.is_empty() && old != self.cfg.app.avatar && PathBuf::from(&old).starts_with(onyx_core::paths::root().join("avatar")) {
             let old = PathBuf::from(old);
@@ -2964,7 +3012,10 @@ impl Shell {
         self.scrollers.name_over(&self.search_scroll);
         let theme = cx.theme().clone();
         let focus = self.search_input.read(cx).focus_handle(cx);
-        let results = self.search_results.clone();
+        // Borrowed, not copied: every note found, each with its words,
+        // copied at each draw (the field's caret draws twice a second) to
+        // draw the first 40.
+        let results = self.search_results.as_ref();
         let mut snippet_style = window.text_style();
         snippet_style.font_size = px(11.5).into();
         snippet_style.color = theme.muted_foreground;
@@ -3014,7 +3065,7 @@ impl Shell {
                         v_flex().relative().flex_1().min_h_0().pb(px(8.)).vertical_scrollbar(&self.search_scroll).child(v_flex().id("search-results").flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.search_scroll).px(px(8.)).pt(px(8.)).map(|d| match results {
                             None => d.child(div().p(px(12.)).text_size(px(12.5)).text_color(theme.muted_foreground).child(t("Type to search every note's name and words."))),
                             Some(res) if res.notes.is_empty() => d.child(div().p(px(12.)).text_size(px(12.5)).text_color(theme.muted_foreground).child(t("No matches."))),
-                            Some(res) => d.children(res.notes.into_iter().take(40).enumerate().map(|(i, n)| {
+                            Some(res) => d.children(res.notes.iter().take(40).enumerate().map(|(i, n)| {
                                 let query = res.query.clone();
                                 let path = n.path.clone();
                                 let where_ = if n.folder.is_empty() { crate::i18n::count(n.hits, "{n} hit", "{n} hits") } else { format!("{} · {}", n.folder, crate::i18n::count(n.hits, "{n} hit", "{n} hits")) };
@@ -3039,9 +3090,9 @@ impl Shell {
                                         this.open_found(path.clone(), &query, window, cx);
                                     }))
                                     .child(h_flex().gap(px(8.)).child(div().flex_1().min_w_0().truncate().text_size(px(13.)).font_weight(FontWeight::MEDIUM).child(n.title.clone())).child(div().flex_shrink_0().text_size(px(11.)).text_color(theme.muted_foreground).child(where_)))
-                                    .children(n.snippets.into_iter().map(|sn| {
-                                        let marks: Vec<(std::ops::Range<usize>, HighlightStyle)> = sn.marks.into_iter().map(|r| (r, mark)).collect();
-                                        div().w_full().truncate().child(StyledText::new(sn.text).with_default_highlights(&style, marks))
+                                    .children(n.snippets.iter().map(|sn| {
+                                        let marks: Vec<(std::ops::Range<usize>, HighlightStyle)> = sn.marks.iter().map(|r| (r.clone(), mark)).collect();
+                                        div().w_full().truncate().child(StyledText::new(sn.text.clone()).with_default_highlights(&style, marks))
                                     }))
                             })),
                         })),

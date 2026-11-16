@@ -279,6 +279,8 @@ pub struct Editor {
     analysis: Analysis,
     mode: Mode,
     look: Look,
+    /// Counts the looks set, for the layout's key (`layout_inputs`).
+    look_gen: u64,
     focus: FocusHandle,
     /// Counts the text's readings (`reanalyze`), for `version`.
     version: u64,
@@ -289,6 +291,11 @@ pub struct Editor {
     marked: Option<(Pos, Pos)>,
     blink_at: Instant,
     blinking: bool,
+    /// Whether the editor's window is the one in front, as its last layout
+    /// found it: the caret blinks and shows only there, as the system's
+    /// fields do, so a window behind another app's is not drawn twice a
+    /// second for a caret nobody sees.
+    active: bool,
     focused: bool,
     /// A drag under way: how the press began (a caret, a word, a line),
     /// and the range that press selected.
@@ -385,12 +392,23 @@ impl CaretAt {
 
 impl Editor {
     pub fn new(cx: &mut Context<Self>) -> Self {
+        // Its pictures leave the GPU with it, however its tab went (closed,
+        // the note gone from the disk, the vault shown or closed, the menu
+        // bar note's): what `let_pictures_go` did not let go of already.
+        cx.on_release(|e: &mut Self, cx| {
+            let images: Vec<_> = e.pictures.borrow_mut().drawn.drain().map(|(_, image)| image).collect();
+            if !images.is_empty() {
+                cx.defer(move |cx| images.into_iter().for_each(|image| cx.drop_image(image, None)));
+            }
+        })
+        .detach();
         Self {
             doc: Doc::default(),
             sel: Sel::default(),
             analysis: markdown::analyze(""),
             mode: Mode::Live,
             look: Look::default(),
+            look_gen: 0,
             focus: cx.focus_handle(),
             version: 0,
             scroll: ScrollHandle::new(),
@@ -398,6 +416,7 @@ impl Editor {
             marked: None,
             blink_at: Instant::now(),
             blinking: false,
+            active: true,
             focused: false,
             drag: None,
             pressed_link: None,
@@ -445,6 +464,7 @@ impl Editor {
             pictures.vault = vault;
             pictures.found.clear();
             pictures.found_any.clear();
+            pictures.files = None;
             cx.notify();
         }
     }
@@ -639,6 +659,7 @@ impl Editor {
                 frame.update(cx, |m, cx| m.set_look(look.clone(), cx));
             }
             self.look = look;
+            self.look_gen += 1;
             cx.notify();
         }
     }
@@ -794,6 +815,11 @@ impl Editor {
         if self.locked() { &[] } else { self.writing.shown(&self.doc) }
     }
 
+    /// A count that moves whenever `shown_issues` may have changed.
+    pub(crate) fn issues_gen(&self) -> u64 {
+        self.writing.issues_gen * 2 + self.locked() as u64
+    }
+
     /// After every change: the text read again, numbered lists put
     /// right, the caret shown, the view around told.
     fn after_edit(&mut self, cx: &mut Context<Self>) {
@@ -877,7 +903,7 @@ impl Editor {
                 let go_on = this
                     .update(cx, |e, cx| {
                         cx.notify();
-                        e.focused && e.mode != Mode::Reading
+                        e.focused && e.active && e.mode != Mode::Reading
                     })
                     .unwrap_or(false);
                 if !go_on {
@@ -890,7 +916,14 @@ impl Editor {
     }
 
     fn caret_shown(&self) -> bool {
-        self.revealing() && ((self.blink_at.elapsed().as_millis() / BLINK.as_millis()) % 2 == 0)
+        self.revealing() && self.active && ((self.blink_at.elapsed().as_millis() / BLINK.as_millis()) % 2 == 0)
+    }
+
+    /// Its window went (the menu bar note's, which is made again at each
+    /// opening): nothing draws it to say so, and its caret would blink on
+    /// for no one.
+    pub(crate) fn window_gone(&mut self) {
+        self.active = false;
     }
 
     // -- edits --------------------------------------------------------------
@@ -1585,11 +1618,70 @@ impl Editor {
         self.reader().hidden_on(line)
     }
 
-    /// The whole note laid out at `width`.
+    /// The whole note laid out at `width`. gpui asks for the layout
+    /// several times a frame, and the window is drawn at every blink of the
+    /// caret: asked again with nothing it reads changed, the last stands,
+    /// and the lines are not walked again.
     pub(crate) fn relayout(&mut self, width: f32, window: &mut Window, cx: &mut App) {
+        let inputs = self.layout_inputs(width, cx.theme(), window);
+        if self.cache.borrow().inputs == Some(inputs) {
+            return;
+        }
         let theme = cx.theme().clone();
         let mut cache = self.cache.borrow_mut();
         self.reader().lay_out_note(&mut cache, width, &theme, window);
+        drop(cache);
+        // The sources the layout did not meet go, and the pixels of
+        // pictures the note no longer shows, from the GPU too.
+        let gone = {
+            let mut store = self.pictures.borrow_mut();
+            let met = std::mem::take(&mut store.met);
+            store.found.retain(|src, _| met.contains(src));
+            let shown: std::collections::HashSet<PathBuf> = store.found.values().flatten().cloned().collect();
+            let gone: Vec<PathBuf> = store.drawn.keys().filter(|p| !shown.contains(*p)).cloned().collect();
+            let images: Vec<_> = gone.iter().filter_map(|p| store.drawn.remove(p)).collect();
+            store.met = met;
+            images
+        };
+        for image in gone {
+            cx.drop_image(image, Some(window));
+        }
+        // Recomputed after the pruning, which the key reads.
+        self.cache.borrow_mut().inputs = Some(self.layout_inputs(width, cx.theme(), window));
+    }
+
+    /// The key of everything a whole layout reads: the text and its
+    /// reading (`version`, which moves at every reading), the look, the
+    /// theme's inks it draws with, the width, the mode, the selection while
+    /// its marks show, the marks of the check, the drags of a table's
+    /// columns and a picture's width, the frame being edited, and what the
+    /// note's pictures and frames are known to be.
+    fn layout_inputs(&self, width: f32, theme: &gpui_component::Theme, window: &Window) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut h = std::collections::hash_map::DefaultHasher::new();
+        self.doc.revision.hash(&mut h);
+        self.version.hash(&mut h);
+        self.look_gen.hash(&mut h);
+        width.to_bits().hash(&mut h);
+        window.scale_factor().to_bits().hash(&mut h);
+        (self.mode as u8).hash(&mut h);
+        theme.mode.is_dark().hash(&mut h);
+        for c in [theme.foreground, theme.muted_foreground, theme.primary, theme.link, theme.info, theme.warning, theme.danger] {
+            [c.h, c.s, c.l, c.a].map(f32::to_bits).hash(&mut h);
+        }
+        theme.font_family.hash(&mut h);
+        let reader = self.reader();
+        reader.sel.map(|(a, b)| (a.line, a.col, b.line, b.col)).hash(&mut h);
+        reader.quiet.hash(&mut h);
+        reader.issues.len().hash(&mut h);
+        for i in reader.issues {
+            i.range.hash(&mut h);
+        }
+        self.hold.as_ref().map(|(l, ws)| (*l, ws.iter().map(|w| w.to_bits()).collect::<Vec<_>>())).hash(&mut h);
+        self.pic_hold.map(|(l, w)| (l, w.to_bits())).hash(&mut h);
+        self.editing.hash(&mut h);
+        self.pictures.borrow().fingerprint(&mut h);
+        h.finish()
     }
 
     // -- places on the page -------------------------------------------------
@@ -2298,10 +2390,14 @@ impl Element for EditorElement {
             if now != e.focused {
                 stamp(if now { "editor focus gained" } else { "editor focus lost" });
             }
-            if now && !e.focused {
+            let active = window.is_window_active();
+            // The caret begins again as the keyboard arrives or the window
+            // comes to the front, from its lit half.
+            if now && active && !(e.focused && e.active) {
                 e.kick_blink(cx);
             }
             e.focused = now;
+            e.active = active;
         });
         stamp("editor request_layout");
         let mut style = Style::default();
@@ -2313,7 +2409,13 @@ impl Element for EditorElement {
                 AvailableSpace::Definite(w) => Some(w),
                 _ => None,
             });
-            let width = f32::from(width.unwrap_or(px(600.))).max(80.);
+            // Asked with no width, gpui measures what the editor would take:
+            // the last layout's width answers, never a layout at a stand-in
+            // width that the next call throws away.
+            let width = match width {
+                Some(w) => f32::from(w).max(80.),
+                None => Some(editor.read(cx).cache.borrow().width).filter(|w| *w > 0.).unwrap_or(600.),
+            };
             let started = Instant::now();
             let total = editor.update(cx, |e, cx| {
                 e.relayout(width, window, cx);
@@ -2786,7 +2888,12 @@ impl Editor {
             }
             cx.spawn(async move |this, cx| {
                 let file = path.clone();
-                let image = cx.background_spawn(async move { crate::layout::read_picture(&file) }).await;
+                let image = cx
+                    .background_spawn(async move {
+                        let _turn = crate::layout::DECODING.acquire().await;
+                        crate::layout::read_picture(&file)
+                    })
+                    .await;
                 let _ = this.update(cx, |e, cx| {
                     if let Some(image) = image {
                         e.pictures.borrow_mut().drawn.insert(path, image);

@@ -60,11 +60,17 @@ pub(super) struct Writing {
     language: Option<String>,
     words: Rc<Words>,
     issues: Vec<Issue>,
+    /// Counts the changes of `issues`, for what draws them elsewhere.
+    pub(super) issues_gen: u64,
     issues_for: String,
     serial: u64,
     at_caret: bool,
     /// What each block last held wrong, by its words.
     runs: Arc<Mutex<HashMap<u64, Vec<Issue>>>>,
+    /// What the system's checker last found in each block, by its words,
+    /// for a language other than English: only blocks not seen before go
+    /// to it, where the whole note went at every pause.
+    sys_runs: Arc<Mutex<HashMap<u64, Vec<Issue>>>>,
 }
 
 impl Writing {
@@ -81,6 +87,53 @@ impl Writing {
 /// Whether a run of bytes reads the same in both texts.
 fn same_text(a: &str, b: &str, r: &Range<usize>) -> bool {
     a.as_bytes().get(r.clone()).is_some_and(|x| b.as_bytes().get(r.clone()) == Some(x))
+}
+
+/// The system's spelling of the note's blocks, for a language other than
+/// English: those not seen before go to the checker together, a blank line
+/// between each, and what it finds is kept by each block's words; the rest
+/// are answered from what was kept.
+async fn system_spelling(prose: &[crate::markdown::Prose], kept: &Arc<Mutex<HashMap<u64, Vec<Issue>>>>, language: &str) -> Vec<Issue> {
+    let mut found = Vec::new();
+    let mut fresh: Vec<(usize, u64)> = Vec::new();
+    let mut joined = String::new();
+    let mut at = Vec::new();
+    {
+        let known = kept.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        for (ix, run) in prose.iter().enumerate() {
+            let key = key_of(&run.text, false, false);
+            if known.contains_key(&key) || fresh.iter().any(|(_, k)| *k == key) {
+                continue;
+            }
+            fresh.push((ix, key));
+            at.push(joined.len());
+            joined.push_str(&run.text);
+            joined.push_str("\n\n");
+        }
+    }
+    let read = if joined.trim().is_empty() { Vec::new() } else { crate::sys::spelling(&joined, language).await };
+    let mut known = kept.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut now: HashMap<u64, Vec<Issue>> = HashMap::new();
+    for (n, (ix, key)) in fresh.iter().enumerate() {
+        let (from, len) = (at[n], prose[*ix].text.len());
+        let of_run = read.iter().filter(|i| i.range.start >= from && i.range.end <= from + len).map(|i| {
+            let mut i = i.clone();
+            i.range = i.range.start - from..i.range.end - from;
+            i
+        });
+        now.insert(*key, of_run.collect());
+    }
+    for run in prose {
+        let key = key_of(&run.text, false, false);
+        let issues = now.get(&key).or_else(|| known.get(&key)).cloned().unwrap_or_default();
+        found.extend(issues.iter().cloned().map(|mut i| {
+            i.range = i.range.start + run.start..i.range.end + run.start;
+            i
+        }));
+        now.entry(key).or_insert(issues);
+    }
+    *known = now;
+    found
 }
 
 fn key_of(words: &str, british: bool, sentences: bool) -> u64 {
@@ -100,6 +153,7 @@ impl Editor {
         w.words = words;
         if !same {
             w.runs.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
+            w.sys_runs.lock().unwrap_or_else(std::sync::PoisonError::into_inner).clear();
         }
         self.check_afresh(cx);
     }
@@ -107,6 +161,7 @@ impl Editor {
     /// A text the marks were not made on: they go until it is read.
     pub(super) fn check_afresh(&mut self, cx: &mut Context<Self>) {
         self.writing.issues.clear();
+        self.writing.issues_gen += 1;
         self.writing.issues_for = self.doc.text();
         self.check_soon(cx);
     }
@@ -117,32 +172,41 @@ impl Editor {
         let w = &mut self.writing;
         if w.language.is_some() {
             w.issues = check::carry(&w.issues_for, &new, &w.issues);
+            w.issues_gen += 1;
         }
         w.issues_for = new;
         self.check_soon(cx);
     }
 
+    /// The check a moment after the last change: the text and its reading
+    /// are taken when the moment is up, not at each key, which copied the
+    /// whole note twice a key to throw the copies away at the next.
     fn check_soon(&mut self, cx: &mut Context<Self>) {
         let w = &mut self.writing;
         w.serial += 1;
         let serial = w.serial;
         w.at_caret = false;
-        let text = w.issues_for.clone();
-        let Some(language) = w.language.clone().filter(|_| !text.trim().is_empty() && text.len() <= CHECK_MOST) else {
+        let text = &w.issues_for;
+        if w.language.is_none() || text.trim().is_empty() || text.len() > CHECK_MOST {
             w.issues.clear();
+            w.issues_gen += 1;
             return;
-        };
-        let (analysis, runs) = (self.analysis.clone(), w.runs.clone());
-        let written = text.clone();
+        }
         cx.spawn(async move |this, cx| {
             cx.background_executor().timer(CHECK_AFTER).await;
             let same = |e: &Editor| e.writing.serial == serial;
-            if !this.read_with(cx, |e, _| same(e)).unwrap_or(false) {
+            let Some((language, text, analysis, runs, sys_runs)) = this
+                .read_with(cx, |e, _| same(e).then(|| (e.writing.language.clone(), e.writing.issues_for.clone(), e.analysis.clone(), e.writing.runs.clone(), e.writing.sys_runs.clone())))
+                .ok()
+                .flatten()
+            else {
                 return;
-            }
+            };
+            let Some(language) = language else { return };
+            let written = text.clone();
             let english = check::is_english(&language);
             let british = language == "en-GB";
-            let (mask, found) = cx
+            let (mask, found, prose) = cx
                 .background_spawn(async move {
                     let (mask, prose) = crate::markdown::prose(&text, &analysis);
                     let mut found = Vec::new();
@@ -167,14 +231,15 @@ impl Editor {
                         kept.insert(key, issues);
                     }
                     *known = kept;
-                    (mask, found)
+                    drop(known);
+                    (mask, found, prose)
                 })
                 .await;
             // A rule that read across something blanked read words that
             // are not there: "and `x` and" is no repeated word.
             let mut found: Vec<Issue> = found.into_iter().filter(|i| same_text(&written, &mask, &i.range)).collect();
             if !english {
-                found.extend(crate::sys::spelling(&mask, &language).await);
+                found.extend(system_spelling(&prose, &sys_runs, &language).await);
             }
             let shown = this.update(cx, |e, cx| {
                 if !same(e) {
@@ -182,6 +247,7 @@ impl Editor {
                 }
                 let words = e.writing.words.clone();
                 e.writing.issues = check::keep(&mask, found, &words.all_learned(), &words.ignored);
+                e.writing.issues_gen += 1;
                 cx.notify();
                 true
             });

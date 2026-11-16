@@ -16,6 +16,7 @@ Onyx is held to the bar of the work that wins Awwwards, the Webbys and the FWA (
 - **Words are few.** A row's name says what it is; a line under it only where the name does not say it all. No sentence explaining a concept and no hint in an empty list.
 - **The sidebar and the menu bar note's tree are one design.** They differ only in the vault block's size (`BlockSize`) and the tree's ground, lighter in the menu bar note; each tree starts with the vault's row and the Notes tools at its right, and ends with the vault's block, whose list rises from it. Both are built from `shell/library.rs`'s shared parts (`vault_block`, `vault_root_row`, `notes_tools`, `row_tool`). A change to either is made to both (`docs/window.md`).
 - **No square corner inside a round one.** gpui clips to a rectangle: a lit row, a band or a picture at a rounded card's corner rounds its own corners there (`docs/design.md`, Rules).
+- **A pass of optimization follows every round of changes** (`docs/performance.md`, its log first): from the commit the log's last entry names, what is new is looked at for work done for nothing (a disk read or a copy in a frame, a clock that runs while nothing moves or no one sees, a picture decoded whole or kept), measured before and after, and logged. Nothing a person sees or can do is traded for it.
 - **Look before saying it is done:** in both appearances, in a long language, in a narrow window, and in every state the thing can be in, the empty one first (no container, no vault, no notes, nothing chosen): a control built for its usual state shows its empty one only when someone meets it (`docs/probing.md`).
 
 ## Rules that hold everywhere
@@ -33,6 +34,7 @@ Each is here because breaking it loses data or brings back a fixed bug. The doc 
 - **A scroll gesture, its momentum included, moves only the scroller it began in**, never what the pointer is carried onto. Every scroller that goes up and down names itself to the router as it is drawn (`Scrollers::name`); anything else that takes the wheel (the terminal, the source pane's editor) names where it is and what moves it (`name_own`); a gesture begun over nothing that scrolls moves none. A new one is checked with `flick=` from it onto its neighbor and back (`docs/probing.md`). Every scroller has the toolkit's bar: it stays a second after the last movement, then fades over half a second (`vendor/gpui-component`, `scrollbar.rs`).
 - **A button is `choice_pill`**, a pill with an icon before its word. The toolkit's `Button` is only for an icon alone.
 - **Every word the window shows goes through `i18n::t`** and is in `locales/words.json` in every language; `cargo test -p onyx-app` fails otherwise.
+- **A picture of the vault's is never handed to gpui as a path or as bytes** (the app's own icons and the person's picture, few and small, may be): gpui keeps every picture it decodes, and its copy on the GPU, until the app quits, and every frame of a GIF. One drawn from a file goes through the cache of the view that shows it (`pictures::through`), one Onyx decodes is an `ImageSource::Render`, and whatever showed it lets it go when it goes. (`docs/performance.md`)
 - **A key is drawn on caps** through `key_text`, `kbd_hint` or `tip`, named as the Mac has it and bound as `secondary-<key>`.
 - **Every child process starts through `onyx_core::process::command`**, never `Command::new`; the terminal's shell is the one exception, a pty's child that portable-pty starts (`pty.rs`).
 - **Per-system calls live in `sys.rs`**, each with a body for every system. (`docs/platform.md`)
@@ -47,6 +49,7 @@ Each is here because breaking it loses data or brings back a fixed bug. The doc 
 | `settings.rs`, `look.rs`, `fonts.rs`, `assets.rs`, `themes/onyx.json`, `scripts/icon/`; anything a person sees, new or changed | `docs/design.md`, then the doc of the part it is in |
 | `sys.rs`, `sys/`, `csd.rs`, `update.rs`, `process.rs`, `vendor/`, `Cargo.toml`, `.github/workflows/`, any `cfg` for an OS | `docs/platform.md` |
 | `export.rs`, `onyx-core/src/pdf.rs`, `docx.rs`, `web.rs`, `reading.rs`, `pdf/template.typ`: Export (PDF, image, Word, web page), printing, its sheet, how a note looks on paper | `docs/export.md` |
+| An optimization pass, or anything that runs at every frame, in a row, on a timer or in a loop, or that decodes or keeps a picture | `docs/performance.md`, its log first |
 | Checking a change in the window from a script | `docs/probing.md` |
 | Bumping the version and cutting a release | `docs/release.md` |
 

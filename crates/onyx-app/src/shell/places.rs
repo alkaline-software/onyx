@@ -188,7 +188,6 @@ impl Shell {
         let wash = if theme.mode.is_dark() { lit.opacity(0.08) } else { lit.opacity(0.06) };
         let rows: Vec<AnyElement> = vault_list(self.container().as_deref(), None)
             .into_iter()
-            .filter(|_| self.container().is_some())
             .map(|p| {
                 let name = vault_name(&p);
                 let ink = vault_ink(&p, theme, cx);

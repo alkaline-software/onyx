@@ -10,6 +10,12 @@ name = "Onyx"
 path = "src/main.rs"
 
 [dependencies]
+# A few pictures decoded at a time (`layout::DECODING`), the version gpui
+# already builds.
+async-lock = "3"
+# A GIF played a frame at a time (`pictures.rs`), the version the image
+# crate already builds.
+gif = "0.14"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp", "tiff"] }
 onyx-core = { path = "../onyx-core" }
 anyhow.workspace = true
@@ -66,6 +72,11 @@ objc2-service-management = { version = "0.3", features = ["SMAppService"] }
 resvg = "0.46"
 objc2-foundation = { version = "0.3", features = ["NSData", "NSString", "NSArray", "NSDictionary", "NSUserDefaults", "NSBundle", "NSFileManager", "NSURL", "NSRange", "NSGeometry", "NSOrthography", "NSTextCheckingResult", "NSError"] }
 raw-window-handle = "0.6"
+# A picture decoded at the size it is drawn by the system's ImageIO
+# (`sys::picture_at_most`), at the versions gpui already builds.
+core-foundation = "0.10"
+core-graphics = "0.24"
+foreign-types = "0.5"
 
 # Installers: `cargo packager --release` (cargo-packager) wraps the app for
 # Linux and is the bundle's base on macOS. release.yml passes `--formats`

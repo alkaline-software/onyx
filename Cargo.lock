@@ -7786,10 +7786,15 @@ name = "onyx-app"
 version = "0.5.0"
 dependencies = [
  "anyhow",
+ "async-lock",
  "block2 0.6.2",
  "chrono",
+ "core-foundation 0.10.1",
+ "core-graphics 0.24.0",
  "core-text",
+ "foreign-types",
  "futures",
+ "gif 0.14.2",
  "gpui",
  "gpui-base",
  "gpui-component",

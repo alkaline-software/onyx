@@ -118,6 +118,105 @@ pub const OPEN_FOLDER_LABEL: &str = if cfg!(target_os = "macos") {
 
 /// The Dock icon, for a bare binary run from `target/`. A bundle carries
 /// the same picture as its `.icns`.
+/// A picture's pixels, straight RGBA, no larger than `most` on its longer
+/// side, turned as the file says it is to be shown. On a Mac the system's
+/// ImageIO reads it at that size (a JPEG or HEIC from its smaller scales
+/// of itself), never at its own: a photo of 6000 × 6000 decoded whole is
+/// 145 MB, which the allocator kept long after a square of 100 was cut
+/// from it. Elsewhere it is read whole and made smaller.
+#[cfg(target_os = "macos")]
+pub fn picture_at_most(path: &std::path::Path, most: u32) -> Option<(u32, u32, Vec<u8>)> {
+    picture_io::at_most(path, most).or_else(|| picture_whole(path, most))
+}
+
+#[cfg(not(target_os = "macos"))]
+pub fn picture_at_most(path: &std::path::Path, most: u32) -> Option<(u32, u32, Vec<u8>)> {
+    picture_whole(path, most)
+}
+
+fn picture_whole(path: &std::path::Path, most: u32) -> Option<(u32, u32, Vec<u8>)> {
+    let picture = image::open(path).ok()?;
+    let picture = if picture.width() > most || picture.height() > most { picture.thumbnail(most, most) } else { picture };
+    let rgba = picture.into_rgba8();
+    let (w, h) = rgba.dimensions();
+    Some((w, h, rgba.into_raw()))
+}
+
+#[cfg(target_os = "macos")]
+mod picture_io {
+    use std::ffi::c_void;
+
+    use core_foundation::base::{CFType, TCFType};
+    use core_foundation::boolean::CFBoolean;
+    use core_foundation::dictionary::{CFDictionary, CFDictionaryRef};
+    use core_foundation::number::CFNumber;
+    use core_foundation::string::{CFString, CFStringRef};
+    use core_foundation::url::{CFURL, CFURLRef};
+    use core_graphics::base::{kCGBitmapByteOrder32Big, kCGImageAlphaPremultipliedLast};
+    use core_graphics::color_space::CGColorSpace;
+    use core_graphics::context::CGContext;
+    use core_graphics::geometry::{CGPoint, CGRect, CGSize};
+    use core_graphics::image::CGImage;
+    use foreign_types::ForeignType;
+
+    #[link(name = "ImageIO", kind = "framework")]
+    unsafe extern "C" {
+        fn CGImageSourceCreateWithURL(url: CFURLRef, options: CFDictionaryRef) -> *mut c_void;
+        fn CGImageSourceCreateThumbnailAtIndex(source: *mut c_void, index: usize, options: CFDictionaryRef) -> *mut c_void;
+        static kCGImageSourceThumbnailMaxPixelSize: CFStringRef;
+        static kCGImageSourceCreateThumbnailFromImageAlways: CFStringRef;
+        static kCGImageSourceCreateThumbnailWithTransform: CFStringRef;
+        static kCGImageSourceShouldCache: CFStringRef;
+    }
+
+    #[link(name = "CoreFoundation", kind = "framework")]
+    unsafe extern "C" {
+        fn CFRelease(cf: *mut c_void);
+    }
+
+    pub fn at_most(path: &std::path::Path, most: u32) -> Option<(u32, u32, Vec<u8>)> {
+        let url = CFURL::from_path(path, false)?;
+        // SAFETY: the keys are the framework's own constants; the source and
+        // the picture are released here, the picture through `CGImage`.
+        unsafe {
+            let source = CGImageSourceCreateWithURL(url.as_concrete_TypeRef(), std::ptr::null());
+            if source.is_null() {
+                return None;
+            }
+            let key = |k: CFStringRef| CFString::wrap_under_get_rule(k);
+            let options: CFDictionary<CFString, CFType> = CFDictionary::from_CFType_pairs(&[
+                (key(kCGImageSourceThumbnailMaxPixelSize), CFNumber::from(most.max(1) as i64).as_CFType()),
+                (key(kCGImageSourceCreateThumbnailFromImageAlways), CFBoolean::true_value().as_CFType()),
+                (key(kCGImageSourceCreateThumbnailWithTransform), CFBoolean::true_value().as_CFType()),
+                (key(kCGImageSourceShouldCache), CFBoolean::false_value().as_CFType()),
+            ]);
+            let made = CGImageSourceCreateThumbnailAtIndex(source, 0, options.as_concrete_TypeRef());
+            CFRelease(source);
+            if made.is_null() {
+                return None;
+            }
+            let picture = CGImage::from_ptr(made as _);
+            let (w, h) = (picture.width(), picture.height());
+            if w == 0 || h == 0 {
+                return None;
+            }
+            let mut context = CGContext::create_bitmap_context(None, w, h, 8, w * 4, &CGColorSpace::create_device_rgb(), kCGImageAlphaPremultipliedLast | kCGBitmapByteOrder32Big);
+            context.draw_image(CGRect::new(&CGPoint::new(0., 0.), &CGSize::new(w as f64, h as f64)), &picture);
+            let mut rgba = context.data().to_vec();
+            // Straight alpha, as the image crate gives it and the window takes it.
+            for px in rgba.chunks_exact_mut(4) {
+                let a = px[3] as u32;
+                if a != 0 && a != 255 {
+                    for c in &mut px[..3] {
+                        *c = ((*c as u32 * 255 + a / 2) / a).min(255) as u8;
+                    }
+                }
+            }
+            Some((w as u32, h as u32, rgba))
+        }
+    }
+}
+
 #[cfg(target_os = "macos")]
 pub fn install_dock_icon() {
     use objc2::{AllocAnyThread as _, MainThreadMarker};

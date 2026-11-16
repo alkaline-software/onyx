@@ -819,10 +819,18 @@ impl Shell {
 
     /// The families the list shows for its tile: those the search's words
     /// all find, by either name.
-    fn font_list_rows(&self, cx: &App) -> Vec<String> {
-        let (Some((slot, _)), Some(families)) = (self.font_list, self.font_families.as_ref()) else { return Vec::new() };
+    fn font_list_rows(&self, cx: &App) -> Rc<Vec<String>> {
+        let (Some((slot, _)), Some(families)) = (self.font_list, self.font_families.as_ref()) else { return Rc::default() };
         let query = self.font_query.as_ref().map(|q| q.read(cx).value().to_string()).unwrap_or_default();
-        families.matching(slot, &query)
+        let count = families.of(slot).len();
+        if let Some((s, q, n, rows)) = self.font_rows.borrow().as_ref() {
+            if *s == slot && *q == query && *n == count {
+                return rows.clone();
+            }
+        }
+        let rows = Rc::new(families.matching(slot, &query));
+        *self.font_rows.borrow_mut() = Some((slot, query, count, rows.clone()));
+        rows
     }
 
     /// The list of the system's faces for a tile, its search empty and its

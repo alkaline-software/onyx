@@ -47,7 +47,7 @@ pub fn key_bindings() -> Vec<KeyBinding> {
 /// Rows on their way to a folder: what moves, and how it is named while
 /// it moves.
 #[derive(Clone)]
-pub struct TreeDrag(pub Vec<PathBuf>, pub SharedString);
+pub struct TreeDrag(pub std::rc::Rc<[PathBuf]>, pub SharedString);
 
 impl Render for TreeDrag {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
@@ -367,7 +367,13 @@ impl Shell {
     /// What a drag of a row carries: the rows chosen, when it is one of
     /// them, else the row alone.
     pub(crate) fn drag_of(&self, path: &Path) -> TreeDrag {
-        let items: Vec<PathBuf> = if self.choice.marked.iter().any(|m| m == path) { self.choice.marked.clone() } else { vec![path.to_path_buf()] };
+        // The rows chosen, shared by every chosen row's drag as the tree is
+        // drawn (`render_tree`), not copied for each.
+        let marked = self.drag_marked.borrow().clone();
+        let items: std::rc::Rc<[PathBuf]> = match marked.filter(|m| m.iter().any(|p| p == path)) {
+            Some(marked) => marked,
+            None => std::rc::Rc::from(vec![path.to_path_buf()]),
+        };
         let name: SharedString = if items.len() == 1 { path.file_name().map(|n| vault::title(Path::new(n))).unwrap_or_default().into() } else { crate::i18n::count(items.len(), "{n} item", "{n} items").into() };
         TreeDrag(items, name)
     }
@@ -494,6 +500,6 @@ impl Shell {
     /// A drag let go over a folder (or a note, which means its folder, or
     /// the room around the rows, which means the vault's top).
     pub(crate) fn tree_drop(&mut self, drag: &TreeDrag, into: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        self.move_items(drag.0.clone(), into, window, cx);
+        self.move_items(drag.0.to_vec(), into, window, cx);
     }
 }

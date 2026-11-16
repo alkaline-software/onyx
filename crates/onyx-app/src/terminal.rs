@@ -76,8 +76,11 @@ const LINE_RATIO: f32 = 1.32;
 const WHEEL_ROW: f32 = 15.;
 /// The cursor's half blink.
 const BLINK: Duration = Duration::from_millis(500);
-/// How often a terminal that shows looks for something new on its screen.
-const POLL: Duration = Duration::from_millis(33);
+/// A burst of output is drawn once: the reads that come within this of
+/// the first are drawn with it; and the screen is drawn once more this
+/// long after the last, for what a reflow settles to after it.
+const GATHER: Duration = Duration::from_millis(8);
+const TRAIL: Duration = Duration::from_millis(120);
 /// A drag held past the screen's edge scrolls it this often, by so many
 /// rows a second at the edge, so many more for each pixel further out,
 /// and no more than so many.
@@ -361,6 +364,8 @@ struct TermView {
     blink: ((u16, u16), Instant),
     blink_on: bool,
     focused: bool,
+    /// Whether the window is the one in front: the cursor blinks only there.
+    active: bool,
     /// The link under the pointer.
     link: Option<Link>,
     /// The cell the pointer was last over, column and row.
@@ -463,6 +468,7 @@ impl TermView {
             blink: ((0, 0), Instant::now()),
             blink_on: true,
             focused: false,
+            active: true,
             link: None,
             hover: (u16::MAX, u16::MAX),
             edge: 0.,
@@ -574,6 +580,9 @@ pub(crate) struct TermPanel {
     shown: bool,
     /// The watch that draws the screen again when it changed.
     poll: Option<Task<()>>,
+    /// What each shell rings as it writes, which wakes the watch
+    /// (`watch`): a new bell each time the watch begins.
+    bell: Arc<Mutex<Option<futures::channel::mpsc::UnboundedSender<()>>>>,
     /// The tab left, when, and the swap's number: its screen fades out.
     swap: Option<(u64, Instant, u32)>,
     /// Until when the tab that shows is brought into view in its row.
@@ -624,9 +633,21 @@ const TEXT: f32 = 13.;
 const LINE_SCALE: f32 = 1.15;
 const PAD: (f32, f32) = (15., 8.);
 
+/// The panel goes with its window: its shells go with it. Left, each kept
+/// its program running, its two threads waiting on it, and its screen of
+/// 5000 rows, until the app quit; and the window opened again began new
+/// ones beside them.
+impl Drop for TermPanel {
+    fn drop(&mut self) {
+        for t in &self.shells.tabs {
+            t.pty.kill();
+        }
+    }
+}
+
 impl TermPanel {
     pub(crate) fn new(cwd: PathBuf, cfg: TerminalConfig, mono: SharedString, menu: TermMenu, cx: &mut Context<Self>) -> Self {
-        Self { shells: Shells::default(), view: TermView::new(cx), cwd, cfg, mono, menu, shown: false, poll: None, swap: None, reveal: None, tabs_scroll: ScrollHandle::new(), drag: None, find: None, marked: None }
+        Self { shells: Shells::default(), view: TermView::new(cx), cwd, cfg, mono, menu, shown: false, poll: None, bell: Arc::default(), swap: None, reveal: None, tabs_scroll: ScrollHandle::new(), drag: None, find: None, marked: None }
     }
 
     /// Where the next shell starts: a vault opened since.
@@ -656,28 +677,76 @@ impl TermPanel {
             self.watch(cx);
         } else {
             self.poll = None;
+            *self.bell.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
         }
         cx.notify();
     }
 
     /// While it shows, the screen is drawn again whenever it changed: a
-    /// pty writes from a thread of its own and says nothing to the
-    /// window. The cursor's blink is a draw too, while it has the keyboard.
+    /// shell rings the bell as its thread reads what the program wrote
+    /// (`bell`), and the watch, asleep till then, draws it, a burst once.
+    /// The cursor's blink is a draw too, at its half turns, while it has
+    /// the keyboard in the window in front. Nothing else wakes it: a shell
+    /// that says nothing, or has ended, costs nothing.
     fn watch(&mut self, cx: &mut Context<Self>) {
-        self.poll = Some(cx.spawn(async move |this, cx| loop {
-            cx.background_executor().timer(POLL).await;
-            let on = this.update(cx, |this, cx| {
-                let v = &this.view;
-                let blink = v.focused && this.cfg.cursor_blink && this.blink_on() != v.blink_on;
-                if blink || this.pty().is_some_and(|p| p.quiet_for() < POLL * 4 || !p.alive()) {
-                    cx.notify();
+        use futures::{FutureExt as _, StreamExt as _};
+        let (tx, mut rx) = futures::channel::mpsc::unbounded::<()>();
+        *self.bell.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(tx);
+        self.poll = Some(cx.spawn(async move |this, cx| {
+            let mut trail = false;
+            loop {
+                let Ok((blinks, since)) = this.read_with(cx, |t, _| (t.view.focused && t.view.active && t.cfg.cursor_blink, t.view.blink.1.elapsed())) else { break };
+                let half = Duration::from_millis((BLINK.as_millis() - since.as_millis() % BLINK.as_millis()) as u64 + 1);
+                let wait = match (blinks, trail) {
+                    (true, true) => Some(half.min(TRAIL)),
+                    (true, false) => Some(half),
+                    (false, true) => Some(TRAIL),
+                    (false, false) => None,
+                };
+                let rang = match wait {
+                    Some(wait) => {
+                        let mut timer = cx.background_executor().timer(wait).fuse();
+                        futures::select_biased! {
+                            r = rx.next() => match r { Some(()) => true, None => break },
+                            _ = timer => false,
+                        }
+                    }
+                    None => match rx.next().await {
+                        Some(()) => true,
+                        None => break,
+                    },
+                };
+                if rang {
+                    cx.background_executor().timer(GATHER).await;
+                    while rx.try_recv().is_ok() {}
                 }
-                this.shown
-            });
-            if !on.unwrap_or(false) {
-                break;
+                trail = rang;
+                let on = this.update(cx, |this, cx| {
+                    cx.notify();
+                    this.shown
+                });
+                if !on.unwrap_or(false) {
+                    break;
+                }
             }
         }));
+    }
+
+    /// The bell a new shell rings as it writes.
+    fn ringer(&self) -> Arc<dyn Fn() + Send + Sync> {
+        let bell = self.bell.clone();
+        Arc::new(move || {
+            if let Some(tx) = bell.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() {
+                let _ = tx.unbounded_send(());
+            }
+        })
+    }
+
+    /// The watch woken to look again: the cursor began or stopped blinking.
+    fn ring(&self) {
+        if let Some(tx) = self.bell.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_ref() {
+            let _ = tx.unbounded_send(());
+        }
     }
 
     /// Whether the cursor is in the lit half of its blink: on and off by
@@ -730,7 +799,7 @@ impl TermPanel {
     fn shell_new(&mut self, at: Option<usize>, cx: &mut Context<Self>) {
         let cwd = if self.cwd.is_dir() { self.cwd.clone() } else { onyx_core::paths::home() };
         let (argv, env) = onyx_core::shell_marks::shell_command();
-        let made = Pty::spawn_with(&argv, &env, &cwd.to_string_lossy(), Arc::new(|| {})).inspect(|p| p.reflow_on_resize());
+        let made = Pty::spawn_with(&argv, &env, &cwd.to_string_lossy(), self.ringer()).inspect(|p| p.reflow_on_resize());
         let set = &mut self.shells;
         set.begun = true;
         match made {
@@ -2152,7 +2221,12 @@ impl Render for TermPanel {
         let (ground, ink) = (k.bg, k.fg);
         let focused = self.view.focus.is_focused(window);
         if !leaving {
+            let active = window.is_window_active();
+            if (focused && active) != (self.view.focused && self.view.active) {
+                self.ring();
+            }
             self.view.focused = focused;
+            self.view.active = active;
         }
         // A program that hears the mouse has the arrow, a link the hand.
         let grabbed = shown.as_ref().is_ok_and(|p| p.alive() && p.mouse().is_some()) && self.view.back == 0;
@@ -2168,7 +2242,7 @@ impl Render for TermPanel {
                 };
                 // The find card's matches on the rows in sight, looked for
                 // again while the screen changes.
-                if self.find.as_ref().is_some_and(|f| f.open && f.looked.elapsed() > Duration::from_millis(300)) && pty.quiet_for() < POLL * 4 {
+                if self.find.as_ref().is_some_and(|f| f.open && f.looked.elapsed() > Duration::from_millis(300)) && pty.quiet_for() < TRAIL {
                     self.find_run(false, cx);
                 }
                 let mut found: Vec<Vec<(usize, usize, bool)>> = vec![Vec::new(); rows.len()];

@@ -92,9 +92,17 @@ fn writer() -> &'static Writer {
         std::thread::Builder::new()
             .name("ui-state".into())
             .spawn(move || {
-                for (state, done) in rx {
-                    state.write();
-                    if let Some(done) = done {
+                // A save behind which newer ones wait is passed over: only
+                // the newest is written, and everyone waiting hears it.
+                while let Ok(first) = rx.recv() {
+                    let mut newest = first;
+                    let mut waiting = Vec::new();
+                    while let Ok(next) = rx.try_recv() {
+                        waiting.extend(newest.1.take());
+                        newest = next;
+                    }
+                    newest.0.write();
+                    for done in waiting.into_iter().chain(newest.1) {
                         let _ = done.send(());
                     }
                 }
@@ -150,6 +158,7 @@ impl UiState {
 
     /// A vault shown: first among the recent ones.
     pub fn remember_vault(&mut self, vault: &std::path::Path) {
+        crate::shell::library::forget_vaults();
         self.recent_vaults.retain(|v| v != vault);
         self.recent_vaults.insert(0, vault.to_path_buf());
         self.recent_vaults.truncate(RECENT);

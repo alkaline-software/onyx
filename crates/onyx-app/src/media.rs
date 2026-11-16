@@ -118,6 +118,8 @@ pub struct Player {
     view: std::rc::Rc<wry::WebView>,
     placed: std::rc::Rc<std::cell::Cell<Option<Bounds<Pixels>>>>,
     shown: bool,
+    /// Whether the window has been told of it once (`first_sync`).
+    synced: bool,
 }
 
 impl Player {
@@ -176,7 +178,7 @@ impl Player {
             .with_url(page)
             .build_as_child(window)
             .ok()?;
-        Some(Player { view: std::rc::Rc::new(view), placed: Default::default(), shown: false })
+        Some(Player { view: std::rc::Rc::new(view), placed: Default::default(), shown: false, synced: false })
     }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
@@ -210,12 +212,21 @@ impl Player {
     }
 
     /// Shown, or put out of sight while the window draws over it.
-    pub fn show(&mut self, shown: bool) {
+    /// True the first time it is asked, and never again: a player just
+    /// made hands the keyboard back to the window once, as one hidden does.
+    pub fn first_sync(&mut self) -> bool {
+        !std::mem::replace(&mut self.synced, true)
+    }
+
+    /// Shown or hidden; whether that changed it.
+    pub fn show(&mut self, shown: bool) -> bool {
         if self.shown != shown {
             self.shown = shown;
             #[cfg(any(target_os = "macos", target_os = "windows"))]
             let _ = self.view.set_visible(shown);
+            return true;
         }
+        false
     }
 
     /// How far the player has read its file: its ready state, its

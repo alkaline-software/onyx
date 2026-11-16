@@ -31,6 +31,10 @@ pub(crate) struct SourcePane {
     synced: u64,
     /// The editor's spelling marks under the pane's words.
     marks: Option<TextDecorationCollection>,
+    /// What the marks were last made from: the text's version, and the
+    /// note's marks as they stood. The pane is told of every change of
+    /// the note's editor, a blink of its caret among them.
+    marks_for: Option<(u64, u64)>,
     menu: MenuAt,
     /// Where the pane was last laid out, for the scroll router.
     bounds: Rc<std::cell::Cell<gpui::Bounds<Pixels>>>,
@@ -62,7 +66,7 @@ impl SourcePane {
         }));
         // What the note's editor changed comes here, and its marks.
         subs.push(cx.observe_in(editor, window, |me: &mut Self, _, window, cx| me.from_note(window, cx)));
-        let mut me = Self { state, editor: editor.downgrade(), look, synced, marks: None, menu, bounds: Rc::default(), _subs: subs };
+        let mut me = Self { state, editor: editor.downgrade(), look, synced, marks: None, marks_for: None, menu, bounds: Rc::default(), _subs: subs };
         me.set_marks(cx);
         me
     }
@@ -116,6 +120,14 @@ impl SourcePane {
     /// blue for the grammar, as the note draws them.
     fn set_marks(&mut self, cx: &mut Context<Self>) {
         let Some(editor) = self.editor.upgrade() else { return };
+        let key = {
+            let e = editor.read(cx);
+            (e.version(), e.issues_gen())
+        };
+        if self.marks_for == Some(key) && key.0 == self.synced {
+            return;
+        }
+        self.marks_for = Some(key);
         let (danger, info) = (cx.theme().danger, cx.theme().info);
         let marks: Vec<TextDecoration> = {
             let e = editor.read(cx);

@@ -6,9 +6,9 @@
 //! the note holds the link alone, and a card with no network shows the
 //! link's words and its site.
 
-use std::collections::hash_map::DefaultHasher;
-use std::hash::{Hash, Hasher};
+use std::collections::HashMap;
 use std::io::Read;
+use std::sync::{Arc, Mutex};
 use std::path::PathBuf;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -19,6 +19,13 @@ use crate::paths;
 
 /// How long a card's reading is kept before it is read again.
 const KEEP: Duration = Duration::from_secs(7 * 24 * 3600);
+/// How long a page that could not be reached is let be before it is
+/// tried again: tried at every opening of every note that shows it, each
+/// try waited up to 20 seconds on a thread.
+const KEEP_FAILED: Duration = Duration::from_secs(3600);
+/// A card's files not written for this long are let go at launch: a
+/// card shown is read again every `KEEP`, so its files are never this old.
+const FORGET: Duration = Duration::from_secs(60 * 24 * 3600);
 /// The most of a page read for its head, of a picture, of an icon.
 const PAGE_MOST: u64 = 1 << 20;
 const PICTURE_MOST: u64 = 6 << 20;
@@ -35,12 +42,17 @@ pub struct LinkCard {
     pub image: Option<PathBuf>,
     /// When it was read, in seconds since 1970.
     pub read: u64,
+    /// The page could not be reached when it was last tried: a card
+    /// shows the link's words and its site, as with no network.
+    #[serde(default)]
+    pub failed: bool,
 }
 
 impl LinkCard {
     /// Read long enough ago to be read again.
     pub fn stale(&self) -> bool {
-        now().saturating_sub(self.read) > KEEP.as_secs()
+        let keep = if self.failed { KEEP_FAILED } else { KEEP };
+        now().saturating_sub(self.read) > keep.as_secs()
     }
 }
 
@@ -62,10 +74,25 @@ fn folder() -> PathBuf {
     paths::cache_dir().join("links")
 }
 
+/// A link's name in the cache: FNV-1a of its words, which stays the same
+/// from one build to the next, as the standard library's hasher is not
+/// promised to.
 fn key(url: &str) -> String {
-    let mut h = DefaultHasher::new();
-    url.hash(&mut h);
-    format!("{:016x}", h.finish())
+    let h = url.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| (h ^ u64::from(b)).wrapping_mul(0x0100_0000_01b3));
+    format!("{h:016x}")
+}
+
+/// The cards' files not written for `FORGET`, let go of. Run once a
+/// launch, off the window's thread.
+pub fn prune() {
+    let Ok(entries) = std::fs::read_dir(folder()) else { return };
+    let now = SystemTime::now();
+    for e in entries.flatten() {
+        let old = e.metadata().and_then(|m| m.modified()).ok().and_then(|m| now.duration_since(m).ok()).is_some_and(|age| age > FORGET);
+        if old {
+            let _ = std::fs::remove_file(e.path());
+        }
+    }
 }
 
 /// The site a link is on, as a card names it: its host without `www.`.
@@ -106,8 +133,38 @@ fn get(agent: &ureq::Agent, link: &str, most: u64) -> Result<(String, Vec<u8>), 
 /// picture fetched beside it, and kept. What could not be read stays
 /// out; a page that cannot be reached at all is an error.
 pub fn fetch(link: &str) -> Result<LinkCard, String> {
+    // One reading of a link at a time: two cards of it, or two notes,
+    // wait for the first and take what it kept.
+    static READING: Mutex<Option<HashMap<String, Arc<Mutex<()>>>>> = Mutex::new(None);
+    let turn = READING.lock().unwrap_or_else(std::sync::PoisonError::into_inner).get_or_insert_with(HashMap::new).entry(link.to_string()).or_default().clone();
+    let held = turn.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let result = match cached(link).filter(|k| !k.stale()) {
+        Some(k) if !k.failed => Ok(k),
+        Some(_) => Err("the page could not be reached".to_string()),
+        None => read(link),
+    };
+    drop(held);
+    if let Some(map) = READING.lock().unwrap_or_else(std::sync::PoisonError::into_inner).as_mut() {
+        if Arc::strong_count(&turn) <= 2 {
+            map.remove(link);
+        }
+    }
+    result
+}
+
+fn read(link: &str) -> Result<LinkCard, String> {
     let agent = agent();
-    let (at, bytes) = get(&agent, link, PAGE_MOST)?;
+    let (at, bytes) = match get(&agent, link, PAGE_MOST) {
+        Ok(got) => got,
+        Err(e) => {
+            // Said so in the cache, so it is not tried again at once.
+            let failed = LinkCard { url: link.to_string(), read: now(), failed: true, ..Default::default() };
+            if let (Ok(v), Ok(())) = (serde_json::to_value(&failed), std::fs::create_dir_all(folder())) {
+                let _ = paths::write_json(&folder().join(format!("{}.json", key(link))), &v);
+            }
+            return Err(e);
+        }
+    };
     let base = url::Url::parse(&at).map_err(|e| e.to_string())?;
     let head = read_head(&String::from_utf8_lossy(&bytes), &base);
     let dir = folder();
@@ -123,7 +180,7 @@ pub fn fetch(link: &str) -> Result<LinkCard, String> {
     };
     let image = keep(&head.image, "image", PICTURE_MOST);
     let icon = keep(&head.icon, "icon", ICON_MOST).or_else(|| keep(&base.join("/favicon.ico").ok().map(|u| u.to_string()), "icon", ICON_MOST));
-    let card = LinkCard { url: link.to_string(), title: head.title, description: head.description, site: head.site, icon, image, read: now() };
+    let card = LinkCard { url: link.to_string(), title: head.title, description: head.description, site: head.site, icon, image, read: now(), failed: false };
     if let Ok(v) = serde_json::to_value(&card) {
         let _ = paths::write_json(&dir.join(format!("{name}.json")), &v);
     }

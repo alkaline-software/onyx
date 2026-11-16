@@ -22,6 +22,7 @@ mod media;
 mod menu;
 mod menubar;
 mod note_menu;
+mod pictures;
 mod scroll;
 mod settings;
 mod shell;
@@ -431,6 +432,8 @@ fn main() {
         gpui_component::tooltip::set_label(|text, window, cx| widgets::tip(text, window, cx));
         sys::install_dock_icon();
         sys::warm_icloud();
+        // Link cards not shown for two months let go of, off the window's thread.
+        let _ = std::thread::Builder::new().name("link cards".into()).spawn(onyx_core::link_card::prune);
         let cfg = Config::load();
         i18n::set(&i18n::chosen(&cfg.app.language));
         fonts::install(cx);

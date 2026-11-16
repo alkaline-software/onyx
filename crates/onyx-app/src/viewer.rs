@@ -32,6 +32,9 @@ pub(crate) struct Viewer {
     closing: Option<Instant>,
     /// When ← or → last brought a picture, which fades in.
     turned: Option<Instant>,
+    /// A picture the canvas has not read, decoded by the viewer and let go
+    /// of with it, not kept by gpui (`pictures.rs`).
+    kept: Entity<crate::pictures::Kept>,
 }
 
 fn eased(since: Instant) -> f32 {
@@ -47,7 +50,8 @@ impl Shell {
     /// The viewer over the window. It takes the keyboard as it is drawn.
     pub(crate) fn open_viewer(&mut self, viewing: &Viewing, cx: &mut Context<Self>) {
         let pictures = viewing.pictures.iter().map(|s| Seen { path: s.path.clone(), size: s.size, drawn: s.drawn.clone() }).collect();
-        self.viewer = Some(Viewer { pictures, at: viewing.at, first: viewing.at, from: viewing.from, opened: Instant::now(), closing: None, turned: None });
+        let kept = crate::pictures::Kept::new(cx);
+        self.viewer = Some(Viewer { pictures, at: viewing.at, first: viewing.at, from: viewing.from, opened: Instant::now(), closing: None, turned: None, kept });
         cx.notify();
     }
 
@@ -120,7 +124,7 @@ impl Shell {
         };
         let source: ImageSource = match &seen.drawn {
             Some(image) => ImageSource::Render(image.clone()),
-            None => seen.path.clone().into(),
+            None => crate::pictures::through(&v.kept, ImageSource::Resource(Resource::Path(seen.path.clone().into())), 0),
         };
         let count = v.pictures.len();
         let at = v.at;

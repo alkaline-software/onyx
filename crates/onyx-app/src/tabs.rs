@@ -294,6 +294,11 @@ impl Tabs {
         }
         self.shift.retain(|_, s| !s.done());
         self.pill_shift.retain(|_, s| !s.done());
+        // The widths of titles no tab has now (a tab closed, a note
+        // renamed) go once they outnumber the tabs.
+        if self.fit.len() > items.len() * 2 + 16 {
+            self.fit.retain(|title, _| items.iter().any(|i| i.title == *title));
+        }
         if self.pill_shift.is_empty() {
             self.pill_top = None;
         }
