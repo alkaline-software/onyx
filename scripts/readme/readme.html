@@ -18,15 +18,17 @@
 // beside a mono one. Onyx's story: a note picked in the sidebar opens in a
 // tab; markdown typed in it is drawn as it reads, a heading's and a bold
 // word's marks hidden once the caret leaves them; a task's box ticked; the
-// source opened beside the note from the strip's left button. Laid out in a
-// 1920 by 1008 box and drawn at the canvas's size. `frame(i)` draws frame i
-// at FPS and returns it as a PNG; `ready` waits for the faces and the icon.
-// scripts/make-readme-gif.sh renders every frame and makes the GIF.
+// source opened beside the note from the strip's left button; then the note
+// in the menu bar, opened from its item, another note picked in its tree and
+// written in, and shut again. Laid out in a 1920 by 1008 box and drawn at the
+// canvas's size. `frame(i)` draws frame i at FPS and returns it as a PNG;
+// `ready` waits for the faces and the icon. scripts/make-readme-gif.sh
+// renders every frame and makes the GIF.
 
-const FPS = 30, LENGTH = 14;   // seconds, looped
+const FPS = 30, LENGTH = 18;   // seconds, looped
 const W = 1920, H = 1008;
 const PAPER = '#F3F1EA', SHEET = '#F8F6F0', INK = '#1F1E1D', MUTED = '#77746B', LINE = '#8E8A80';
-const TEAL = '#277580', GRAPHITE = '#3D3A36', MAUVE = '#986EA2', OCHRE = '#9E793D';
+const TEAL = '#277580', GRAPHITE = '#3D3A36';
 const SERIF = '"Source Serif 4", "Source Serif Pro", Georgia, serif';
 const MONO = '"JetBrains Mono", Menlo, monospace';
 const NAME = 'Optima, "Avenir Next", "Source Serif 4", serif';
@@ -62,37 +64,53 @@ const clamp01 = v => Math.min(1, Math.max(0, v));
 const span = (t, t0, d) => clamp01((t - t0) / d);
 const mix = (a, b, k) => a + (b - a) * k;
 const mixP = (a, b, k) => ({ x: mix(a.x, b.x, k), y: mix(a.y, b.y, k) });
+const P = (x, y) => ({ x, y });
 
 // ---------------------------------------------------------------------------
-// The window: the sidebar on the frame, the card with its strip, the path
-// bar and the note's sheet.
+// Where everything stands: the Mac's menu bar over the stage, the window
+// under it (the sidebar on the frame, the card with its strip, the path bar
+// and the note's sheet), and the menu bar note hung from Onyx's item.
 // ---------------------------------------------------------------------------
-const WIN = { x: 86, y: 322, w: 1180, h: 610, r: 22 };
-const SIDE = 270;
+const BAR = { x: 86, y: 278, w: 1180, h: 34 };
+const ITEM = P(1094, BAR.y + BAR.h / 2);
+const WIN = { x: 86, y: 328, w: 1180, h: 618, r: 22 };
+const SIDE = 290;
+const SC = { x: WIN.x + 12, y: WIN.y + 58, w: SIDE - 24, h: 398 };        // the vault's card
+const VB = { x: WIN.x + 12, y: WIN.y + 468, w: SIDE - 24, h: 52 };        // the vault's block
 const CARD = { x: WIN.x + SIDE, y: WIN.y + 10, w: WIN.w - SIDE - 10, h: WIN.h - 20 };
-const STRIP = 50, PATH = 36;
+const STRIP = 52, PATH = 38;
 const PAGE = { x: CARD.x + 16, y: CARD.y + STRIP + PATH, w: CARD.w - 32, h: CARD.h - STRIP - PATH - 16 };
 const SOURCE_BTN = { x: CARD.x + 14, y: CARD.y + 12, w: 28, h: 28 };
 const TERM_BTN = { x: CARD.x + CARD.w - 42, y: CARD.y + 12, w: 28, h: 28 };
+const TIP = P(ITEM.x, BAR.y + BAR.h + 4);
+const POP = { x: 658, y: TIP.y + 12, w: 600, h: 470, r: 16 };
+const POP_TREE = 172, POP_HEAD = 50;
 
 // The script, in seconds. Every part's state is worked out from it for any
 // moment, so a frame can be drawn on its own.
 const T = {
-  pick: 1.2,                       // Plans picked in the tree
-  heading: 2.5, headingEnd: 3.9, newline1: 4.3,     // "## This week" typed, then ↩
-  bold: 4.8, boldEnd: 6.6, newline2: 7.0,           // "Ship the **picture**" typed, then ↩
-  tick: 8.1,                       // the task's box
-  sourceOn: 9.2, sourceOff: 10.9,  // the source beside the note
-  dip: 12.2,                       // the window's insides fade out, and in as they began
+  pick: 1.2,                                        // Plans picked in the tree
+  heading: 2.4, headingEnd: 3.6, newline1: 4.0,     // "## This week" typed, then ↩
+  bold: 4.4, boldEnd: 6.0, newline2: 6.4,           // "Ship the **picture**" typed, then ↩
+  tick: 7.4,                                        // the task's box
+  sourceOn: 8.4, sourceOff: 9.9,                    // the source beside the note
+  itemOn: 11.2,                                     // the menu bar note, from its item
+  menuPick: 12.4,                                   // Ideas picked in its tree
+  menuType: 13.0, menuTypeEnd: 14.3, menuNewline: 14.7,  // "Buy **flowers**" typed, then ↩
+  itemOff: 15.5,                                    // shut from its item
+  dip: 16.7,                                        // the window's insides fade out, and in as they began
 };
-const SLIDE = 0.24, DIP = 0.35, BACK = 0.45;
-const HEADING = '## This week', BOLD = 'Ship the **picture**';
+const SLIDE = 0.24, DIP = 0.35, BACK = 0.45, COME = 0.2, GO = 0.15;
+const HEADING = '## This week', BOLD = 'Ship the **picture**', FLOWERS = 'Buy **flowers**';
 
-const picked = t => t < T.dip + DIP ? QUINT(span(t, T.pick, 0.22)) : 0;
+const until = t => t < T.dip + DIP;
+const picked = t => until(t) ? QUINT(span(t, T.pick, 0.22)) : 0;
 const typed = (t, from, to, text) => text.slice(0, Math.round(text.length * span(t, from, to - from)));
-const ticked = t => t < T.dip + DIP ? QUINT(span(t, T.tick, 0.2)) : 0;
+const ticked = t => until(t) ? QUINT(span(t, T.tick, 0.2)) : 0;
 const source = t => t < T.sourceOn ? 0 : t < T.sourceOff ? QUINT(span(t, T.sourceOn, SLIDE)) : 1 - QUINT(span(t, T.sourceOff, SLIDE));
 const inside = t => t < T.dip ? 1 : t < T.dip + DIP ? 1 - span(t, T.dip, DIP) : span(t, T.dip + DIP, BACK);
+const shown = t => t < T.itemOn ? 0 : t < T.itemOff ? QUINT(span(t, T.itemOn, COME)) : 1 - span(t, T.itemOff, GO);
+const menuPicked = t => until(t) ? QUINT(span(t, T.menuPick, 0.22)) : 0;
 // Where the caret is: on the line being typed, then the next.
 function caretLine(t) {
   if (t < T.heading) return -1;
@@ -103,15 +121,18 @@ function caretLine(t) {
 }
 
 // The tree's rows, and the one picked.
-const TREE = [['Journal', 'folder'], ['Ideas', 'note'], ['Plans', 'note'], ['Reading', 'note'], ['Recipes', 'folder'], ['Travel', 'note']];
-const rowY = i => WIN.y + 238 + i * 38;
+const TREE = [['Journal', 'folder'], ['Recipes', 'folder'], ['Ideas', 'note'], ['Plans', 'note'], ['Reading', 'note'], ['Travel', 'note']];
+const rowY = i => SC.y + 124 + i * 36;
+const popRowY = i => POP.y + 110 + i * 29;
 
-const P = (x, y) => ({ x, y });
-const REST = P(1296, 948), PLANS = P(WIN.x + 96, rowY(2) - 4);
+const REST = P(1300, 962), PLANS = P(SC.x + 66, rowY(3) + 2);
 const STOPS = [
-  [0, REST], [0.5, REST], [1.1, PLANS], [1.6, PLANS], [2.3, P(1110, 840)], [7.3, P(1110, 840)],
-  [8.0, P(PAGE.x + 96, 0)], [8.6, P(PAGE.x + 96, 0)], [9.1, P(SOURCE_BTN.x + 16, SOURCE_BTN.y + 16)],
-  [10.95, P(SOURCE_BTN.x + 16, SOURCE_BTN.y + 16)], [11.7, REST], [LENGTH, REST],
+  [0, REST], [0.5, REST], [1.1, PLANS], [1.6, PLANS], [2.2, P(1110, 880)], [6.7, P(1110, 880)],
+  [7.3, P(0, 0)], [7.8, P(0, 0)], [8.3, P(SOURCE_BTN.x + 16, SOURCE_BTN.y + 16)],
+  [9.95, P(SOURCE_BTN.x + 16, SOURCE_BTN.y + 16)], [11.05, P(ITEM.x + 2, ITEM.y + 2)], [11.6, P(ITEM.x + 2, ITEM.y + 2)],
+  [12.3, P(POP.x + 52, popRowY(2) + 2)], [12.7, P(POP.x + 52, popRowY(2) + 2)], [13.0, P(POP.x + 470, POP.y + 400)],
+  [14.8, P(POP.x + 470, POP.y + 400)], [15.4, P(ITEM.x + 2, ITEM.y + 2)], [15.75, P(ITEM.x + 2, ITEM.y + 2)],
+  [16.5, REST], [LENGTH, REST],
 ];
 function pointer(t) {
   for (let i = 1; i < STOPS.length; i++) {
@@ -120,14 +141,15 @@ function pointer(t) {
   }
   return STOPS[STOPS.length - 1][1];
 }
-const CLICKS = [T.pick, T.tick, T.sourceOn, T.sourceOff];
+const CLICKS = [T.pick, T.tick, T.sourceOn, T.sourceOff, T.itemOn, T.menuPick, T.itemOff];
 const pressing = t => CLICKS.some(c => t >= c - 0.1 && t < c + 0.06);
 
 const ROWS = [
   { word: 'a note', says: 'opens in a tab', on: [T.pick - 0.3, T.pick + 1.0] },
   { word: '## and **', says: 'drawn as it reads, as you type', on: [T.heading, T.newline2 + 0.5] },
-  { word: 'a box', says: 'the task is done', on: [T.tick - 0.3, T.tick + 0.9] },
+  { word: 'a box', says: 'the task is done', on: [T.tick - 0.3, T.tick + 0.7] },
   { word: 'the source', says: 'the file as written, beside it', on: [T.sourceOn - 0.2, T.sourceOff + 0.2] },
+  { word: 'the menu bar', says: 'any note, from any app', on: [T.itemOn - 0.3, T.itemOff + 0.2] },
 ];
 
 // ---------------------------------------------------------------------------
@@ -148,96 +170,206 @@ function hair(x1, y1, x2, y2, color, w = 1.6) {
   ctx.beginPath(); ctx.moveTo(x1, y1); ctx.lineTo(x2, y2); ctx.stroke();
 }
 function dot(x, y, r, color) { ctx.fillStyle = color; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill(); }
+function ring(x, y, r, color, w = 1.5) { ctx.strokeStyle = color; ctx.lineWidth = w; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.stroke(); }
 function words(text, x, y, font, color, align = 'left') {
   ctx.font = font; ctx.fillStyle = color; ctx.textAlign = align; ctx.textBaseline = 'alphabetic';
   ctx.fillText(text, x, y); ctx.textAlign = 'left';
   return ctx.measureText(text).width;
 }
 function width(text, font) { ctx.font = font; return ctx.measureText(text).width; }
-
-function header() {
-  if (icon.complete && icon.naturalWidth) ctx.drawImage(icon, 78, 66, 84, 84);
-  words('Onyx', 182, 128, `400 54px ${SERIF}`, INK);
-  words('for macOS', W - 86, 120, `400 30px ${MONO}`, TEAL, 'right');
-  words('Notes that read as you write', 82, 262, `600 84px ${SERIF}`, INK);
+function outline(points, color, w = 1.5) {
+  ctx.strokeStyle = color; ctx.lineWidth = w; ctx.lineJoin = 'round';
+  ctx.beginPath(); points.forEach(([x, y], i) => i ? ctx.lineTo(x, y) : ctx.moveTo(x, y)); ctx.closePath(); ctx.stroke();
 }
 
+// The icons, in hairlines: a folder, a page, a picture, the tree's tools.
+function folderIcon(x, y, w, h, c) {
+  outline([[x, y + h], [x, y], [x + w * 0.38, y], [x + w * 0.5, y + h * 0.22], [x + w, y + h * 0.22], [x + w, y + h]], c);
+}
+function pageIcon(x, y, w, h, c) { outline([[x, y], [x + w * 0.62, y], [x + w, y + h * 0.3], [x + w, y + h], [x, y + h]], c); }
+function pictureIcon(x, y, w, h, c) {
+  rr(x, y, w, h, 2.5); ctx.strokeStyle = c; ctx.lineWidth = 1.5; ctx.stroke();
+  hair(x + 2, y + h - 3, x + w * 0.4, y + h * 0.45, c, 1.4); hair(x + w * 0.4, y + h * 0.45, x + w - 2, y + h - 3, c, 1.4);
+}
+function chevron(x, y, c, s = 4) { hair(x, y - s, x + s, y, c, 1.5); hair(x + s, y, x, y + s, c, 1.5); }
+function plus(x, y, r, c) { hair(x - r, y, x + r, y, c, 1.5); hair(x, y - r, x, y + r, c, 1.5); }
+// Collapse All Folders, New Note and New Folder, from the right edge in.
+function tools(right, y, s, c) {
+  const g = s * 1.55;
+  folderIcon(right - s, y - s * 0.4, s, s * 0.8, c); plus(right - s * 0.1, y + s * 0.3, s * 0.22, c);
+  pageIcon(right - s - g, y - s * 0.5, s * 0.75, s, c); plus(right - g - s * 0.22, y + s * 0.3, s * 0.22, c);
+  rr(right - s - 2 * g, y - s * 0.45, s * 0.8, s * 0.8, 2.5); ctx.strokeStyle = c; ctx.lineWidth = 1.5; ctx.stroke();
+  hair(right - s - 2 * g + s * 0.22, y - s * 0.05, right - s - 2 * g + s * 0.58, y - s * 0.05, c, 1.4);
+}
+// A vault's deck: its letter on a card with one behind it.
+function deck(x, y, s, letter) {
+  rr(x + s * 0.18, y - s * 0.12, s, s, s * 0.28); ctx.fillStyle = hex(LINE, 0.16); ctx.fill();
+  rr(x, y, s, s, s * 0.28); ctx.fillStyle = hex(LINE, 0.26); ctx.fill();
+  words(letter, x + s / 2, y + s * 0.74, `600 ${Math.round(s * 0.55)}px ${SERIF}`, MUTED, 'center');
+}
+
+function header() {
+  if (icon.complete && icon.naturalWidth) ctx.drawImage(icon, 78, 60, 84, 84);
+  words('Onyx', 182, 122, `400 54px ${SERIF}`, INK);
+  words('for macOS', W - 86, 114, `400 30px ${MONO}`, TEAL, 'right');
+  words('Notes that read as you write', 82, 244, `600 84px ${SERIF}`, INK);
+}
+
+// The Mac's menu bar over the stage, with Onyx's item lit while its note is
+// out.
+function menuBar(t) {
+  rr(BAR.x, BAR.y, BAR.w, BAR.h, 10); ctx.fillStyle = hex(GRAPHITE, 0.05); ctx.fill();
+  ctx.strokeStyle = hex(LINE, 0.55); ctx.lineWidth = 1.4; ctx.stroke();
+  const y = BAR.y + 23;
+  let x = BAR.x + 22;
+  x += words('Onyx', x, y, `600 17px ${SERIF}`, INK) + 22;
+  for (const name of ['File', 'Edit', 'View', 'Window']) x += words(name, x, y, `400 17px ${SERIF}`, MUTED) + 20;
+  words('Mon 9:41', BAR.x + BAR.w - 16, y - 1, `400 15px ${MONO}`, MUTED, 'right');
+  // Two of the system's own, as hairlines.
+  ring(1152, ITEM.y, 6, hex(LINE, 0.9)); hair(1152, ITEM.y, 1155, ITEM.y - 3, hex(LINE, 0.9), 1.4);
+  rr(1116, ITEM.y - 5, 20, 10, 3); ctx.strokeStyle = hex(LINE, 0.9); ctx.lineWidth = 1.4; ctx.stroke();
+  // The item: the page with its lines, filled while the note is out.
+  const open = shown(t);
+  if (open > 0) { rr(ITEM.x - 15, BAR.y + 4, 30, BAR.h - 8, 7); ctx.fillStyle = hex(LINE, 0.22 * open); ctx.fill(); }
+  const px = ITEM.x - 7, py = ITEM.y - 9;
+  rr(px, py, 14, 15, 3);
+  if (open > 0.5) { ctx.fillStyle = INK; ctx.fill(); } else { ctx.strokeStyle = INK; ctx.lineWidth = 1.5; ctx.stroke(); }
+  const lineInk = open > 0.5 ? SHEET : INK;
+  for (const k of [0, 1, 2]) hair(px + 3.5, py + 4.5 + k * 3.2, px + (k === 1 ? 11 : 9.5), py + 4.5 + k * 3.2, lineInk, 1.2);
+  ctx.beginPath(); ctx.ellipse(ITEM.x, py + 18, 6, 2, 0, 0, Math.PI * 2); ctx.fillStyle = INK; ctx.fill();
+}
+
+// The sidebar: the lights with the sidebar's button and the search's, the
+// icon and the name; the card with Notes and Assets, the vault's own row
+// with its tools over the tree; the vault's block; the person at the foot.
 function sidebar(t) {
-  const x = WIN.x + 22;
-  if (icon.complete && icon.naturalWidth) ctx.drawImage(icon, WIN.x + SIDE - 120, WIN.y + 14, 26, 26);
-  words('Onyx', WIN.x + SIDE - 88, WIN.y + 35, `400 26px ${NAME}`, INK);
-  dot(x + 10, WIN.y + 82, 11, TEAL);
-  hair(x + 5, WIN.y + 82, x + 15, WIN.y + 82, '#fff', 2); hair(x + 10, WIN.y + 77, x + 10, WIN.y + 87, '#fff', 2);
-  words('New Note', x + 32, WIN.y + 89, `400 21px ${SERIF}`, INK);
-  rr(x + 2, WIN.y + 108, 16, 14, 3); ctx.strokeStyle = hex(LINE, 0.8); ctx.lineWidth = 1.5; ctx.stroke();
-  words('New Folder', x + 32, WIN.y + 122, `400 21px ${SERIF}`, MUTED);
-  const card = { x: WIN.x + 12, y: WIN.y + 150, w: SIDE - 24, h: WIN.h - 220 };
-  rr(card.x, card.y, card.w, card.h, 12); ctx.fillStyle = hex(TEAL, 0.05); ctx.fill(); ctx.strokeStyle = hex(TEAL, 0.6); ctx.lineWidth = 1.6; ctx.stroke();
-  words('Notes', card.x + 16, card.y + 34, `400 18px ${SERIF}`, MUTED);
+  const x0 = WIN.x;
+  for (const k of [0, 1, 2]) dot(x0 + 26 + k * 18, WIN.y + 28, 6, hex(LINE, 0.95));
+  const bx = x0 + 92, by = WIN.y + 20;
+  rr(bx, by, 18, 16, 3); ctx.strokeStyle = hex(LINE, 0.9); ctx.lineWidth = 1.5; ctx.stroke();
+  hair(bx + 6, by + 1, bx + 6, by + 15, hex(LINE, 0.9), 1.4);
+  ring(x0 + 128, WIN.y + 26, 6, hex(LINE, 0.9)); hair(x0 + 132.5, WIN.y + 30.5, x0 + 137, WIN.y + 35, hex(LINE, 0.9));
+  if (icon.complete && icon.naturalWidth) ctx.drawImage(icon, x0 + SIDE - 116, WIN.y + 13, 28, 28);
+  words('Onyx', x0 + SIDE - 82, WIN.y + 37, `400 27px ${NAME}`, TEAL);
+
+  rr(SC.x, SC.y, SC.w, SC.h, 12); ctx.fillStyle = hex(TEAL, 0.04); ctx.fill(); ctx.strokeStyle = hex(TEAL, 0.55); ctx.lineWidth = 1.6; ctx.stroke();
+  const half = (SC.w - 16) / 2;
+  rr(SC.x + 8, SC.y + 8, half, 36, 9); ctx.fillStyle = hex(LINE, 0.16); ctx.fill();
+  pageIcon(SC.x + 8 + half / 2 - 36, SC.y + 18, 12, 15, INK);
+  words('Notes', SC.x + 8 + half / 2 - 16, SC.y + 32, `600 18px ${SERIF}`, INK);
+  pictureIcon(SC.x + 8 + half * 1.5 - 40, SC.y + 19, 16, 13, MUTED);
+  words('Assets', SC.x + 8 + half * 1.5 - 18, SC.y + 32, `400 18px ${SERIF}`, MUTED);
+  hair(SC.x + 1, SC.y + 52, SC.x + SC.w - 1, SC.y + 52, hex(TEAL, 0.25), 1.2);
+
+  deck(SC.x + 14, SC.y + 70, 22, 'N');
+  words('Notes', SC.x + 48, SC.y + 89, `600 21px ${SERIF}`, INK);
+  tools(SC.x + SC.w - 16, SC.y + 81, 15, MUTED);
+
   const p = picked(t);
   TREE.forEach(([name, kind], i) => {
     const y = rowY(i);
-    const lit = i === 1 ? 1 - p : i === 2 ? p : 0;
-    if (lit > 0) { rr(card.x + 8, y - 26, card.w - 16, 36, 9); ctx.fillStyle = hex(TEAL, 0.16 * lit); ctx.fill(); }
-    const ix = card.x + 22;
-    if (kind === 'folder') { hair(ix, y - 12, ix + 5, y - 7, hex(LINE, 0.8)); hair(ix + 5, y - 7, ix, y - 2, hex(LINE, 0.8)); }
-    else { rr(ix - 2, y - 17, 13, 16, 2); ctx.strokeStyle = hex(LINE, 0.8); ctx.lineWidth = 1.4; ctx.stroke(); }
-    words(name, ix + 22, y - 2, `400 21px ${SERIF}`, lit > 0.5 ? INK : MUTED);
+    const lit = i === 2 ? 1 - p : i === 3 ? p : 0;
+    if (lit > 0) { rr(SC.x + 8, y - 17, SC.w - 16, 34, 9); ctx.fillStyle = hex(LINE, 0.2 * lit); ctx.fill(); }
+    if (kind === 'folder') {
+      chevron(SC.x + 22, y, hex(LINE, 0.9));
+      folderIcon(SC.x + 38, y - 8, 20, 15, hex(LINE, 0.95));
+      words(name, SC.x + 68, y + 7, `400 20px ${SERIF}`, MUTED);
+    } else {
+      words(name, SC.x + 40, y + 7, `400 20px ${SERIF}`, lit > 0.5 ? INK : MUTED);
+    }
   });
-  dot(x + 12, WIN.y + WIN.h - 34, 12, hex(TEAL, 0.25));
-  words('P', x + 12, WIN.y + WIN.h - 27, `600 16px ${SERIF}`, TEAL, 'center');
-  words('Pingfan', x + 34, WIN.y + WIN.h - 27, `400 20px ${NAME}`, INK);
-  ctx.strokeStyle = hex(LINE, 0.8); ctx.lineWidth = 1.5; ctx.beginPath(); ctx.arc(WIN.x + SIDE - 36, WIN.y + WIN.h - 34, 8, 0, Math.PI * 2); ctx.stroke();
+
+  rr(VB.x, VB.y, VB.w, VB.h, 12); ctx.fillStyle = hex(LINE, 0.1); ctx.fill(); ctx.strokeStyle = hex(LINE, 0.5); ctx.lineWidth = 1.4; ctx.stroke();
+  deck(VB.x + 16, VB.y + 15, 25, 'N');
+  words('Notes', VB.x + 54, VB.y + 34, `600 21px ${SERIF}`, INK);
+
+  hair(x0 + 1, WIN.y + 536, x0 + SIDE, WIN.y + 536, hex(LINE, 0.3), 1.2);
+  dot(x0 + 34, WIN.y + 578, 15, hex(TEAL, 0.25));
+  words('P', x0 + 34, WIN.y + 584, `600 16px ${SERIF}`, TEAL, 'center');
+  words('Pingfan', x0 + 58, WIN.y + 585, `400 21px ${NAME}`, INK);
+  ring(x0 + SIDE - 34, WIN.y + 578, 8, hex(LINE, 0.8)); ring(x0 + SIDE - 34, WIN.y + 578, 3, hex(LINE, 0.8), 1.3);
+}
+
+// A folder's pill of tabs: its mark, then the tabs, the plate under the one
+// showing; the second tab grows in once it is opened (`grow`).
+function pill(x, y, h, names, grow, font, plateAt) {
+  const pad = 46, ws = names.map((n, i) => (width(n, font) + pad) * (i === names.length - 1 ? grow : 1));
+  const total = 30 + ws.reduce((a, b) => a + b, 0) + 6;
+  rr(x, y, total, h, h / 2); ctx.fillStyle = hex(LINE, 0.12); ctx.fill();
+  folderIcon(x + 11, y + h / 2 - 6, 15, 12, hex(LINE, 0.9));
+  const starts = []; let cx = x + 30;
+  for (const w of ws) { starts.push(cx); cx += w; }
+  const k = plateAt, i0 = Math.floor(k), i1 = Math.min(names.length - 1, i0 + 1), f = k - i0;
+  const plateX = mix(starts[i0], starts[i1], f), plateW = mix(ws[i0], Math.max(ws[i1], 1), f);
+  rr(plateX, y + 3, plateW, h - 6, (h - 6) / 2); ctx.fillStyle = SHEET; ctx.fill(); ctx.strokeStyle = hex(LINE, 0.4); ctx.lineWidth = 1.2; ctx.stroke();
+  names.forEach((n, i) => {
+    const a = i === names.length - 1 ? grow : 1;
+    if (a < 0.05) return;
+    ctx.save(); ctx.globalAlpha *= a;
+    words(n, starts[i] + ws[i] / 2, y + h / 2 + 6, font, Math.round(k) === i ? INK : MUTED, 'center');
+    ctx.restore();
+  });
+  return total;
 }
 
 // The strip: the source's button at the left, the tabs on their pill in the
-// middle with the plate under the one showing, the plus, the terminal's
-// button at the right.
+// middle, the plus, the terminal's button at the right; the path bar.
 function strip(t) {
   const s = source(t), p = picked(t);
   rr(SOURCE_BTN.x, SOURCE_BTN.y, SOURCE_BTN.w, SOURCE_BTN.h, 7);
   ctx.fillStyle = hex(TEAL, 0.14 * s); ctx.fill();
-  const c = SOURCE_BTN, ink = s > 0.5 ? INK : MUTED;
-  hair(c.x + 9, c.y + 10, c.x + 5, c.y + 14, ink); hair(c.x + 5, c.y + 14, c.x + 9, c.y + 18, ink);
-  hair(c.x + 19, c.y + 10, c.x + 23, c.y + 14, ink); hair(c.x + 23, c.y + 14, c.x + 19, c.y + 18, ink);
-  if (s > 0) hair(c.x + 14 - 10 * s, c.y + 30, c.x + 14 + 10 * s, c.y + 30, TEAL, 2.4);
+  const c = SOURCE_BTN, ink = s > 0.5 ? TEAL : MUTED;
+  pageIcon(c.x + 6, c.y + 5, 16, 19, ink);
+  hair(c.x + 12, c.y + 13, c.x + 10, c.y + 16, ink, 1.3); hair(c.x + 10, c.y + 16, c.x + 12, c.y + 19, ink, 1.3);
+  hair(c.x + 16, c.y + 13, c.x + 18, c.y + 16, ink, 1.3); hair(c.x + 18, c.y + 16, c.x + 16, c.y + 19, ink, 1.3);
   const tc = TERM_BTN;
   hair(tc.x + 7, tc.y + 10, tc.x + 12, tc.y + 15, MUTED); hair(tc.x + 12, tc.y + 15, tc.x + 7, tc.y + 20, MUTED); hair(tc.x + 15, tc.y + 20, tc.x + 22, tc.y + 20, MUTED);
-  // The pill: Ideas, and Plans growing in once it is picked.
-  const fIdeas = `400 19px ${SERIF}`;
-  const w1 = width('Ideas', fIdeas) + 54, w2 = (width('Plans', fIdeas) + 54) * p;
-  const total = 34 + w1 + w2 + 8, x0 = CARD.x + CARD.w / 2 - total / 2, y = CARD.y + 11;
-  rr(x0, y, total, 30, 15); ctx.fillStyle = hex(LINE, 0.12); ctx.fill();
-  hair(x0 + 14, y + 10, x0 + 14, y + 20, hex(LINE, 0.8)); hair(x0 + 14, y + 10, x0 + 22, y + 10, hex(LINE, 0.8));
-  const plateX = mix(x0 + 30, x0 + 30 + w1, p), plateW = mix(w1, Math.max(w2, 1), p);
-  rr(plateX, y + 3, plateW, 24, 12); ctx.fillStyle = SHEET; ctx.fill(); ctx.strokeStyle = hex(LINE, 0.4); ctx.lineWidth = 1.2; ctx.stroke();
-  words('Ideas', x0 + 30 + w1 / 2, y + 21, fIdeas, p < 0.5 ? INK : MUTED, 'center');
-  if (p > 0.05) { ctx.save(); ctx.globalAlpha *= p; words('Plans', x0 + 30 + w1 + w2 / 2, y + 21, fIdeas, INK, 'center'); ctx.restore(); }
-  rr(x0 + total + 8, y, 30, 30, 9); ctx.fillStyle = hex(LINE, 0.12); ctx.fill();
-  hair(x0 + total + 17, y + 15, x0 + total + 29, y + 15, MUTED); hair(x0 + total + 23, y + 9, x0 + total + 23, y + 21, MUTED);
-  // The path bar, in code's face.
-  words(p > 0.5 ? 'Notes / Plans.md' : 'Notes / Ideas.md', CARD.x + CARD.w / 2, CARD.y + STRIP + 26, `400 17px ${MONO}`, MUTED, 'center');
+  const font = `400 19px ${SERIF}`;
+  const now = 30 + width('Ideas', font) + 46 + (width('Plans', font) + 46) * p + 6;
+  const x0 = CARD.x + CARD.w / 2 - (now + 40) / 2, y = CARD.y + 10;
+  const total = pill(x0, y, 32, ['Ideas', 'Plans'], p, font, p);
+  rr(x0 + total + 8, y, 32, 32, 10); ctx.fillStyle = hex(LINE, 0.12); ctx.fill();
+  plus(x0 + total + 24, y + 16, 6, MUTED);
+  const name = p > 0.5 ? 'Plans' : 'Ideas', pf = `400 17px ${MONO}`;
+  const pw = width('Notes/' + name, pf), px = CARD.x + CARD.w / 2 - pw / 2 + 10;
+  pageIcon(px - 22, CARD.y + STRIP + 11, 11, 14, MUTED);
+  const nw = words('Notes/', px, CARD.y + STRIP + 24, pf, MUTED);
+  words(name, px + nw, CARD.y + STRIP + 24, pf, INK);
 }
 
 // The note's lines: where each stands on the sheet.
-const lineY = i => PAGE.y + 166 + [0, 68, 120, 172, 222][i];
+const lineY = i => PAGE.y + 160 + [0, 64, 114, 164, 212][i];
 function sheetRect(t) {
   const s = source(t);
   const left = PAGE.x + (PAGE.w / 2 + 8) * s;
   return { x: left, y: PAGE.y, w: PAGE.x + PAGE.w - left, h: PAGE.h };
 }
 
-// A line drawn as Onyx draws it: marks hidden unless the caret is on it,
-// and muted while they show.
+// The note's name over its words, with the soft line under it.
+function named(name, x, y, right, size) {
+  words(name, x, y, `600 ${size}px ${SERIF}`, INK);
+  hair(x, y + size * 0.5, right, y + size * 0.5, hex(LINE, 0.35), 1.2);
+}
+
 function caret(x, y, h, t) { if (Math.floor(t * 2.2) % 2 === 0 || t % 1 < 0.6) hair(x, y - h, x, y + 4, TEAL, 2.4); }
+
+// A line with a bold word, drawn as Onyx draws it: the marks muted while the
+// caret is on it, hidden once it leaves.
+function boldLine(text, x, y, size, on) {
+  const body = `400 ${size}px ${SERIF}`, strong = `600 ${size}px ${SERIF}`;
+  let cx = x, inBold = false;
+  for (const part of text.split(/(\*\*)/)) {
+    if (part === '**') { if (on) cx += words(part, cx, y, body, hex(MUTED, 0.85)); inBold = !inBold; continue; }
+    cx += words(part, cx, y, inBold ? strong : body, INK);
+  }
+  return cx;
+}
 
 function plansNote(t, r) {
   const x = r.x + 56;
-  words('Plans', x, PAGE.y + 74, `600 44px ${SERIF}`, INK);
-  hair(x, PAGE.y + 96, r.x + r.w - 56, PAGE.y + 96, hex(LINE, 0.35), 1.2);
+  named('Plans', x, PAGE.y + 70, r.x + r.w - 56, 40);
   const cl = caretLine(t);
   const body = `400 28px ${SERIF}`;
-  // The heading being typed.
   if (t >= T.heading) {
     const text = t < T.headingEnd ? typed(t, T.heading, T.headingEnd, HEADING) : HEADING;
     if (cl === 0) {
@@ -249,38 +381,24 @@ function plansNote(t, r) {
       words(text.slice(3), x, lineY(0), `600 36px ${SERIF}`, INK);
     }
   }
-  // The sentence with a bold word.
   if (t >= T.bold) {
     const text = t < T.boldEnd ? typed(t, T.bold, T.boldEnd, BOLD) : BOLD;
-    if (cl === 1) {
-      let cx = x;
-      const parts = text.split(/(\*\*)/);
-      let inBold = false;
-      for (const part of parts) {
-        if (part === '**') { cx += words(part, cx, lineY(1), body, hex(MUTED, 0.85)); inBold = !inBold; continue; }
-        cx += words(part, cx, lineY(1), inBold ? `600 28px ${SERIF}` : body, INK);
-      }
-      caret(cx + 2, lineY(1), 22, t);
-    } else {
-      let cx = x + words('Ship the ', x, lineY(1), body, INK);
-      words('picture', cx, lineY(1), `600 28px ${SERIF}`, INK);
-    }
+    const cx = boldLine(text, x, lineY(1), 28, cl === 1);
+    if (cl === 1) caret(cx + 2, lineY(1), 22, t);
   }
   if (cl === 2) caret(x + 2, lineY(2), 22, t);
-  // The task, its box ticked with a press.
   const k = ticked(t), by = lineY(3);
   rr(x, by - 20, 22, 22, 5); ctx.fillStyle = hex(TEAL, k); ctx.fill(); ctx.strokeStyle = k > 0.5 ? TEAL : hex(LINE, 0.9); ctx.lineWidth = 1.8; ctx.stroke();
   if (k > 0) { ctx.save(); ctx.globalAlpha *= k; hair(x + 5, by - 9, x + 9, by - 4, '#fff', 2.4); hair(x + 9, by - 4, x + 17, by - 14, '#fff', 2.4); ctx.restore(); }
   const tw = words('Write the docs', x + 36, by, body, k > 0.5 ? MUTED : INK);
   if (k > 0) hair(x + 36, by - 8, x + 36 + tw * k, by - 8, hex(MUTED, 0.9), 1.6);
-  for (const [i, kk] of [[4, 0.7]]) hair(x, lineY(i) - 8, x + (r.w - 112) * kk, lineY(i) - 8, hex(LINE, 0.4));
+  hair(x, lineY(4) - 8, x + (r.w - 112) * 0.7, lineY(4) - 8, hex(LINE, 0.4));
 }
 
 function ideasNote(r) {
   const x = r.x + 56;
-  words('Ideas', x, PAGE.y + 74, `600 44px ${SERIF}`, INK);
-  hair(x, PAGE.y + 96, r.x + r.w - 56, PAGE.y + 96, hex(LINE, 0.35), 1.2);
-  let y = PAGE.y + 152;
+  named('Ideas', x, PAGE.y + 70, r.x + r.w - 56, 40);
+  let y = PAGE.y + 150;
   for (const k of [0.92, 0.84, 0.6, 0, 0.88, 0.7]) { if (k) hair(x, y, x + (r.w - 112) * k, y, hex(LINE, 0.4)); y += 32; }
 }
 
@@ -292,17 +410,16 @@ function sourcePane(t) {
   ctx.save(); ctx.globalAlpha *= clamp01(s * 1.4);
   ctx.translate(-(1 - s) * 40, 0);
   rr(r.x, r.y, r.w, r.h, 12); ctx.fillStyle = SHEET; ctx.fill(); ctx.strokeStyle = hex(LINE, 0.55); ctx.lineWidth = 1.6; ctx.stroke();
-  const f = `400 21px ${MONO}`, x = r.x + 28;
-  const lines = [['# Plans', MUTED], ['', 0], ['## This week', INK], ['Ship the **picture**', INK], ['- [x] Write the docs', INK]];
-  lines.forEach(([text, c], i) => { if (text) words(text, x, r.y + 52 + i * 38, f, c); });
-  hair(x, r.y + 52 + 5 * 38 - 6, x + r.w * 0.55, r.y + 52 + 5 * 38 - 6, hex(LINE, 0.4));
+  const f = `400 20px ${MONO}`, x = r.x + 28;
+  const lines = ['## This week', '', 'Ship the **picture**', '', '- [x] Write the docs'];
+  lines.forEach((text, i) => { if (text) words(text, x, r.y + 52 + i * 36, f, INK); });
+  hair(x, r.y + 52 + 6 * 36 - 6, x + r.w * 0.55, r.y + 52 + 6 * 36 - 6, hex(LINE, 0.4));
   ctx.restore();
 }
 
 function windowDrawn(t) {
   rr(WIN.x, WIN.y, WIN.w, WIN.h, WIN.r); ctx.fillStyle = hex(GRAPHITE, 0.07); ctx.fill();
   ctx.strokeStyle = LINE; ctx.lineWidth = 2; ctx.stroke();
-  for (const k of [0, 1, 2]) dot(WIN.x + 26 + k * 18, WIN.y + 26, 5, hex(LINE, 0.95));
   ctx.save(); rr(WIN.x + 1, WIN.y + 1, WIN.w - 2, WIN.h - 2, WIN.r); ctx.clip();
   ctx.globalAlpha = inside(t);
   sidebar(t);
@@ -310,9 +427,7 @@ function windowDrawn(t) {
   ctx.save(); rr(CARD.x, CARD.y + STRIP, CARD.w, CARD.h - STRIP, 16); ctx.clip();
   ctx.fillStyle = hex(LINE, 0.1); ctx.fillRect(CARD.x, CARD.y + STRIP, CARD.w, CARD.h - STRIP);
   ctx.restore();
-  hair(CARD.x + 1, CARD.y + STRIP, CARD.x + CARD.w - 1, CARD.y + STRIP, hex(LINE, 0.35), 1.2);
   strip(t);
-  // The sheet, with the note showing; the source beside it.
   const r = sheetRect(t), p = picked(t);
   rr(r.x, r.y, r.w, r.h, 12); ctx.fillStyle = SHEET; ctx.fill(); ctx.strokeStyle = hex(LINE, 0.55); ctx.lineWidth = 1.6; ctx.stroke();
   ctx.save(); rr(r.x, r.y, r.w, r.h, 12); ctx.clip();
@@ -320,6 +435,96 @@ function windowDrawn(t) {
   if (p > 0) { ctx.save(); ctx.globalAlpha *= p; plansNote(t, r); ctx.restore(); }
   ctx.restore();
   sourcePane(t);
+  ctx.restore();
+}
+
+// The menu bar note: a card hung from the item by a popover's arrow, the
+// head with the tree's button, the tabs, Open in Onyx and the pin; the tree
+// at the left on its own ground, the vault's row over it and its block at
+// its foot, as the sidebar has them; the note at the right.
+function menuNote(t) {
+  const m = shown(t);
+  if (m < 0.001) return;
+  ctx.save();
+  ctx.globalAlpha = m;
+  const k = 0.95 + 0.05 * m;
+  ctx.translate(TIP.x, TIP.y); ctx.scale(k, k); ctx.translate(-TIP.x, -TIP.y);
+  // The card and its shadow, a popover's.
+  ctx.save();
+  ctx.shadowColor = 'rgba(31, 30, 29, 0.16)'; ctx.shadowBlur = 44; ctx.shadowOffsetY = 14;
+  rr(POP.x, POP.y, POP.w, POP.h, POP.r); ctx.fillStyle = SHEET; ctx.fill();
+  ctx.restore();
+  rr(POP.x, POP.y, POP.w, POP.h, POP.r); ctx.strokeStyle = hex(LINE, 0.6); ctx.lineWidth = 1.5; ctx.stroke();
+  const arrow = () => {
+    ctx.beginPath(); ctx.moveTo(TIP.x - 20, POP.y + 0.8);
+    ctx.bezierCurveTo(TIP.x - 9, POP.y + 0.8, TIP.x - 5, TIP.y + 1.5, TIP.x, TIP.y);
+    ctx.bezierCurveTo(TIP.x + 5, TIP.y + 1.5, TIP.x + 9, POP.y + 0.8, TIP.x + 20, POP.y + 0.8);
+  };
+  arrow(); ctx.fillStyle = SHEET; ctx.fill(); arrow(); ctx.strokeStyle = hex(LINE, 0.6); ctx.lineWidth = 1.5; ctx.stroke();
+
+  ctx.save(); rr(POP.x, POP.y, POP.w, POP.h, POP.r); ctx.clip();
+  const x0 = POP.x, y0 = POP.y, mp = menuPicked(t);
+  // The head.
+  rr(x0 + 12, y0 + 10, 30, 30, 8); ctx.fillStyle = hex(TEAL, 0.14); ctx.fill();
+  rr(x0 + 19, y0 + 18, 16, 14, 3); ctx.strokeStyle = TEAL; ctx.lineWidth = 1.5; ctx.stroke();
+  hair(x0 + 24.5, y0 + 19, x0 + 24.5, y0 + 31, TEAL, 1.3);
+  pill(x0 + 50, y0 + 9, 32, ['Plans', 'Ideas'], mp, `400 17px ${SERIF}`, mp);
+  rr(x0 + POP.w - 82, y0 + 18, 18, 14, 3); ctx.strokeStyle = MUTED; ctx.lineWidth = 1.5; ctx.stroke();
+  hair(x0 + POP.w - 82, y0 + 22, x0 + POP.w - 64, y0 + 22, MUTED, 1.3);
+  hair(x0 + POP.w - 40, y0 + 34, x0 + POP.w - 34, y0 + 28, MUTED, 1.5);
+  outline([[x0 + POP.w - 36, y0 + 22], [x0 + POP.w - 30, y0 + 16], [x0 + POP.w - 24, y0 + 22], [x0 + POP.w - 28, y0 + 24], [x0 + POP.w - 34, y0 + 30], [x0 + POP.w - 36, y0 + 26]], MUTED);
+  hair(x0, y0 + POP_HEAD, x0 + POP.w, y0 + POP_HEAD, hex(LINE, 0.35), 1.2);
+  // The tree.
+  ctx.fillStyle = hex(LINE, 0.12); ctx.fillRect(x0, y0 + POP_HEAD, POP_TREE, POP.h - POP_HEAD);
+  deck(x0 + 14, y0 + 68, 18, 'N');
+  words('Notes', x0 + 40, y0 + 83, `600 17px ${SERIF}`, INK);
+  tools(x0 + POP_TREE - 12, y0 + 77, 12, MUTED);
+  TREE.forEach(([name, kind], i) => {
+    const y = popRowY(i);
+    const lit = i === 3 ? 1 - mp : i === 2 ? mp : 0;
+    if (lit > 0) { rr(x0 + 8, y - 13, POP_TREE - 16, 26, 7); ctx.fillStyle = hex(LINE, 0.24 * lit); ctx.fill(); }
+    if (kind === 'folder') {
+      chevron(x0 + 15, y, hex(LINE, 0.9), 3.5);
+      folderIcon(x0 + 27, y - 6, 15, 11, hex(LINE, 0.95));
+      words(name, x0 + 50, y + 6, `400 16px ${SERIF}`, MUTED);
+    } else {
+      words(name, x0 + 29, y + 6, `400 16px ${SERIF}`, lit > 0.5 ? INK : MUTED);
+    }
+  });
+  const b = { x: x0 + 8, y: y0 + POP.h - 54, w: POP_TREE - 16, h: 42 };
+  rr(b.x, b.y, b.w, b.h, 10); ctx.fillStyle = hex(LINE, 0.1); ctx.fill(); ctx.strokeStyle = hex(LINE, 0.5); ctx.lineWidth = 1.3; ctx.stroke();
+  deck(b.x + 12, b.y + 12, 20, 'N');
+  words('Notes', b.x + 42, b.y + 27, `600 17px ${SERIF}`, INK);
+  // The note: Plans as the main window wrote it, then Ideas, written in.
+  const nx = x0 + POP_TREE + 34, right = x0 + POP.w - 30;
+  if (mp < 1) {
+    ctx.save(); ctx.globalAlpha *= 1 - mp;
+    named('Plans', nx, y0 + 104, right, 30);
+    words('This week', nx, y0 + 164, `600 25px ${SERIF}`, INK);
+    boldLine('Ship the **picture**', nx, y0 + 208, 20, false);
+    const by = y0 + 252;
+    rr(nx, by - 15, 17, 17, 4); ctx.fillStyle = TEAL; ctx.fill();
+    hair(nx + 4, by - 7, nx + 7, by - 3.5, '#fff', 2); hair(nx + 7, by - 3.5, nx + 13, by - 11, '#fff', 2);
+    const tw = words('Write the docs', nx + 27, by, `400 20px ${SERIF}`, MUTED);
+    hair(nx + 27, by - 6, nx + 27 + tw, by - 6, hex(MUTED, 0.9), 1.4);
+    ctx.restore();
+  }
+  if (mp > 0) {
+    ctx.save(); ctx.globalAlpha *= mp;
+    named('Ideas', nx, y0 + 104, right, 30);
+    let y = y0 + 158;
+    for (const kk of [0.9, 0.78, 0.52]) { hair(nx, y, nx + (right - nx) * kk, y, hex(LINE, 0.4)); y += 26; }
+    const ly = y0 + 252;
+    if (t >= T.menuType) {
+      const text = t < T.menuTypeEnd ? typed(t, T.menuType, T.menuTypeEnd, FLOWERS) : FLOWERS;
+      const on = t < T.menuNewline;
+      const cx = boldLine(text, nx, ly, 20, on);
+      if (on) caret(cx + 2, ly, 17, t);
+      else caret(nx + 2, ly + 38, 17, t);
+    } else if (t >= T.menuPick + 0.15) caret(nx + 2, ly, 17, t);
+    ctx.restore();
+  }
+  ctx.restore();
   ctx.restore();
 }
 
@@ -341,7 +546,7 @@ function list(t) {
     const lit = t >= row.on[0] && t < row.on[1];
     const begun = t >= row.on[0];
     const alpha = lit ? 1 : begun ? 0.36 + 0.42 * reset : 0.36;
-    const y = 430 + i * 118;
+    const y = 404 + i * 108;
     ctx.save(); ctx.globalAlpha = alpha;
     words(row.word, X, y, `400 30px ${MONO}`, lit ? TEAL : INK);
     words(row.says, X, y + 46, `italic 400 30px ${SERIF}`, lit ? INK : MUTED);
@@ -354,6 +559,8 @@ function draw(t) {
   ctx.fillStyle = PAPER; ctx.fillRect(0, 0, W, H);
   header();
   windowDrawn(t);
+  menuBar(t);
+  menuNote(t);
   list(t);
   arrow(pointer(t), pressing(t));
 }
