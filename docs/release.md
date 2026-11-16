@@ -171,6 +171,7 @@ Every failure met while cutting a release gets a line here once it is solved, wi
 - **"No Keychain password item found for profile"** while the profile is in place: the screen is locked, and the profile's keychain opens only while it is unlocked. Keep the display on (step 3) and notarize while the person is at the Mac.
 - **`generate_icon_enum: failed to read` a path that is gone**: the repository's folder was moved or renamed with `target/` in it, and build scripts' saved output still names the old path, which `release-check.sh` finds. `cargo clean`, and let a release build start clean rather than from objects that hold the old path.
 - **A test passes here and fails on Windows or Linux**: wait for `rust.yml` before tagging (step 4).
+- **`git push origin HEAD:main` is refused as non-fast-forward**: `main` has a commit the release branch does not, such as a fix made on GitHub. Merge `origin/main` into the branch, keeping the branch's side where both changed the same line, and run step 3 again on the merge. `git merge-base --is-ancestor origin/main HEAD` after a `git fetch` finds it before the check.
 - **The Windows job cannot find a type**: a line used on every platform leans on something gated for Unix; `release-check.sh` runs the type check that finds it.
 - **`hdiutil create` fails with "Resource busy"** on a runner: `release-mac.sh` tries five times; re-run only that job with `gh run rerun <run-id> --failed`.
 - **Finder "AppleEvent timed out (-1712)"**: allow the terminal to control Finder (Privacy & Security, Automation) and run again.
