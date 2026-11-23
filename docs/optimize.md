@@ -10,7 +10,7 @@ About keeping Onyx fast and light: how an optimization pass is done, the rules p
 - **Incremental.** A pass starts from the log's last entry and looks only at what changed since the commit that entry names (`git diff <commit>..`), plus what an entry left for later. A pass that is not logged did not happen as far as the next one knows.
 - **Nothing slow is asked while a frame is built,** and that includes what a row asks for: a row's call runs once a row a frame, and the window is drawn at every frame of a motion, every key and every blink of a caret. No disk read, `Config::load`, `read_dir`, `is_dir`, JSON parse or copy of a list or of a note's text in `render` or in a row.
 - **A lookup made at every frame is answered from memory,** looked at on the disk again no more often than every half second for another process's write, and at once after Onyx's own: the container's vaults (`library::vault_list`, `container_now`, cleared by `forget_vaults`), a vault's folder looks (`folder_look::ensure`, `LOOK_AGAIN`), the person's picture (`Shell::avatar_files`), the folder sheet's own colors (`Picker::own_colors`).
-- **A layout asked for again is answered from what it was.** gpui asks for the editor's layout several times a frame, and once with no width. The editor keeps the key of everything its layout reads (`Editor::layout_inputs`: the text's revision, which no other text in the run has had, its reading, the look, the theme's inks, the width, the mode, the selection while its marks show, the check's marks, the drags, the pictures and frames known) and returns at once when it is unchanged; asked with no width, the last width answers. A line's row is keyed by what it is made of in its own bytes, never by the whole text's offsets, and where lines came or went its row and a code block's colors are found by key, not by index.
+- **A layout asked for again is answered from what it was.** gpui asks for the editor's layout several times a frame, and once with no width. The editor keeps the key of everything its layout reads (`Editor::layout_inputs`: the text's revision, which no other text in the run has had, its reading, the look, the theme's inks, the width, the mode, the selection while its marks show, the check's marks, the drags, the pictures and frames known) and returns at once when it is unchanged; asked with no width, the last width answers. A line's row is keyed by what it is made of in its own bytes, never by the whole text's offsets, and where lines came or went its row and a code block's colors are found by key, not by index. One layout is kept, so the editor is asked for one width a frame: a box that holds it is given a width within its room (`Shell::sheet_w`), never one over it for `max_w_full` to cut, which lays what is in the box out at the width asked and again at the width cut to, each layout taking the other's place.
 - **A picture is read at the size it is drawn,** by the system where it can (`sys::picture_at_most`: ImageIO on a Mac, which reads a JPEG or HEIC from its smaller scales of itself), and two at a time (`layout::DECODING`). A photo of 6000 × 6000 decoded whole is 145 MB, and the allocator keeps what it freed: a vault's assets read at once at launch held 2.1 GB for as long as the app ran. A thumbnail is made only while it can be seen (the Assets card open).
 - **A picture is never handed to gpui as a path.** gpui keeps every picture it decodes itself, and its copy on the GPU, until the app quits, and decodes every frame of a GIF before it draws one: a GIF of 360 frames held 4 GB. A picture drawn from a file goes through the cache of the view that shows it (`pictures::Kept`, `pictures::through`: a picture's tab, the viewer, the Assets card's SVGs), which lets it go when the view goes and plays a moving picture a frame at a time, after Emaki's; one Onyx decodes itself (a note's pictures, a card's, a PDF's pages) is an `ImageSource::Render`.
 - **A picture leaves the GPU with what showed it,** however that went: a note's editor, a frame and a card each let their pictures go as they are dropped (`on_release`), as a tab closed always did (`let_pictures_go`); a picture the note no longer shows goes after the next layout (`Pictures::met`), and a PDF's pages scrolled out of view but those it showed (`Embed::out_of_sight`). Dropped with the tab alone, a copy stayed in the window's atlas until the app quit.
@@ -35,6 +35,31 @@ About keeping Onyx fast and light: how an optimization pass is done, the rules p
 ## Log
 
 Newest first. Each entry: the version and date, the commits covered, what was looked at, what was found and done with numbers, what was looked at and left as it is, and what was left for later.
+
+### v0.5.2, 2026-11-23
+
+Covers `abcdd95` to the commit that adds this entry: v0.5.1's release and the v0.5.2 branch (the caret under a note's words, the vault's mark, pasted tables, the source pane's look, the fonts' order and the settings' size, the file chosen and its keys, what is done to the files taken back). The release build of v0.5.1 as installed against a release build of this pass, on a scratch vault of 200 notes in 10 folders made of Onyx's and Emaki's docs, a note of 20,000 lines (1 MB) and a note of 150 tables ruled under their heads; the window in front, the keyboard in the note.
+
+| | v0.5.1 | This pass |
+|---|---|---|
+| The note of 20,000 lines with the source pane beside it, idle from 40 seconds on | 29.3% of a core, 704 MB | 2.8% of a core, 601 MB |
+| Layouts of that note over 5 ms in 30 idle seconds, the pane open | 232 | 3 |
+| That note alone, idle from 40 seconds on | 1.55% of a core, 688 MB | 0.85 to 1.6% of a core, 615 to 673 MB |
+| A vault open, nothing open | 0.75% of a core, 107 MB | 0.70% of a core, 108 MB |
+| The note of 150 tables, idle | 1.5% of a core, 387 MB | 1.55% of a core, 388 MB |
+| Idle wakeups in 10 seconds: the note alone, and with the source pane | 21, 6 to 7 | 8 to 9, 7 to 10 |
+
+Found and fixed:
+- Beside the source pane the whole note was laid out twice at every frame, so twice at every blink of the caret and twice at every key: the note's sheet asked for its reading width, wider than the room the pane left it, and `max_w_full` cut it, so the editor was measured at the width asked (634 in the probe) and again at the width cut to (330), and each layout took the other's place in the editor's one kept layout. It was so since the source pane came, in v0.5.1 too, and showed only on a long note. The sheet's width is now within its room where it is figured (`Shell::sheet_w`), which the find bar reads too. The sheet stands where it stood: the note's part of a shot before and after is the same pixel for pixel. The first measure of this pass blamed nothing, since no pass had timed the pane open with a long note.
+
+Looked at and left as they are, nothing of them at a frame or in a row:
+- The file chosen (`Shell::choose`, the menu bar note's `chosen`): a compare of one path at a tab shown; an asset's row is lit by one compare, not by a walk of the rows chosen.
+- The files' journal (`file_undo.rs`, `fsops.rs`): the holding folder is read once at launch and once at a quit or a change of vault; a removal is a rename, and reads the assets again off the main thread.
+- A table ruled under its head (`rhythm::widths_of`): two short lists of lengths a table, only for a separator that could be widths, when the note is read.
+- The editor filling its sheet (`Editor::fill_page`), the source pane's edges (`render_source`, a frame asked for only while its sheet's top moves), the vault's tile (`tile_ink`), the line numbers' lane: arithmetic.
+- The menu bar note and the terminal beside the note measure the note at one width a frame, as the note alone does.
+
+Left for later: nothing.
 
 ### v0.5.0, 2026-11-16, the list left for later
 

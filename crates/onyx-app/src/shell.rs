@@ -3784,9 +3784,15 @@ impl Shell {
     }
 
     /// The sheet's width at a level, in the room between the page's
-    /// margins or its gaps to the panes beside it.
+    /// margins or its gaps to the panes beside it, and never over that
+    /// room. A width over it, left to `max_w_full` to cut, was laid out
+    /// first as it was asked and then again as the room cut it: beside
+    /// the source pane the whole note was laid out twice at every frame,
+    /// each layout taking the other's place in the editor's one kept
+    /// layout (`docs/optimize.md`).
     fn sheet_w(&self, level: f32) -> f32 {
-        sheet_width_in(level, self.page_w - self.page_pad.0 - self.page_pad.1)
+        let room = self.page_w - self.page_pad.0 - self.page_pad.1;
+        sheet_width_in(level, room).min(room.max(0.))
     }
 
     /// Where the sheet stands from its own width (0) to the page's (1):
