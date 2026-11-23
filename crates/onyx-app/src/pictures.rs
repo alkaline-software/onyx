@@ -3,7 +3,7 @@
 //! on the GPU, until the app quits, and decodes every frame of a GIF
 //! before it draws one. A view's `Kept` lets its pictures go, both copies,
 //! when the view goes, and plays a moving picture a frame at a time. After
-//! Emaki's (`docs/performance.md`).
+//! Emaki's (`docs/optimize.md`).
 
 use std::collections::HashMap;
 use std::path::Path;
