@@ -373,7 +373,7 @@ impl Shell {
     /// New Folder at the vault's top (⌘N makes beside the note showing).
     /// A right click gives the vault's menu; a row let go on it goes to
     /// the vault's top.
-    pub(crate) fn render_vault_root(&self, ground: Hsla, theme: &gpui_component::Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
+    pub(crate) fn render_vault_root(&self, theme: &gpui_component::Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
         let root = self.vault_root()?.to_path_buf();
         let name = self.vault.as_ref().map(|v| v.tree.name.clone()).unwrap_or_default();
         let [collapse, note, folder] = notes_tools("side", theme);
@@ -400,7 +400,7 @@ impl Shell {
                 }
             })));
         Some(
-            vault_root_row("side-vault-root", &root, &name, ground, theme, cx)
+            vault_root_row("side-vault-root", &root, &name, theme, cx)
                 .mx(px(8.))
                 .mt(px(4.))
                 .pr(px(4.))
@@ -929,22 +929,53 @@ pub(crate) fn vault_name(path: &Path) -> String {
     path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| path.display().to_string())
 }
 
-/// A small square button on a row of the tree: an icon in the muted ink,
-/// lit under the pointer, its words with it.
-/// A vault's mark: its first letter on a rounded tile of the accent, as a
-/// space has its tile in Craft. Wherever the sidebar names a vault it
-/// wears this, so a vault never reads as a folder or a note.
+/// A vault's mark: its icon, or its first letter, in white on a rounded
+/// tile filled with its ink, as a workspace is marked in Slack or Notion.
+/// Folders and notes wear outline icons on nothing, so a filled tile reads
+/// as a vault wherever one stands, and the vault's color stays in that
+/// one small square. A bright ink takes a dark icon, by how bright it
+/// looks and not its lightness: a full yellow has the lightness of a full
+/// blue.
 pub(crate) fn vault_badge(root: &Path, name: &str, size: f32, theme: &gpui_component::Theme, cx: &mut App) -> Div {
     let look = crate::folder_look::vault_look(root, cx);
-    let ink = vault_ink(root, theme, cx);
-    let tile = div().size(px(size)).flex_shrink_0().rounded(px(size * 0.3)).bg(ink.opacity(if theme.mode.is_dark() { 0.3 } else { 0.18 })).flex().items_center().justify_center();
+    let ink = tile_ink(vault_ink(root, theme, cx), theme.mode.is_dark());
+    let rgb = ink.to_rgb();
+    let bright = 0.2126 * rgb.r + 0.7152 * rgb.g + 0.0722 * rgb.b;
+    let on = if bright > 0.7 { gpui::black().opacity(0.78) } else { gpui::white() };
+    let tile = div().size(px(size)).flex_shrink_0().rounded(px(size * 0.3)).bg(ink).flex().items_center().justify_center();
     match look.icon {
-        Some(glyph) => tile.child(Icon::default().path(crate::folder_look::glyph(&glyph)).with_size(px((size * 0.62).round())).text_color(ink)),
+        Some(glyph) => tile.child(Icon::default().path(crate::folder_look::glyph(&glyph)).with_size(px((size * 0.62).round())).text_color(on)),
         None => {
             let letter: String = name.chars().next().map(|c| c.to_uppercase().collect()).unwrap_or_default();
-            tile.text_size(px(size * 0.58)).font_weight(FontWeight::SEMIBOLD).text_color(ink).child(letter)
+            tile.text_size(px(size * 0.58)).font_weight(FontWeight::SEMIBOLD).text_color(on).child(letter)
         }
     }
+}
+
+/// A vault's ink as its tile's fill. A color chosen for a folder's thin
+/// lines is loud as a filled square, so the fill is that hue made quiet:
+/// less saturated, its lightness drawn toward the middle so no tile of
+/// the palette stands out from the rest, and a little deeper on a dark
+/// ground.
+pub(crate) fn tile_ink(ink: Hsla, dark: bool) -> Hsla {
+    let l = ink.l + (TILE_L - ink.l) * TILE_EVEN;
+    Hsla { h: ink.h, s: ink.s * TILE_S, l: if dark { l * TILE_DARK } else { l }, a: ink.a }
+}
+
+/// How much of an ink's saturation its tile keeps, the lightness its
+/// tiles are drawn toward and how far, and a dark ground's share of it.
+const TILE_S: f32 = 0.62;
+const TILE_L: f32 = 0.52;
+const TILE_EVEN: f32 = 0.35;
+const TILE_DARK: f32 = 0.94;
+
+/// A vault's block's grounds on `under`, gray as the sidebar's other
+/// plates: at rest, lit (under the pointer, or its list showing), and its
+/// edge.
+pub(crate) fn block_grounds(under: Hsla, theme: &gpui_component::Theme) -> (Hsla, Hsla, Hsla) {
+    let dim = under.l < 0.5;
+    let face = under.blend(theme.foreground.opacity(if dim { 0.05 } else { 0.035 }));
+    (face, face.blend(theme.foreground.opacity(0.06)), theme.foreground.opacity(0.1))
 }
 
 /// A vault's block: its row over its tree, and its row in the list of
@@ -957,55 +988,31 @@ pub(crate) fn vault_ink(root: &Path, theme: &gpui_component::Theme, cx: &mut App
     crate::folder_look::vault_look(root, cx).color.as_deref().and_then(crate::folder_look::parse_hex).unwrap_or(theme.muted_foreground)
 }
 
-/// A vault's mark where a vault stands as a block: its badge at the front
-/// of a deck of two more of its shape, each a step up and to the right in
-/// a fainter wash of its ink, so it reads as a store of many things and
-/// never as one folder. `under` is the ground it stands on, which the
-/// badge is made opaque over so the cards behind do not show through it.
-pub(crate) fn vault_stack(root: &Path, name: &str, size: f32, under: Hsla, theme: &gpui_component::Theme, cx: &mut App) -> Div {
-    let ink = vault_ink(root, theme, cx);
-    let dim = under.l < 0.5;
-    let step = (size * 0.12).round().max(2.);
-    let card = |at: f32, alpha: f32| div().absolute().left(px(at)).top(px(step * 2. - at)).size(px(size)).rounded(px(size * 0.3)).bg(under.blend(ink.opacity(alpha)));
-    let face = under.blend(ink.opacity(if dim { 0.34 } else { 0.2 }));
-    div()
-        .relative()
-        .flex_shrink_0()
-        .w(px(size + step * 2.))
-        .h(px(size + step * 2.))
-        .child(card(step * 2., if dim { 0.14 } else { 0.08 }))
-        .child(card(step, if dim { 0.22 } else { 0.13 }))
-        .child(div().absolute().top(px(step * 2.)).left_0().child(vault_badge(root, name, size, theme, cx).bg(face)))
-}
-
 /// A vault block's measures: the sidebar's, and the menu bar note's,
 /// smaller for its narrower tree.
 #[derive(Clone, Copy)]
 pub(crate) struct BlockSize {
     pub h: f32,
-    pub deck: f32,
+    pub mark: f32,
     pub text: f32,
 }
 
 impl BlockSize {
-    pub const SIDEBAR: Self = Self { h: VAULT_BLOCK_H, deck: 22., text: 14. };
-    pub const MENU: Self = Self { h: 38., deck: 17., text: 13. };
+    pub const SIDEBAR: Self = Self { h: VAULT_BLOCK_H, mark: 22., text: 14. };
+    pub const MENU: Self = Self { h: 38., mark: 17., text: 13. };
 }
 
 /// The vault over its tree, the same in the sidebar and the menu bar
-/// note, which give it its press: a block in a wash of the vault's ink
-/// with an edge of it, its deck and its name. The block is the switch: no
+/// note, which give it its press: a gray block with an edge, its mark and
+/// its name. The block is the switch: no
 /// arrows say so. Each has it at the tree's foot: under the card in the
 /// sidebar, under the tree in the menu bar note.
 /// `under` is the ground it stands on; `listed` lights it while its list
 /// shows.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn vault_block(id: impl Into<ElementId>, root: &Path, name: &str, size: BlockSize, under: Hsla, listed: bool, theme: &gpui_component::Theme, cx: &mut App) -> Stateful<Div> {
-    let ink = vault_ink(root, theme, cx);
-    let dim = under.l < 0.5;
-    let face = under.blend(ink.opacity(if dim { 0.16 } else { 0.1 }));
-    let lit = face.blend(theme.foreground.opacity(0.06));
-    let mark = vault_stack(root, name, size.deck, face, theme, cx);
+    let (face, lit, edge) = block_grounds(under, theme);
+    let mark = vault_badge(root, name, size.mark, theme, cx);
     h_flex()
         .id(id.into())
         .relative()
@@ -1017,7 +1024,7 @@ pub(crate) fn vault_block(id: impl Into<ElementId>, root: &Path, name: &str, siz
         .items_center()
         .rounded(px(10.))
         .border_1()
-        .border_color(ink.opacity(if dim { 0.3 } else { 0.24 }))
+        .border_color(edge)
         .bg(if listed { lit } else { face })
         .text_size(px(size.text))
         .cursor_pointer()
@@ -1039,18 +1046,18 @@ pub(crate) fn notes_tools(prefix: &str, theme: &gpui_component::Theme) -> [State
 }
 
 /// The vault at the top of its tree, the same in both trees, after
-/// Emaki's: a row of the tree's height, the vault's deck in the chevron's
+/// Emaki's: a row of the tree's height, the vault's mark in the chevron's
 /// column and its name in bold, for the caller to give the Notes tools
 /// (`notes_tools`) at its right, its right padding and its presses. The
 /// vault's block lists the vaults; this row is the tree's own head.
-pub(crate) fn vault_root_row(id: &'static str, root: &Path, name: &str, under: Hsla, theme: &gpui_component::Theme, cx: &mut App) -> Stateful<Div> {
-    let mark = vault_stack(root, name, 14., under, theme, cx);
+pub(crate) fn vault_root_row(id: &'static str, root: &Path, name: &str, theme: &gpui_component::Theme, cx: &mut App) -> Stateful<Div> {
+    let mark = vault_badge(root, name, 16., theme, cx);
     h_flex()
         .id(id)
         .flex_shrink_0()
         .h(px(32.))
         .pl(px(5.))
-        .gap(px(7.))
+        .gap(px(9.))
         .items_center()
         .rounded(px(7.))
         .text_size(px(13.))
@@ -1058,6 +1065,8 @@ pub(crate) fn vault_root_row(id: &'static str, root: &Path, name: &str, under: H
         .child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::SEMIBOLD).text_color(theme.foreground).child(name.to_string()))
 }
 
+/// A small square button on a row of the tree: an icon in the muted ink,
+/// lit under the pointer, its words with it.
 pub(crate) fn row_tool(id: impl Into<ElementId>, icon: &'static str, words: SharedString, theme: &gpui_component::Theme) -> Stateful<Div> {
     let (lit, wash, muted) = (theme.foreground, theme.foreground.opacity(0.1), theme.muted_foreground);
     // A little smaller than the icon buttons on a head, the icon theirs.

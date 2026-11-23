@@ -1563,7 +1563,7 @@ impl MenuNote {
         let mut tiles: Vec<AnyElement> = Vec::new();
         for (i, v) in vaults.into_iter().enumerate() {
             tiles.push(
-                vault_tile(ElementId::NamedInteger("menu-page-vault".into(), i as u64), &v, theme.background, &theme, cx)
+                vault_tile(ElementId::NamedInteger("menu-page-vault".into(), i as u64), &v, &theme, cx)
                     .on_click(cx.listener(move |this, _, window, cx| {
                         swallow_click(window, cx);
                         this.set_vault(Some(v.clone()), cx);
@@ -1609,7 +1609,7 @@ impl MenuNote {
     }
 
     /// A new vault's name being given, in the shape of the block it will
-    /// be (`library::vault_block` at `BlockSize::MENU`): an empty deck's
+    /// be (`library::vault_block` at `BlockSize::MENU`): an empty mark's
     /// tile and the field, its edge the accent, or the danger's while a
     /// name is refused.
     fn vault_naming(&self, ground: Hsla, theme: &gpui_component::Theme) -> Div {
@@ -1617,13 +1617,13 @@ impl MenuNote {
         let size = BlockSize::MENU;
         let Some(n) = &self.browse.naming else { return div() };
         let rim = if n.why.is_some() { theme.danger } else { theme.primary };
-        let tile = div().size(px(size.deck)).rounded(px(size.deck * 0.3)).bg(theme.muted_foreground.opacity(0.18));
+        let tile = div().size(px(size.mark)).rounded(px(size.mark * 0.3)).bg(theme.muted_foreground.opacity(0.18));
         h_flex()
             .flex_shrink_0()
             .h(px(size.h))
-            .pl(px(size.h * 0.2 + 2.))
+            .pl(px(size.h * 0.2))
             .pr(px(8.))
-            .gap(px(size.h * 0.2 + 2.))
+            .gap(px(size.h * 0.2))
             .items_center()
             .rounded(px(10.))
             .border_1()
@@ -1721,7 +1721,7 @@ impl MenuNote {
     /// The vault at the top of its tree, the sidebar's own row
     /// (`library::vault_root_row`), with the Notes tools
     /// (`library::notes_tools`) at its right.
-    fn render_tree_head(&self, ground: Hsla, cx: &mut Context<Self>) -> AnyElement {
+    fn render_tree_head(&self, cx: &mut Context<Self>) -> AnyElement {
         use crate::shell::library::{notes_tools, vault_root_row};
         let theme = cx.theme().clone();
         let Some(root) = self.browse.vault.clone() else { return div().h(px(8.)).into_any_element() };
@@ -1748,7 +1748,7 @@ impl MenuNote {
                     this.start_folder(root.clone(), cx);
                 }
             })));
-        vault_root_row("menu-note-vault-root", &root, &name, ground, &theme, cx).mx(px(6.)).mt(px(4.)).child(tools).into_any_element()
+        vault_root_row("menu-note-vault-root", &root, &name, &theme, cx).mx(px(6.)).mt(px(4.)).child(tools).into_any_element()
     }
 
     /// The tree: the vault's folders and notes, as the main window's
@@ -2089,16 +2089,18 @@ impl Render for MenuNote {
                             cx.stop_propagation();
                             this.drop_title(window, cx)
                         }))
-                        // Not a press under the words, which puts the caret
-                        // at their end.
+                        // Not a press beside the words.
                         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                         .child(Textarea::new(&field).appearance(false).bordered(false).flush(true).font(title_font).text_size(title_px).line_height(relative(onyx_core::rhythm::TITLE_LINE)).text_color(theme.foreground).p_0())
                         .into_any_element(),
                     None => div().font(title_font).text_size(title_px).line_height(relative(onyx_core::rhythm::TITLE_LINE)).text_color(theme.foreground).child(vault::title(&path)).into_any_element(),
                 };
-                // The words with room round them, and a press under them
-                // puts the caret at their end, as a page of paper is
-                // written on.
+                // The words with room round them. The editor fills the
+                // card from its first line down (`Editor::fill_page`), so a
+                // press under the words is its own and puts the caret at
+                // their end, as a page of paper is written on; one beside
+                // them keeps the keyboard in the note and moves nothing.
+                editor.update(cx, |e, _| e.fill_page((line * 3. - GUTTER).max(0.)));
                 div()
                     .flex_1()
                     .min_w_0()
@@ -2115,7 +2117,6 @@ impl Render for MenuNote {
                                 if let Some(h) = this.held() {
                                     let focus = h.editor.read(cx).focus_handle(cx);
                                     window.focus(&focus, cx);
-                                    h.editor.update(cx, |e, cx| e.move_to_end(cx));
                                 }
                             }))
                             .child(
@@ -2123,7 +2124,7 @@ impl Render for MenuNote {
                                     .min_h_full()
                                     .px(px(GUTTER))
                                     .pt(px((line * 0.6).round()))
-                                    .pb(px(line * 3.))
+                                    .pb(px(GUTTER))
                                     .gap(px((line * 0.4).round()))
                                     .child(title_el)
                                     .child(div().w_full().h(px(1.)).flex_shrink_0().mb(px((line * 0.25).round())).bg(theme.border.opacity(0.7)))
@@ -2142,7 +2143,7 @@ impl Render for MenuNote {
         // card's is: a clip in gpui is a rectangle, and the tree's ground
         // stood past the card's corner.
         let tree = (shown > 0.).then(|| {
-            let head = self.render_tree_head(side, cx);
+            let head = self.render_tree_head(cx);
             let rows = self.render_tree(side, window, cx);
             let foot = self.render_tree_foot(side, cx);
             let why = self.render_why(foot.is_some(), &cx.theme().clone());

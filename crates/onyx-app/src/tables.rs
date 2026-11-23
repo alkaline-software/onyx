@@ -273,6 +273,21 @@ impl Sheet {
                 *last += 1;
             }
         }
+        self.rule(&dashes);
+        // What is written reads back as widths: where the dashes happen to
+        // line up with the rows, or to stand under the head as a hand's
+        // would (`rhythm::widths_of`), the last column takes a hundredth
+        // more.
+        while self.widths().is_none() && dashes.iter().sum::<u32>() < 99 {
+            if let Some(last) = dashes.last_mut() {
+                *last += 1;
+            }
+            self.rule(&dashes);
+        }
+    }
+
+    /// The separator written with those dashes, each column's alignment kept.
+    fn rule(&mut self, dashes: &[u32]) {
         for (col, d) in dashes.iter().enumerate() {
             let align = self.align_of(col);
             self.separator[col] = dressed(*d as usize, &align);
@@ -438,6 +453,11 @@ mod tests {
         // Narrower: each its own share, the table the rest of the room short.
         s.set_widths(&[240., 160.], 800.);
         assert_eq!(s.widths(), Some(vec![30., 20.]));
+        // Widths that would stand under the head cell for cell, as a
+        // hand's rule does, still read back: the last takes a hundredth more.
+        let mut u = sheet("| Skill | Invoke as |\n|---|---|\n| a | b |");
+        u.set_widths(&[40., 72.], 800.);
+        assert_eq!(u.widths(), Some(vec![5., 10.]));
         // A column that goes leaves the others as they were.
         let mut t = sheet("| a | b | c |\n|---|---|---|");
         t.set_widths(&[200., 160., 120.], 800.);

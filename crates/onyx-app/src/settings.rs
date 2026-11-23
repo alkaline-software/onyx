@@ -42,10 +42,12 @@ const CJK_SAMPLE_PX: f32 = 16.;
 
 /// The window's size as it opens, and the least it is dragged to. It is
 /// never narrower than it opens: the rows are laid out for that width,
-/// and narrower, names broke mid-word. As tall as General, the longest
-/// page, needs; shorter, the page scrolls.
-pub const SETTINGS_W: Pixels = px(820.);
-pub const SETTINGS_H: Pixels = px(640.);
+/// and narrower, names broke mid-word; it is the width a row of five
+/// font tiles needs to show each face's name whole. The studio's one
+/// size: General, the longest page, fits it with a container's path on
+/// three lines. Shorter, the page scrolls.
+pub const SETTINGS_W: Pixels = px(860.);
+pub const SETTINGS_H: Pixels = px(600.);
 const SETTINGS_MIN: Size<Pixels> = Size { width: SETTINGS_W, height: px(460.) };
 const RAIL_W: Pixels = px(190.);
 const PAGE_X: Pixels = px(36.);
@@ -947,7 +949,7 @@ impl Shell {
             crate::fonts::Slot::English => {
                 e.text_custom.clear();
                 if e.text_face == custom {
-                    e.text_face = crate::fonts::SANS[0].key.into();
+                    e.text_face = crate::fonts::NEW_TEXT.into();
                 }
             }
             crate::fonts::Slot::Cjk => {

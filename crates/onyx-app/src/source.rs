@@ -38,6 +38,9 @@ pub(crate) struct SourcePane {
     menu: MenuAt,
     /// Where the pane was last laid out, for the scroll router.
     bounds: Rc<std::cell::Cell<gpui::Bounds<Pixels>>>,
+    /// The room over the words at the last draw (`Shell::render_source`),
+    /// which the editor's scroll room was measured with.
+    pub(crate) head: std::cell::Cell<f32>,
     _subs: Vec<Subscription>,
 }
 
@@ -66,7 +69,7 @@ impl SourcePane {
         }));
         // What the note's editor changed comes here, and its marks.
         subs.push(cx.observe_in(editor, window, |me: &mut Self, _, window, cx| me.from_note(window, cx)));
-        let mut me = Self { state, editor: editor.downgrade(), look, synced, marks: None, marks_for: None, menu, bounds: Rc::default(), _subs: subs };
+        let mut me = Self { state, editor: editor.downgrade(), look, synced, marks: None, marks_for: None, menu, bounds: Rc::default(), head: std::cell::Cell::new(-1.), _subs: subs };
         me.set_marks(cx);
         me
     }

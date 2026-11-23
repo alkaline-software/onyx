@@ -12,7 +12,7 @@ use gpui::*;
 use gpui_component::scroll::ScrollableElement as _;
 use gpui_component::{h_flex, v_flex, ActiveTheme as _, Icon, Sizable as _};
 
-use super::library::{row_tool, vault_ink, vault_list, vault_name, vault_stack, VAULT_BLOCK_H};
+use super::library::{block_grounds, row_tool, vault_badge, vault_list, vault_name, VAULT_BLOCK_H};
 use super::{edge_fade, greeting, Shell, LIST_TOP};
 use crate::i18n::t;
 use crate::widgets::{choice_pill, kbd_hint, swallow_click, Press};
@@ -25,19 +25,14 @@ const TILE_H: f32 = 60.;
 const TILE_GAP: f32 = 10.;
 
 /// A vault's tile on the page before a vault, the same in the main
-/// window and the menu bar note: a wash of its ink on `page`, its deck and
+/// window and the menu bar note: a gray tile as New Vault…'s, its mark and
 /// its name, for the caller to give its presses.
-pub(crate) fn vault_tile(id: ElementId, p: &std::path::Path, page: Hsla, theme: &gpui_component::Theme, cx: &mut App) -> Stateful<Div> {
-    let dark = theme.mode.is_dark();
+pub(crate) fn vault_tile(id: ElementId, p: &std::path::Path, theme: &gpui_component::Theme, cx: &mut App) -> Stateful<Div> {
     let name = vault_name(p);
-    let ink = vault_ink(p, theme, cx);
-    let face = page.blend(ink.opacity(if dark { 0.1 } else { 0.06 }));
-    let badge = vault_stack(p, &name, 28., face, theme, cx);
-    let hover = face.blend(theme.foreground.opacity(if dark { 0.06 } else { 0.04 }));
+    let badge = vault_badge(p, &name, 28., theme, cx);
+    let lit = theme.foreground.opacity(if theme.mode.is_dark() { 0.09 } else { 0.06 });
     tile(id, theme)
-        .bg(face)
-        .border_color(ink.opacity(if dark { 0.3 } else { 0.22 }))
-        .hover(move |s| s.bg(hover))
+        .hover(move |s| s.bg(lit))
         .child(badge)
         .child(div().flex_1().min_w_0().truncate().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).text_color(theme.foreground).child(name))
 }
@@ -84,7 +79,6 @@ impl Shell {
     pub(crate) fn render_place_page(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
         let face = self.look.text_family.clone();
-        let page = super::page_ground(&theme);
         let container = self.container();
         let tiles: Vec<AnyElement> = match &container {
             None => Vec::new(),
@@ -92,7 +86,7 @@ impl Shell {
                 let mut tiles: Vec<AnyElement> = vault_list(Some(dir), None)
                     .into_iter()
                     .map(|p| {
-                        vault_tile(ElementId::Name(format!("page-vault-{}", p.display()).into()), &p, page, &theme, cx)
+                        vault_tile(ElementId::Name(format!("page-vault-{}", p.display()).into()), &p, &theme, cx)
                             .on_mouse_down(MouseButton::Right, cx.listener({
                                 let p = p.clone();
                                 move |this, ev: &MouseDownEvent, window, cx| {
@@ -185,16 +179,12 @@ impl Shell {
                 .into_any_element();
         }
         let (lit, muted) = (theme.foreground, theme.muted_foreground);
-        let wash = if theme.mode.is_dark() { lit.opacity(0.08) } else { lit.opacity(0.06) };
         let rows: Vec<AnyElement> = vault_list(self.container().as_deref(), None)
             .into_iter()
             .map(|p| {
                 let name = vault_name(&p);
-                let ink = vault_ink(&p, theme, cx);
-                let dim = ground.l < 0.5;
-                let block = ground.blend(ink.opacity(if dim { 0.13 } else { 0.09 }));
-                let hover = block.blend(wash);
-                let badge = vault_stack(&p, &name, 24., block, theme, cx);
+                let (block, hover, edge) = block_grounds(ground, theme);
+                let badge = vault_badge(&p, &name, 24., theme, cx);
                 h_flex()
                     .id(ElementId::Name(format!("place-vault-{}", p.display()).into()))
                     .flex_shrink_0()
@@ -205,7 +195,7 @@ impl Shell {
                     .items_center()
                     .rounded(px(10.))
                     .border_1()
-                    .border_color(ink.opacity(if dim { 0.28 } else { 0.22 }))
+                    .border_color(edge)
                     .bg(block)
                     .text_size(px(14.))
                     .cursor_pointer()

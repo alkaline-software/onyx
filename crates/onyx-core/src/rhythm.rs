@@ -59,8 +59,10 @@ pub const LEAST_WIDTH: u32 = 5;
 /// would have written it so: every column has `LEAST_WIDTH` dashes or
 /// more, not all the same count (a table typed gives each column the same
 /// dashes), and the rows do not line up with it (`rows`, the table's
-/// other lines: a formatter pads every row and the separator to one
-/// length, the dashes being its columns' letters). Anything else says
+/// other lines, its head first: a formatter pads every row and the
+/// separator to one length, the dashes being its columns' letters), nor
+/// does it stand under the head cell for cell, which is how a hand or a
+/// model rules a table off whatever its rows hold. Anything else says
 /// nothing, and the columns go by their words.
 pub fn widths_of(separator: &str, rows: &[&str]) -> Option<Vec<f32>> {
     let row = separator.trim_start_matches(|c: char| c == '>' || c.is_whitespace()).trim_end();
@@ -71,16 +73,52 @@ pub fn widths_of(separator: &str, rows: &[&str]) -> Option<Vec<f32>> {
         return None;
     }
     let sum: u32 = dashes.iter().sum();
-    let set = sum == 100 || (sum < 100 && dashes.iter().all(|d| *d >= LEAST_WIDTH) && dashes.iter().any(|d| *d != dashes[0]) && !lined_up(separator, rows));
+    let set = sum == 100 || (sum < 100 && dashes.iter().all(|d| *d >= LEAST_WIDTH) && dashes.iter().any(|d| *d != dashes[0]) && !lined_up(separator, rows) && !under_head(separator, rows));
     set.then(|| dashes.iter().map(|d| *d as f32).collect())
 }
 
 /// Whether every row is as long as the separator, as a monospace screen
 /// shows them: a table a formatter padded.
 fn lined_up(separator: &str, rows: &[&str]) -> bool {
-    let long = |line: &str| line.trim_end().chars().map(|c| if wide(c) { 2 } else { 1 }).sum::<usize>();
-    let at = long(separator);
-    !rows.is_empty() && rows.iter().all(|r| long(r) == at)
+    let at = long(separator.trim_end());
+    !rows.is_empty() && rows.iter().all(|r| long(r.trim_end()) == at)
+}
+
+/// Whether the separator's cells are each as long as the head's over
+/// them, bar under bar: a table ruled off under its head, as one typed or
+/// written by a model is, its rows left as long as their words.
+fn under_head(separator: &str, rows: &[&str]) -> bool {
+    let Some(head) = rows.first() else { return false };
+    let (rule, head) = (cell_lengths(separator), cell_lengths(head));
+    rule.len() > 1 && rule == head
+}
+
+/// How long a line is on a monospace screen.
+fn long(text: &str) -> usize {
+    text.chars().map(columns).sum()
+}
+
+/// The columns a character takes there.
+fn columns(c: char) -> usize {
+    if wide(c) { 2 } else { 1 }
+}
+
+/// A row's cells' lengths between its bars, spaces and all, a bar after a
+/// backslash being a cell's own.
+fn cell_lengths(row: &str) -> Vec<usize> {
+    let row = row.trim_start_matches(|c: char| c == '>' || c.is_whitespace()).trim_end();
+    let row = row.strip_prefix('|').unwrap_or(row);
+    let row = row.strip_suffix('|').unwrap_or(row);
+    let mut out = vec![0];
+    let mut chars = row.chars();
+    while let Some(c) = chars.next() {
+        match c {
+            '|' => out.push(0),
+            '\\' => *out.last_mut().unwrap() += 1 + chars.next().map_or(0, columns),
+            _ => *out.last_mut().unwrap() += columns(c),
+        }
+    }
+    out
 }
 
 /// A character a monospace screen gives two columns: CJK, full-width

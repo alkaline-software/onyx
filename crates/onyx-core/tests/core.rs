@@ -488,6 +488,15 @@ mod writing {
         assert_eq!(widths_of("| ----- | --- |", &padded), None);
         let padded = ["| 名字 | Age    |", "| Ann  | 7      |"];
         assert_eq!(widths_of("| ---- | ------ |", &padded), None);
+        // Ruled off under its head, cell for cell, the rows as long as
+        // their words: a table typed elsewhere or written by a model.
+        let ruled = ["| Skill | Invoke as | Purpose |", "| `ph-app/` | `/ph-app` | End-to-end macOS app development |"];
+        assert_eq!(widths_of("|-------|-----------|---------|", &ruled), None);
+        assert_eq!(widths_of("| ----- | --------- | ------- |", &ruled), None);
+        assert_eq!(widths_of("|:------|:---------:|--------:|", &ruled), None);
+        assert_eq!(widths_of("> |-------|-----------|---------|", &["> | Skill | Invoke as | Purpose |"]), None);
+        // The same dashes under another head are a person's widths.
+        assert_eq!(widths_of("|-------|-----------|---------|", &["| A | B | C |", "| 1 | 2 | 3 |"]), Some(vec![7., 11., 9.]));
         // More than the room says nothing.
         assert_eq!(widths_of(&format!("| {} | {} |", "-".repeat(70), "-".repeat(50)), &rows), None);
     }

@@ -152,6 +152,9 @@ const SHEET_MOST: f32 = 960.;
 /// `SHEET_GUTTER` in from its edge at every width, so a full sheet in a
 /// page with no more room than its own width has the same room for words.
 const SHEET_MARGIN: Pixels = px(16.);
+/// The source's sheet's corner, and the room over its first line.
+const SOURCE_ROUND: f32 = 10.;
+const SOURCE_HEAD: f32 = 8.;
 /// The gap between the note's sheet and a pane beside it, the source's or
 /// the terminal's: half the page's margin, so the three read as one row.
 const PANE_GAP: f32 = 8.;
@@ -521,7 +524,7 @@ impl Shell {
         }
         match cfg.editor.mono_face.as_str() {
             "jetbrains-mono" => cfg.editor.mono_face = "jetbrains".into(),
-            "system-mono" => cfg.editor.mono_face = crate::fonts::MONOS[1].key.into(),
+            "system-mono" => cfg.editor.mono_face = crate::fonts::MONOS[crate::fonts::SYSTEM_MONO].key.into(),
             _ => {}
         }
         let mut shell = Self {
@@ -2538,7 +2541,7 @@ impl Shell {
             return self.render_side_stack(div().flex().flex_col().child(assets), ground, theme, cx);
         }
         let rows = self.render_tree(theme, cx);
-        let list = div().flex().flex_col().children(self.render_vault_root(ground, theme, cx)).child(
+        let list = div().flex().flex_col().children(self.render_vault_root(theme, cx)).child(
                 div()
                     .relative()
                     .flex_1()
@@ -2690,7 +2693,6 @@ impl Shell {
             return None;
         }
         let theme = self.frame_theme(cx);
-        let under = cx.theme().title_bar;
         let accent = theme.foreground.opacity(0.1);
         let mid = RAIL_W / 2.;
         let top = RAIL_TOP + (RAIL_ENTRY + RAIL_GAP) * 2. + px(12.);
@@ -2726,7 +2728,7 @@ impl Shell {
             let assets_on = fly && self.side_view == SideView::Assets;
             let listed = self.menus.open.as_ref().is_some_and(|m| m.what == "vaults");
             let name = self.vault.as_ref().map(|v| v.tree.name.clone()).unwrap_or_default();
-            let mark = library::vault_stack(&root, &name, 22., under, &theme, cx).into_any_element();
+            let mark = library::vault_badge(&root, &name, 22., &theme, cx).into_any_element();
             rail = rail
                 .child(entry("rail-new".into(), plus, t("New Note (⌘N)").into(), false).top(at(0.)).on_click(cx.listener(|this, _, window, cx| {
                     swallow_click(window, cx);
@@ -2762,7 +2764,7 @@ impl Shell {
             let mut i = 0.;
             for p in vaults.into_iter().take(take) {
                 let name = library::vault_name(&p);
-                let mark = library::vault_stack(&p, &name, 22., under, &theme, cx).into_any_element();
+                let mark = library::vault_badge(&p, &name, 22., &theme, cx).into_any_element();
                 let menu_p = p.clone();
                 rail = rail.child(
                     entry(ElementId::Name(format!("rail-vault-{}", p.display()).into()), mark, name.into(), false)
@@ -3627,8 +3629,19 @@ impl Shell {
     }
 
     /// The source pane at the page's left, `w` wide at this draw: a sheet
-    /// as the note's is, full height, its words at the width it has all
-    /// the way out, so they do not wrap anew as it slides.
+    /// as the note's is, its words at the width it has all the way out,
+    /// so they do not wrap anew as it slides.
+    ///
+    /// The sheet reads as the note's does while it scrolls: with more to
+    /// scroll past an edge, the sheet runs off the page there, no margin
+    /// and no border, under the page's fade; at the file's start and its
+    /// end, the margin and the sheet's edge stand. The editor keeps its
+    /// own offset, so the sheet's edges go by what is left to scroll
+    /// (`scroll_room`): the top edge and the words' top rise with the
+    /// first of the scroll until the words reach the page's top; the
+    /// editor always runs to the page's foot, and at the file's end the
+    /// sheet's bottom edge comes up over the empty rows the editor keeps
+    /// under the last line.
     fn render_source(&mut self, w: f32, full_w: f32, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
         if w < 1. {
             return None;
@@ -3637,11 +3650,31 @@ impl Shell {
         let pane = self.source_pane(ix, window, cx);
         let theme = cx.theme().clone();
         let shown = self.source_t();
-        // Its top and bottom fade by what is left to scroll past each, as
-        // the page's do; the editor keeps its own offset, read from it.
+        let margin = f32::from(SHEET_MARGIN);
+        // How far a sheet's edge goes to be out of sight, its corner too.
+        let gone = margin + SOURCE_ROUND + 1.;
+        let (at, most) = pane.read(cx).state.read(cx).scroll_room();
+        let (at, most) = (f32::from(at), f32::from(most));
+        // The words' top: under the margin and the sheet's own room at the
+        // file's start, at the page's top once that much is scrolled.
+        let head = (margin + SOURCE_HEAD - at).max(0.);
+        let top = margin - gone * (1. - head / (margin + SOURCE_HEAD));
+        // What is left to scroll under the foot, with the head as it is
+        // now: the editor measured it with the last draw's.
+        let was = pane.read(cx).head.replace(head);
+        let left = (most - at + if was < 0. { 0. } else { head - was }).max(0.);
+        let bottom = margin - left.min(gone);
+        if was >= 0. && (was - head).abs() > 0.5 {
+            // The editor lays out at its new height in this draw; the foot
+            // goes by that at the next.
+            window.request_animation_frame();
+        }
+        // The page's own fades at its edges, by what is left to scroll
+        // past each, as the note's page has them.
         let state = pane.read(cx).state.downgrade();
         let room = move |cx: &App| state.upgrade().map_or((px(0.), px(0.)), |s| s.read(cx).scroll_room());
-        let foot = Corners { bottom_left: px(9.), bottom_right: px(9.), ..Default::default() };
+        let ground = page_ground(&theme);
+        let foot = Corners { bottom_left: CARD_R, ..Default::default() };
         Some(
             div()
                 .w(px(w))
@@ -3650,22 +3683,31 @@ impl Shell {
                 .overflow_hidden()
                 .opacity(shown)
                 .child(
-                    div().w(px(full_w)).h_full().pl(SHEET_MARGIN).py(SHEET_MARGIN).child(
-                        div()
-                            .size_full()
-                            .rounded(px(10.))
-                            .border_1()
-                            .border_color(theme.border)
-                            .bg(theme.background)
-                            .overflow_hidden()
-                            .relative()
-                            .pt(px(8.))
-                            // A press in it is its own, not the margin's.
-                            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                            .child(pane)
-                            .child(edge_fade_by(room.clone(), theme.background, true, Corners::default()))
-                            .child(edge_fade_by(room, theme.background, false, foot)),
-                    ),
+                    div()
+                        .w(px(full_w))
+                        .h_full()
+                        .relative()
+                        .child(
+                            div()
+                                .absolute()
+                                .left(SHEET_MARGIN)
+                                .right_0()
+                                .top(px(top))
+                                .bottom(px(bottom))
+                                .rounded(px(SOURCE_ROUND))
+                                .border_1()
+                                .border_color(theme.border)
+                                .bg(crate::look::source_ground(&theme))
+                                .overflow_hidden()
+                                // A press in it is its own, not the margin's.
+                                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                                // The editor from the words' top to the page's
+                                // foot, whatever the sheet's edges: placed
+                                // from the sheet's inside, past its border.
+                                .child(div().absolute().left_0().right_0().top(px(head - top - 1.)).bottom(px(-bottom - 1.)).child(pane)),
+                        )
+                        .child(edge_fade_by(room.clone(), ground, true, Corners::default()))
+                        .child(edge_fade_by(room, ground, false, foot)),
                 )
                 .into_any_element(),
         )
@@ -4179,6 +4221,7 @@ impl Shell {
         };
         let sheet_w = self.sheet_w(level);
         let gutter = SHEET_GUTTER;
+        editor.update(cx, |e, _| e.fill_page((line * 4. - gutter).max(0.)));
         div()
             .relative()
             .size_full()
@@ -4210,7 +4253,11 @@ impl Shell {
                             .bg(theme.background)
                             .px(px(gutter))
                             .pt(px(line))
-                            .pb(px(line * 4.))
+                            // The editor fills the sheet from its first line
+                            // down, the room under the words its own
+                            // (`Editor::fill_page`), so what takes a press is
+                            // one rectangle, the gutter round it.
+                            .pb(px(gutter))
                             .gap(px((line * 0.4).round()))
                             // The note's name over its words, in the words'
                             // face, and a soft line that says it is the name.

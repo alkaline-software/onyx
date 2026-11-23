@@ -130,6 +130,16 @@ fn paint(cfg: &mut ThemeConfig, a: &Accent) {
 
 /// Hand the toolkit both palettes with the accent painted in. Called at
 /// start and again whenever the accent changes; `apply` then draws it.
+/// The source pane's ground, light and dark: a step under the note's
+/// sheet, as Emaki's file pane is under its page, so the file as written
+/// reads apart from the note as drawn. The theme file names it too
+/// (`editor.background`), the ground the code editor paints itself.
+const SOURCE_GROUND: (u32, u32) = (0xf7f6f3, 0x161514);
+
+pub fn source_ground(theme: &gpui_component::Theme) -> gpui::Hsla {
+    gpui::rgb(if theme.mode.is_dark() { SOURCE_GROUND.1 } else { SOURCE_GROUND.0 }).into()
+}
+
 pub fn install(accent_key: &str, cx: &mut App) {
     let set: ThemeSet = match serde_json::from_str(&inked(include_str!("../themes/onyx.json"))) {
         Ok(s) => s,

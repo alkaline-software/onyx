@@ -20,6 +20,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use gpui::prelude::FluentBuilder as _;
 use gpui::*;
 use gpui_component::{input, ActiveTheme as _};
 
@@ -308,6 +309,11 @@ pub struct Editor {
     preferred_x: Option<f32>,
     /// Where the element was last painted, for an input method's windows.
     origin: Point<Pixels>,
+    /// The room kept under the words where a page asks the editor to fill
+    /// what is left of it (`fill_page`): the element then runs from its
+    /// first line to the page's foot at the words' width, one rectangle
+    /// that takes a press and shows the text pointer.
+    foot: Option<f32>,
     /// The pointer's shape over the page, and where it last was.
     pointer: CursorStyle,
     pointer_at: (f32, f32),
@@ -423,6 +429,7 @@ impl Editor {
             want_scroll: false,
             preferred_x: None,
             origin: Point::default(),
+            foot: None,
             pointer: CursorStyle::IBeam,
             pointer_at: (0., 0.),
             read_only: false,
@@ -684,6 +691,34 @@ impl Editor {
     pub fn move_to_end(&mut self, cx: &mut Context<Self>) {
         let end = self.doc.end();
         self.move_to(end, false, cx);
+    }
+
+    /// The editor fills what is left of the page it is on, with `foot` of
+    /// room kept under the last line: for a page that is a flex column.
+    pub fn fill_page(&mut self, foot: f32) {
+        self.foot = Some(foot);
+    }
+
+    /// Whether `y`, from the element's top, is under the last line: in the
+    /// room a filled page leaves there.
+    fn under_words(&self, y: f32) -> bool {
+        y >= self.cache.borrow().total
+    }
+
+    /// A press under the words: the caret at their end, as on a page of
+    /// paper, the selection run there with ⇧, and a drag from it selects
+    /// back up.
+    fn press_below(&mut self, shift: bool, window: &mut Window, cx: &mut Context<Self>) {
+        stamp("press below");
+        if !self.focus.is_focused(window) {
+            window.focus(&self.focus, cx);
+        }
+        self.pressed_link = None;
+        self.preferred_x = None;
+        self.move_to(self.doc.end(), shift, cx);
+        let end = self.sel.head;
+        self.drag = Some((Grain::Char, end, end));
+        self.kick_blink(cx);
     }
 
     pub fn has_selection(&self) -> bool {
@@ -1949,6 +1984,8 @@ impl Render for Editor {
             .key_context(EDITOR_CONTEXT)
             .track_focus(&self.focus)
             .w_full()
+            // On a page it fills, it takes what is left of the column.
+            .when(self.foot.is_some(), |d| d.flex().flex_col().flex_grow(1.).flex_shrink_0())
             .on_action(cx.listener(Self::enter))
             .on_action(cx.listener(Self::new_line))
             .on_action(cx.listener(Self::tab))
@@ -2402,6 +2439,12 @@ impl Element for EditorElement {
         stamp("editor request_layout");
         let mut style = Style::default();
         style.size.width = relative(1.).into();
+        let foot = self.editor.read(cx).foot;
+        if foot.is_some() {
+            style.flex_grow = 1.;
+            style.flex_shrink = 0.;
+        }
+        let foot = foot.unwrap_or(0.);
         let editor = self.editor.clone();
         // The height is the note's at the width it is given.
         let id = window.request_measured_layout(style, move |known, available, window, cx| {
@@ -2425,7 +2468,7 @@ impl Element for EditorElement {
                 eprintln!("trace measure width={width} known={:?} avail={:?}", known.width, available.width);
             }
             trace("relayout", started);
-            size(px(width), px(total.max(f32::from(window.line_height()))))
+            size(px(width), px(total.max(f32::from(window.line_height())) + foot))
         });
         (id, ())
     }
@@ -2576,6 +2619,12 @@ impl Element for EditorElement {
             cx.stop_propagation();
             stamp("mouse down");
             ed.update(cx, |e, cx| {
+                // Under the last line, on a page the editor fills: the
+                // caret at the words' end.
+                if e.under_words(y) {
+                    e.press_below(ev.modifiers.shift, window, cx);
+                    return;
+                }
                 // As the note reads a press selects as anywhere else, for
                 // ⌘C and the find to work on, and a link waits for the
                 // release, so a selection can begin on one.
@@ -2687,6 +2736,7 @@ impl Element for EditorElement {
                         (_, Some(edge)) => edge.cursor(),
                         (Some(_), _) => CursorStyle::PointingHand,
                         (None, None) if e.pictures_change() && e.picture_at(x, y).is_some_and(|(_, l)| e.object_line(l)) => CursorStyle::Arrow,
+                        (None, None) if e.under_words(y) => CursorStyle::IBeam,
                         (None, None) => match e.hit(x, y) {
                             Some(Hit::Link(_)) if inside => CursorStyle::PointingHand,
                             Some(Hit::Task(_)) if inside && !e.read_only => CursorStyle::PointingHand,
@@ -2820,6 +2870,10 @@ impl Editor {
                 let cell = CellAt { table: h.first, row: h.row, col: h.col };
                 return MenuAt { table: self.table_facts(cell).map(|f| (cell, scope, f)), ..Default::default() };
             }
+        }
+        // Under the words is on nothing, and nothing moves.
+        if self.under_words(y) {
+            return MenuAt::default();
         }
         // On a link nothing moves: the keyboard taken here would wake the
         // marks on the caret's line.

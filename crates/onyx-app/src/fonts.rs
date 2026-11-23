@@ -30,32 +30,42 @@ pub struct Face {
     pub family: &'static str,
 }
 
-/// The faces a note's words may be set in, as emaki offers them: four
-/// serifs and four sans serifs. Inter is a new install's.
+/// The faces a note's words may be set in, four serifs and four sans
+/// serifs, in the order every studio product offers them (Emaki's): the
+/// Source pair first in each row, so the two rows begin alike. Inter is
+/// a new install's (`NEW_TEXT`), wherever it stands in its row.
 pub const SERIFS: &[Face] = &[
     Face { key: "source-serif", name: "Source Serif", family: "Source Serif 4" },
-    Face { key: "newsreader", name: "Newsreader", family: "Newsreader" },
     Face { key: "literata", name: "Literata", family: "Literata" },
+    Face { key: "newsreader", name: "Newsreader", family: "Newsreader" },
     Face { key: "lora", name: "Lora", family: "Lora" },
 ];
 
 pub const SANS: &[Face] = &[
+    Face { key: "source-sans", name: "Source Sans", family: "Source Sans 3" },
     Face { key: "inter", name: "Inter", family: "Inter" },
     Face { key: "plex-sans", name: "IBM Plex Sans", family: "IBM Plex Sans" },
-    Face { key: "source-sans", name: "Source Sans", family: "Source Sans 3" },
     Face { key: "geist", name: "Geist", family: "Geist" },
 ];
 
-/// The faces code is set in, JetBrains Mono first and a new install's.
-/// The second is the system's where it has one worth having: Monaco on
-/// a Mac, which is Apple's and is used from the system there, never
-/// carried. Elsewhere it is IBM Plex Mono, built in.
+/// The face a new install's words are set in, and what an unknown key or
+/// a custom face put away falls back to: by its key, not its place.
+pub const NEW_TEXT: &str = "inter";
+
+/// The faces code is set in, in the studio's order, JetBrains Mono first
+/// and a new install's. The third (`SYSTEM_MONO`) is the system's where
+/// it has one worth having: Monaco on a Mac, which is Apple's and is
+/// used from the system there, never carried. Elsewhere it is IBM Plex
+/// Mono, built in.
 pub const MONOS: &[Face] = &[
     Face { key: "jetbrains", name: "JetBrains Mono", family: "JetBrains Mono" },
+    Face { key: "geist-mono", name: "Geist Mono", family: "Geist Mono" },
     if cfg!(target_os = "macos") { Face { key: "monaco", name: "Monaco", family: "Monaco" } } else { Face { key: "plex-mono", name: "IBM Plex Mono", family: "IBM Plex Mono" } },
     Face { key: "maple", name: "Maple Mono", family: "Maple Mono" },
-    Face { key: "geist-mono", name: "Geist Mono", family: "Geist Mono" },
 ];
+
+/// Where the system's place is in `MONOS`.
+pub const SYSTEM_MONO: usize = 2;
 
 /// The faces Chinese, Japanese and Korean may be set in, carried: Noto
 /// Serif SC and Noto Sans SC (Adobe and Google's Source Han faces, the
@@ -225,7 +235,8 @@ pub fn text_family(key: &str, custom: &str) -> SharedString {
     if key == CUSTOM && !custom.trim().is_empty() {
         return custom.trim().to_string().into();
     }
-    SERIFS.iter().chain(SANS).find(|f| f.key == key).unwrap_or(&SANS[0]).family.into()
+    let faces = || SERIFS.iter().chain(SANS);
+    faces().find(|f| f.key == key).or_else(|| faces().find(|f| f.key == NEW_TEXT)).map_or("Inter", |f| f.family).into()
 }
 
 /// The family code is set in, the same way; an unknown key is JetBrains Mono.
