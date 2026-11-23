@@ -8,6 +8,7 @@ mod csd;
 mod editor;
 mod embed;
 mod export;
+mod file_undo;
 #[allow(dead_code)]
 mod file_icons;
 mod folder_look;
@@ -54,6 +55,11 @@ fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("secondary-shift-p", menubar::TogglePin, Some(menubar::CONTEXT)),
         // Over the main window's Open Vault…, in the note alone.
         KeyBinding::new("secondary-shift-o", menubar::OpenInOnyx, Some(menubar::CONTEXT)),
+        // The files' keys in the menu bar note, as the main window's
+        // (`shell::tree_keys`): for the file chosen, in no words.
+        KeyBinding::new("secondary-backspace", menubar::TrashNote, Some(menubar::CONTEXT)),
+        KeyBinding::new("secondary-z", gpui_component::input::Undo, Some(menubar::CONTEXT)),
+        KeyBinding::new("secondary-shift-z", gpui_component::input::Redo, Some(menubar::CONTEXT)),
         KeyBinding::new("secondary-n", NewNote, None),
         KeyBinding::new("secondary-shift-n", NewFolder, None),
         KeyBinding::new("secondary-shift-o", ChooseContainer, None),
@@ -458,6 +464,7 @@ fn main() {
 
         cx.bind_keys(key_bindings());
         cx.set_menus(app_menus());
+        file_undo::start(cx);
 
         // Opened by the system at login: in the menu bar alone, as
         // MiniNotes was; the Dock or the item's menu opens the window.

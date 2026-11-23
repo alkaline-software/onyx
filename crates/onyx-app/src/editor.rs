@@ -220,6 +220,8 @@ pub enum EditorEvent {
     Found,
     /// A file a bar renamed in place: the file, and its new name.
     Rename(PathBuf, String),
+    /// A press in the words: the note is being worked in.
+    Pressed,
 }
 
 /// The faces and size a note is set in, from the settings.
@@ -2619,6 +2621,7 @@ impl Element for EditorElement {
             cx.stop_propagation();
             stamp("mouse down");
             ed.update(cx, |e, cx| {
+                cx.emit(EditorEvent::Pressed);
                 // Under the last line, on a page the editor fills: the
                 // caret at the words' end.
                 if e.under_words(y) {

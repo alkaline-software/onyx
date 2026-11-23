@@ -14,6 +14,7 @@ Onyx is held to the bar of the work that wins Awwwards, the Webbys and the FWA (
 
 - **Nothing jumps.** What appears, goes, opens, closes, grows or moves does so over a moment, with the pattern its neighbors use (`widgets.rs`, `menu.rs`, `shell.rs`). No pause at the end of a motion.
 - **Words are few.** A row's name says what it is; a line under it only where the name does not say it all. No sentence explaining a concept and no hint in an empty list.
+- **One file is the one chosen, in either window**, however it came forward (its row, its tab, a tab shown in a closed one's place, the last tab closed, a press in its words): its row is lit, and ⌘⌫, ⌘Z and ⌘⇧Z act on the files while the keyboard is in no words. Anything new that shows a file chooses it through `Shell::choose` or the menu bar note's `chosen` (`docs/window.md`, The file chosen).
 - **The sidebar and the menu bar note's tree are one design.** They differ only in the vault block's size (`BlockSize`) and the tree's ground, lighter in the menu bar note; each tree starts with the vault's row and the Notes tools at its right, and ends with the vault's block, whose list rises from it. Both are built from `shell/library.rs`'s shared parts (`vault_block`, `vault_root_row`, `notes_tools`, `row_tool`). A change to either is made to both (`docs/window.md`).
 - **No square corner inside a round one.** gpui clips to a rectangle: a lit row, a band or a picture at a rounded card's corner rounds its own corners there (`docs/design.md`, Rules).
 - **A pass of optimization follows every round of changes** (`docs/performance.md`, its log first): from the commit the log's last entry names, what is new is looked at for work done for nothing (a disk read or a copy in a frame, a clock that runs while nothing moves or no one sees, a picture decoded whole or kept), measured before and after, and logged. Nothing a person sees or can do is traded for it.
@@ -25,7 +26,7 @@ Each is here because breaking it loses data or brings back a fixed bug. The doc 
 
 - **A note is written whole, through `onyx_core::vault::write`**, a temp file and a rename, never in place and never in part: two seconds after its first unsaved change (a timer later keys do not reset), and when it is left; never on each keystroke, and never when its text is what the disk has. (`docs/window.md`)
 - **A note that has changes is never replaced by what the disk holds.** The disk's text is joined with what was typed (`merge::merge`), every change of both kept. (`docs/window.md`)
-- **Nothing goes straight off the disk.** A note or a folder deleted goes to the system's trash (`vault::trash`). (`docs/window.md`)
+- **Nothing goes straight off the disk.** A note or a folder deleted is held out of the vault (`file_undo::remove`), so ⌘Z puts it back, and goes to the system's trash (`vault::trash`) once that key no longer can. Whatever has it open writes it and lets go before it leaves. (`docs/window.md`)
 - **A row's height goes by its kind, never by what stands in it or beside it**, in a note and in a frame, from `Rhythm`: a word typed on a blank line moves nothing. (`docs/editor.md`)
 - **The editor never slices a line at a byte that is not a character's boundary**, and the caret steps by grapheme (`lines::Doc`). (`docs/editor.md`)
 - **Typed text arrives through gpui's input handler, never through a key binding**, so an input method composes in place. Keys that move or change are actions. (`docs/editor.md`)
@@ -70,6 +71,7 @@ crates/onyx-core/          everything without a window
   src/pdf.rs                 a note set as a PDF or an image by Typst; pdf/ holds its template, code theme and math
   src/docx.rs, src/web.rs    a note as a Word document and as a web page, from reading.rs's tree of its blocks
   src/rhythm.rs              the note's vertical measures, for the canvas and the page
+  src/fsops.rs               what was done to the files, kept to take back and do again; Emaki's journal
   src/html.rs                the HTML a note may hold, read one way for both
   src/merge.rs               a note changed on the disk and in the window at once, joined
   src/check.rs               spelling and grammar
@@ -79,6 +81,7 @@ crates/onyx-core/          everything without a window
 crates/onyx-app/           the window
   src/main.rs                menus, key bindings, the main window, the probe's variables
   src/shell.rs               the frame, the sidebar (the vault's tree), the strip, the vault's page, a note's life, the tabs
+  src/shell/tree.rs          the notes' tree as a list to work in: the rows chosen, the keys, moves, the file chosen, ⌘Z on the files
   src/shell/library.rs       the vault's assets: the sidebar's stack of cards, the Assets card, an asset's tab, a rename that follows its links
   src/shell/places.rs        before a vault is shown: the page and the card of vaults
   src/tabs.rs                the tabs' drawing and motion, for either window (TabHost): a folder's on one pill, the plate, the widths
@@ -94,6 +97,7 @@ crates/onyx-app/           the window
   src/menubar.rs             the note in the menu bar: MiniNotes' window under Onyx's item, one file, Onyx's editor
   src/note_menu.rs           a note's right-click menu, for the main window and the menu bar note
   src/folder_look.rs         a folder's Tabler icon and color: the sheet, the vault's .onyx/folders.json, the drawing
+  src/file_undo.rs           a removal, a move and a rename taken back and done again, for both windows; the holding folder
   src/card.rs                a link alone on its line as a card, small, medium or large: a file's, a web page's
   src/editor/cards.rs        a link shown as a link, a card or the whole file: its line written again
   src/editor/writing.rs      a note's spelling and grammar, off the window's thread

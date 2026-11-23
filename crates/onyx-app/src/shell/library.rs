@@ -521,7 +521,13 @@ impl Shell {
     /// small square in the icon's place on a taller row.
     fn render_asset_row(&self, path: &Path, picture: bool, theme: &gpui_component::Theme, cx: &mut Context<Self>) -> AnyElement {
         let name = name_of(path);
-        let chosen = self.shown.as_deref() == Some(path);
+        // The file chosen (`Shell::choose`): an asset is chosen alone, so
+        // the rows chosen are not walked for each asset's row.
+        let chosen = match self.choice.marked.as_slice() {
+            [] => self.shown.as_deref() == Some(path),
+            [one] => one == path,
+            _ => false,
+        };
         let mark: AnyElement = if !picture {
             img(crate::file_icons::path(&name, false, false, true)).size(px(16.)).flex_shrink_0().into_any_element()
         } else {

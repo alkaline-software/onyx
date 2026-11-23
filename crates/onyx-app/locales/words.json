@@ -683,6 +683,33 @@
     "de": "Es konnte nicht in den Papierkorb gelegt werden: {why}",
     "es": "No se pudo mover a la papelera: {why}"
   },
+  "It went straight to the Trash, and cannot be taken back from here.": {
+    "zh-Hans": "已直接移到废纸篓，无法在这里撤销。",
+    "zh-Hant": "已直接移到垃圾桶，無法在這裡還原。",
+    "ja": "そのままゴミ箱に入りました。ここからは取り消せません。",
+    "ko": "바로 휴지통으로 옮겨져 여기서는 되돌릴 수 없습니다.",
+    "fr": "Placé directement dans la corbeille : impossible de l’annuler ici.",
+    "de": "Es wurde direkt in den Papierkorb gelegt und lässt sich hier nicht widerrufen.",
+    "es": "Se movió directamente a la papelera y no se puede deshacer desde aquí."
+  },
+  "It was not taken back: {why}": {
+    "zh-Hans": "未能撤销：{why}",
+    "zh-Hant": "未能還原：{why}",
+    "ja": "取り消せませんでした：{why}",
+    "ko": "되돌리지 못했습니다: {why}",
+    "fr": "Impossible d’annuler : {why}",
+    "de": "Es konnte nicht widerrufen werden: {why}",
+    "es": "No se pudo deshacer: {why}"
+  },
+  "It was not done again: {why}": {
+    "zh-Hans": "未能重做：{why}",
+    "zh-Hant": "未能重做：{why}",
+    "ja": "やり直せませんでした：{why}",
+    "ko": "다시 실행하지 못했습니다: {why}",
+    "fr": "Impossible de rétablir : {why}",
+    "de": "Es konnte nicht wiederholt werden: {why}",
+    "es": "No se pudo rehacer: {why}"
+  },
   "Italic": {
     "zh-Hans": "斜体",
     "zh-Hant": "斜體",

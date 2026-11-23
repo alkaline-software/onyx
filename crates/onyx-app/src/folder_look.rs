@@ -325,15 +325,41 @@ pub fn moved(moves: &[(PathBuf, PathBuf)], cx: &mut App) {
     }
 }
 
-/// A folder gone to the trash takes its look, and its folders', with it.
-pub fn removed(path: &Path, cx: &mut App) {
+/// The looks of a folder on its way out of its vault, and of the folders
+/// in it: each vault's root, the folder's path from it, and the look.
+pub type Taken = Vec<(PathBuf, String, Look)>;
+
+/// A folder gone: its look, and those of the folders in it, are taken out
+/// of their vault's file and handed back, for `put_back` when the folder
+/// comes back.
+pub fn take(path: &Path, cx: &mut App) -> Taken {
     let roots: Vec<PathBuf> = cx.try_global::<Looks>().map(|l| l.vaults.borrow().keys().cloned().collect()).unwrap_or_default();
+    let mut taken = Taken::new();
     for root in roots {
         let Some(gone) = rel(&root, path) else { continue };
         change(&root, cx, |map| {
-            let before = map.len();
-            map.retain(|k, _| *k != gone && !k.starts_with(&format!("{gone}/")));
-            map.len() != before
+            let keys: Vec<String> = map.keys().filter(|k| **k == gone || k.starts_with(&format!("{gone}/"))).cloned().collect();
+            for k in &keys {
+                if let Some(look) = map.remove(k) {
+                    taken.push((root.clone(), k.clone(), look));
+                }
+            }
+            !keys.is_empty()
+        });
+    }
+    taken
+}
+
+/// The looks `take` took, given back to their folders.
+pub fn put_back(taken: Taken, cx: &mut App) {
+    let mut by_root: HashMap<PathBuf, Vec<(String, Look)>> = HashMap::new();
+    for (root, key, look) in taken {
+        by_root.entry(root).or_default().push((key, look));
+    }
+    for (root, looks) in by_root {
+        change(&root, cx, |map| {
+            map.extend(looks);
+            true
         });
     }
 }

@@ -859,3 +859,68 @@ fn every_folder_at_the_top_of_the_container_is_a_vault() {
     // Reading them makes nothing in them: no assets folder until an asset comes.
     assert!(!vault::assets(&dir.path().join("travel")).exists());
 }
+
+#[test]
+fn a_file_removed_is_held_and_comes_back_where_it_was() {
+    use onyx_core::fsops::{self, Journal, Kind, Op};
+    let dir = tempfile::tempdir().unwrap();
+    let (vault, hold) = (dir.path().join("vault"), dir.path().join("held"));
+    std::fs::create_dir_all(vault.join("trips")).unwrap();
+    let note = vault.join("trips/Kyoto.md");
+    std::fs::write(&note, "temples").unwrap();
+    let mut journal = Journal::new(hold.clone());
+
+    // Removed: out of the vault and in the holding folder, nothing thrown away.
+    let slot = journal.slot(&note);
+    fsops::move_path(&note, &slot).unwrap();
+    assert!(journal.record(Op { kind: Kind::Removed, moves: vec![(note.clone(), slot.clone())] }).is_empty());
+    assert!(!note.exists() && journal.holds(&slot) && std::fs::read_to_string(&slot).unwrap() == "temples");
+
+    // Taken back: the same move the other way.
+    let op = journal.take(false).unwrap();
+    fsops::run(&op.run_as(false)).unwrap();
+    journal.took(op, false);
+    assert_eq!(std::fs::read_to_string(&note).unwrap(), "temples");
+    assert!(journal.peek(false).is_none());
+
+    // Done again, then something new done: the removal can no longer be
+    // reached by ⌘⇧Z, and stays held until it falls off the list.
+    let op = journal.take(true).unwrap();
+    fsops::run(&op.run_as(true)).unwrap();
+    journal.took(op, true);
+    assert!(!note.exists());
+    let op = journal.take(false).unwrap();
+    fsops::run(&op.run_as(false)).unwrap();
+    journal.took(op, false);
+    let other = vault.join("Other.md");
+    std::fs::write(&other, "").unwrap();
+    let renamed = vault.join("Else.md");
+    fsops::move_path(&other, &renamed).unwrap();
+    assert!(journal.record(Op { kind: Kind::Renamed, moves: vec![(other, renamed)] }).is_empty());
+    assert!(journal.peek(true).is_none() && note.exists());
+
+    // A removal dropped while it holds its file hands the file over for the trash.
+    let slot = journal.slot(&note);
+    fsops::move_path(&note, &slot).unwrap();
+    journal.record(Op { kind: Kind::Removed, moves: vec![(note.clone(), slot.clone())] });
+    let op = journal.take(false).unwrap();
+    fsops::run(&op.run_as(false)).unwrap();
+    journal.took(op, false);
+    let op = journal.take(true).unwrap();
+    fsops::run(&op.run_as(true)).unwrap();
+    journal.took(op, true);
+    assert_eq!(journal.close(), vec![slot]);
+}
+
+#[test]
+fn a_step_that_cannot_be_run_whole_leaves_everything_where_it_was() {
+    use onyx_core::fsops;
+    let dir = tempfile::tempdir().unwrap();
+    let (a, b, taken) = (dir.path().join("a.md"), dir.path().join("b.md"), dir.path().join("taken.md"));
+    for f in [&a, &b, &taken] {
+        std::fs::write(f, "").unwrap();
+    }
+    let moves = vec![(a.clone(), dir.path().join("in/a.md")), (b.clone(), taken.clone())];
+    assert!(fsops::run(&moves).is_err());
+    assert!(a.exists() && b.exists() && !dir.path().join("in/a.md").exists());
+}

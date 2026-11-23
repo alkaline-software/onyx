@@ -5,6 +5,7 @@ pub mod attach;
 pub mod check;
 pub mod config;
 pub mod docx;
+pub mod fsops;
 pub mod html;
 pub mod link_card;
 pub mod merge;

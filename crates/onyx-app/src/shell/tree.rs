@@ -17,6 +17,7 @@ use gpui_component::ActiveTheme as _;
 use onyx_core::vault;
 
 use super::{Shell, TREE_ROW_H};
+use crate::file_undo::{self, Kind};
 use crate::i18n::{t, tf};
 use crate::menu::Entry;
 
@@ -25,10 +26,19 @@ actions!(onyx_tree, [TreeUp, TreeDown, TreeExtendUp, TreeExtendDown, TreeLeft, T
 /// The keys' context, the tree's while the keyboard is in it.
 pub const TREE_CONTEXT: &str = "SideTree";
 
-/// The tree's keys, Finder's and Emaki's.
+/// The tree's keys, Finder's and Emaki's. The files' three (⌘⌫, ⌘Z,
+/// ⌘⇧Z) are the window's, bound where its own keyboard is and so in the
+/// tree under it: a tab shown, or the last one closed, leaves the
+/// keyboard on the window with the file chosen, and they act on it
+/// there as in the tree (`Shell::files_keys`). A place with words binds
+/// its own under them, and takes them.
 pub fn key_bindings() -> Vec<KeyBinding> {
     let c = Some(TREE_CONTEXT);
+    let w = Some(super::KEY_CONTEXT);
     vec![
+        KeyBinding::new("secondary-backspace", TreeTrash, w),
+        KeyBinding::new("secondary-z", gpui_component::input::Undo, w),
+        KeyBinding::new("secondary-shift-z", gpui_component::input::Redo, w),
         KeyBinding::new("up", TreeUp, c),
         KeyBinding::new("down", TreeDown, c),
         KeyBinding::new("shift-up", TreeExtendUp, c),
@@ -36,7 +46,6 @@ pub fn key_bindings() -> Vec<KeyBinding> {
         KeyBinding::new("left", TreeLeft, c),
         KeyBinding::new("right", TreeRight, c),
         KeyBinding::new("enter", TreeOpen, c),
-        KeyBinding::new("secondary-backspace", TreeTrash, c),
         KeyBinding::new("secondary-a", TreeSelectAll, c),
         KeyBinding::new("secondary-x", TreeCut, c),
         KeyBinding::new("secondary-v", TreePaste, c),
@@ -306,17 +315,200 @@ impl Shell {
         if self.choice.marked.is_empty() { self.shown.iter().filter(|s| vault::is_note(s)).cloned().collect() } else { self.choice.marked.clone() }
     }
 
+    /// The file chosen, alone: the one a click on its row, on its tab, a
+    /// tab shown in another's place, the last tab closed or a press in a
+    /// note's words chose. Its row is lit, and the files' keys act on it.
+    pub(crate) fn choose(&mut self, path: &Path, cx: &mut Context<Self>) {
+        if self.choice.marked.len() == 1 && self.choice.marked[0] == path {
+            return;
+        }
+        let path = path.to_path_buf();
+        self.choice.marked = vec![path.clone()];
+        self.choice.anchor = Some(path.clone());
+        self.choice.cursor = Some(path);
+        cx.notify();
+    }
+
+    /// Whether the files' keys are for the files now: the keyboard is in
+    /// the tree, or the window's own, in no words.
+    pub(crate) fn files_keys(&self, window: &Window) -> bool {
+        self.focus.is_focused(window) || self.tree_focus.is_focused(window)
+    }
+
     /// The rows chosen to the trash; a folder chosen with what it holds is
     /// one.
     pub(crate) fn trash_chosen(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let all = self.tree_targets();
         let tops: Vec<PathBuf> = all.iter().filter(|p| !all.iter().any(|o| o != *p && p.starts_with(o))).cloned().collect();
-        for p in tops {
-            self.trash(p, window, cx);
-        }
-        self.choice.marked.clear();
+        self.remove(tops, window, cx);
         self.choice.cut.clear();
         cx.notify();
+    }
+
+    // -- out of the vault, and back -------------------------------------------
+
+    /// Files and folders out of the vault. Whatever has one open writes
+    /// it and lets go of it first; then each is held out of the vault
+    /// (`file_undo::remove`), so ⌘Z puts it back as it was, and reaches
+    /// the system's trash once that key can no longer.
+    pub(crate) fn remove(&mut self, paths: Vec<PathBuf>, window: &mut Window, cx: &mut Context<Self>) {
+        let root = self.vault_root().map(Path::to_path_buf);
+        let paths: Vec<PathBuf> = paths.into_iter().filter(|p| root.as_deref() != Some(p.as_path())).collect();
+        if paths.is_empty() {
+            return;
+        }
+        self.let_go(&paths, window, cx);
+        let (straight, failed) = file_undo::remove(&paths, cx);
+        if let Some(e) = failed {
+            self.say(tf("It was not moved to the trash: {why}", &[("why", &e)]), cx);
+        } else if straight > 0 {
+            self.say(t("It went straight to the Trash, and cannot be taken back from here.").to_string(), cx);
+        }
+        self.forget_gone(&paths);
+        self.reread_tree(cx);
+        self.reread_assets(cx);
+        crate::menubar::files_changed(cx);
+        self.save_ui(window);
+        cx.notify();
+    }
+
+    /// The tabs of what is on its way out, written and closed, here and in
+    /// the menu bar note, and kept in mind to open again with it.
+    fn let_go(&mut self, paths: &[PathBuf], window: &mut Window, cx: &mut Context<Self>) {
+        let was = self.shown.clone();
+        let going: Vec<(usize, PathBuf)> = self.tabs.iter().map(|t| t.path.clone()).enumerate().filter(|(_, p)| paths.iter().any(|g| p.starts_with(g))).collect();
+        for (ix, p) in going {
+            self.gone_tabs.retain(|(g, _, _)| *g != p);
+            self.gone_tabs.push((p.clone(), was.as_ref() == Some(&p), ix));
+            self.close_tab(&p, window, cx);
+        }
+        // No more than the journal's own length is worth keeping.
+        let extra = self.gone_tabs.len().saturating_sub(100);
+        self.gone_tabs.drain(..extra);
+        crate::menubar::let_go(paths, cx);
+    }
+
+    /// What is gone is no longer chosen, cut or stood on.
+    fn forget_gone(&mut self, paths: &[PathBuf]) {
+        let gone = |p: &PathBuf| paths.iter().any(|g| p.starts_with(g));
+        self.choice.marked.retain(|p| !gone(p));
+        self.choice.cut.retain(|p| !gone(p));
+        if self.choice.anchor.as_ref().is_some_and(gone) {
+            self.choice.anchor = None;
+        }
+        if self.choice.cursor.as_ref().is_some_and(gone) {
+            self.choice.cursor = None;
+        }
+    }
+
+    /// The main window's vault changes or closes: what was done to the
+    /// files is forgotten, and what was held goes to the trash.
+    pub(crate) fn forget_files(&mut self, cx: &mut Context<Self>) {
+        self.gone_tabs.clear();
+        self.choice = Choice::default();
+        file_undo::forget(cx);
+    }
+
+    /// ⌘Z and ⌘⇧Z with the keyboard on the files: the last thing done to
+    /// them is taken back, or the last taken back is done again, whole or
+    /// not at all, and the window follows. A removal is the file moved out
+    /// of the holding folder or into it; a move and a rename are made the
+    /// way they were first, links and all (`move_quietly`,
+    /// `rename_quietly`).
+    pub(crate) fn files_step(&mut self, again: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((kind, moves)) = file_undo::next(again, cx) else { return };
+        // What is on its way out is written and let go of first.
+        let leaving: Vec<PathBuf> = moves.iter().filter(|(_, to)| file_undo::held(to, cx)).map(|(from, _)| from.clone()).collect();
+        if !leaving.is_empty() {
+            self.let_go(&leaving, window, cx);
+        }
+        let Some(op) = file_undo::take(again, cx) else { return };
+        let ran = match kind {
+            Kind::Removed => file_undo::run_removal(&moves, cx),
+            Kind::Renamed => moves.iter().try_for_each(|(from, to)| {
+                let name = to.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                self.rename_quietly(from, &name, window, cx).map(|_| ())
+            }),
+            Kind::Moved => self.move_back(&moves, window, cx),
+        };
+        file_undo::settle(op, again, ran.is_ok(), cx);
+        match ran {
+            Ok(()) => {
+                let here: Vec<PathBuf> = moves.iter().filter(|(_, to)| !file_undo::held(to, cx)).map(|(_, to)| to.clone()).collect();
+                self.forget_gone(&leaving);
+                self.reread_tree(cx);
+                self.arrived(&here, kind == Kind::Removed, window, cx);
+                if kind == Kind::Removed {
+                    crate::menubar::came_back(&here, cx);
+                }
+            }
+            Err(why) if again => self.say(tf("It was not done again: {why}", &[("why", &why)]), cx),
+            Err(why) => self.say(tf("It was not taken back: {why}", &[("why", &why)]), cx),
+        }
+        self.reread_tree(cx);
+        self.reread_assets(cx);
+        crate::menubar::files_changed(cx);
+        self.save_ui(window);
+        cx.notify();
+    }
+
+    /// What came back or moved is in sight and chosen, and a note that
+    /// was open as it left the vault is open again, the one that showing.
+    fn arrived(&mut self, here: &[PathBuf], back: bool, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(first) = here.first().cloned() else { return };
+        if let Some(v) = self.vault.as_mut() {
+            for path in here {
+                let mut up = path.parent();
+                while let Some(dir) = up.filter(|d| *d != v.root && d.starts_with(&v.root)) {
+                    v.unfolded.insert(dir.to_path_buf());
+                    up = dir.parent();
+                }
+            }
+        }
+        if back {
+            let (mut open, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.gone_tabs).into_iter().partition(|(p, _, _)| here.iter().any(|h| p.starts_with(h)));
+            self.gone_tabs = rest;
+            let was = self.shown.clone();
+            let shown = open.iter().find(|(_, shown, _)| *shown).map(|(p, _, _)| p.clone()).or(was);
+            // Each back in its place in the row, the leftmost first.
+            open.sort_by_key(|(_, _, ix)| *ix);
+            for (p, _, ix) in open {
+                if !p.is_file() {
+                    continue;
+                }
+                self.open_note(p.clone(), window, cx);
+                if let Some(at) = self.tabs.iter().position(|t| t.path == p) {
+                    let tab = self.tabs.remove(at);
+                    self.tabs.insert(ix.min(self.tabs.len()), tab);
+                    self.sort_tabs();
+                }
+            }
+            if let Some(p) = shown.filter(|p| self.shown.as_ref() != Some(p)) {
+                self.show_tab(&p, window, cx);
+            }
+        }
+        self.choice.marked = here.to_vec();
+        self.choice.anchor = Some(first.clone());
+        self.choice.cursor = Some(first.clone());
+        if let Some(ix) = self.visible_rows().iter().position(|(p, _)| *p == first) {
+            self.scroll_to_cursor(ix);
+        }
+    }
+
+    /// A move's step: each thing back into the folder it goes to, the
+    /// things that share a folder together.
+    fn move_back(&mut self, moves: &[(PathBuf, PathBuf)], window: &mut Window, cx: &mut Context<Self>) -> Result<(), String> {
+        let mut folders: Vec<PathBuf> = Vec::new();
+        for dir in moves.iter().filter_map(|(_, to)| to.parent()) {
+            if !folders.iter().any(|f| f == dir) {
+                folders.push(dir.to_path_buf());
+            }
+        }
+        for into in folders {
+            let items: Vec<PathBuf> = moves.iter().filter(|(_, to)| to.parent() == Some(into.as_path())).map(|(from, _)| from.clone()).collect();
+            self.move_quietly(items, into, window, cx)?;
+        }
+        Ok(())
     }
 
     /// ⌘V: what was cut moved into the folder the keys stand on, or the
@@ -345,7 +537,6 @@ impl Shell {
             .on_action(cx.listener(|this, _: &TreeLeft, window, cx| this.tree_side(false, window, cx)))
             .on_action(cx.listener(|this, _: &TreeRight, window, cx| this.tree_side(true, window, cx)))
             .on_action(cx.listener(|this, _: &TreeOpen, window, cx| this.tree_open(window, cx)))
-            .on_action(cx.listener(|this, _: &TreeTrash, window, cx| this.trash_chosen(window, cx)))
             .on_action(cx.listener(|this, _: &TreeSelectAll, _, cx| {
                 this.choice.marked = this.visible_rows().into_iter().map(|(p, _)| p).collect();
                 cx.notify();
@@ -378,19 +569,26 @@ impl Shell {
         TreeDrag(items, name)
     }
 
-    /// Rows moved into a folder, and every link with them (`vault::move_into`):
-    /// an open note's links changed through its editor first, from what it
-    /// holds; what knows a moved thing by its path follows (`follow_moves`).
+    /// Rows moved into a folder, and every link with them, written down
+    /// so ⌘Z takes the move back.
     pub(crate) fn move_items(&mut self, items: Vec<PathBuf>, into: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(root) = self.vault_root().map(Path::to_path_buf) else { return };
-        let planned = match vault::planned_moves(&items, &into) {
-            Ok(m) if m.is_empty() => return,
-            Ok(m) => m,
-            Err(e) => {
-                self.say(tf("Nothing was moved: {why}", &[("why", &e)]), cx);
-                return;
-            }
-        };
+        match self.move_quietly(items, into, window, cx) {
+            Ok(moves) => file_undo::record(Kind::Moved, moves, cx),
+            Err(e) => self.say(tf("Nothing was moved: {why}", &[("why", &e)]), cx),
+        }
+        cx.notify();
+    }
+
+    /// The move itself (`vault::move_into`), with nothing written down of
+    /// it: an open note's links changed through its editor first, from
+    /// what it holds; what knows a moved thing by its path follows
+    /// (`follow_moves`). Hands back the moves made.
+    fn move_quietly(&mut self, items: Vec<PathBuf>, into: PathBuf, window: &mut Window, cx: &mut Context<Self>) -> Result<Vec<(PathBuf, PathBuf)>, String> {
+        let Some(root) = self.vault_root().map(Path::to_path_buf) else { return Ok(Vec::new()) };
+        let planned = vault::planned_moves(&items, &into).map_err(|e| e.to_string())?;
+        if planned.is_empty() {
+            return Ok(planned);
+        }
         // Each open note's changes, from its editor, while the files are
         // still where they were.
         let open: Vec<(usize, PathBuf)> = self.tabs.iter().enumerate().filter(|(_, t)| t.asset.is_none()).map(|(i, t)| (i, t.path.clone())).collect();
@@ -403,21 +601,19 @@ impl Shell {
             .filter(|(_, e)| !e.is_empty())
             .collect();
         let open_paths: Vec<PathBuf> = open.into_iter().map(|(_, p)| p).collect();
-        match vault::move_into(&root, &items, &into, &open_paths) {
-            Ok(moves) => {
-                for (i, e) in edits {
-                    self.tabs[i].editor.update(cx, |ed, cx| ed.apply_edits(e, cx));
-                }
-                // The folder moved into opens, so what moved is in sight.
-                if let Some(v) = self.vault.as_mut() {
-                    v.unfolded.insert(into.clone());
-                }
-                self.choice.marked = moves.iter().map(|(_, to)| to.clone()).collect();
-                self.follow_moves(&moves, window, cx);
-            }
-            Err(e) => self.say(tf("Nothing was moved: {why}", &[("why", &e)]), cx),
+        let moves = vault::move_into(&root, &items, &into, &open_paths).map_err(|e| e.to_string())?;
+        for (i, e) in edits {
+            self.tabs[i].editor.update(cx, |ed, cx| ed.apply_edits(e, cx));
         }
-        cx.notify();
+        // The folder moved into opens, so what moved is in sight.
+        if let Some(v) = self.vault.as_mut() {
+            if into != v.root {
+                v.unfolded.insert(into.clone());
+            }
+        }
+        self.choice.marked = moves.iter().map(|(_, to)| to.clone()).collect();
+        self.follow_moves(&moves, window, cx);
+        Ok(moves)
     }
 
     /// Everything that knows an entry by its path follows it to where it

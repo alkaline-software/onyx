@@ -39,7 +39,7 @@ use gpui_component::tooltip::ManagedTooltipExt as _;
 use gpui_component::input::{Input, InputEvent, InputState, Textarea, TextareaState};
 use gpui_component::{h_flex, v_flex, ActiveTheme as _, Icon, Root, Sizable as _};
 
-actions!(onyx_menu_note, [TogglePin, OpenInOnyx]);
+actions!(onyx_menu_note, [TogglePin, OpenInOnyx, TrashNote]);
 
 /// The note's own keys, bound only while its window has the keyboard
 /// (`key_bindings` in `main.rs`): ⌘⇧P pins it, ⌘⇧O opens it in Onyx, and
@@ -181,6 +181,18 @@ pub(crate) struct MenuNote {
     tabs: Vec<Held>,
     shown: Option<usize>,
     closed: Vec<PathBuf>,
+    /// The note of the last tab closed: still the file chosen, lit in the
+    /// tree, until another shows or it goes (`chosen`).
+    left: Option<PathBuf>,
+    /// Whether the keyboard is in the note's words. A note chosen (its
+    /// row, its tab, the tab shown in a closed one's place) is chosen with
+    /// no caret, as in the main window, so the files' keys act on it; a
+    /// press in the words, the window opened and a note made put it there.
+    caret: bool,
+    /// The tabs let go of as their files left the vault, whether each was
+    /// the one showing, and its place in the row: open again there when
+    /// ⌘Z brings the file back.
+    gone: Vec<(PathBuf, bool, usize)>,
     /// The tabs' drawing and motion, the main window's (`tabs.rs`).
     tabs_row: Tabs,
     /// A folder's icon and color being chosen (`folder_look.rs`).
@@ -260,6 +272,9 @@ impl MenuNote {
             look: Shell::look_of(&cfg.editor),
             words: Rc::new(Words::load()),
             held_paths: Rc::new(RefCell::new(Vec::new())),
+            left: None,
+            caret: true,
+            gone: Vec::new(),
         };
         // The tabs as they were left, the one showing showing.
         let ui = UiState::load();
@@ -319,6 +334,8 @@ impl MenuNote {
     /// moment on: gpui draws a window as it opens, and this note is busy
     /// until this returns.
     pub(crate) fn open(&mut self, cx: &mut Context<Self>) {
+        // The window opens to be written in.
+        self.caret = true;
         if self.window.is_some() {
             if self.going.take().is_some() {
                 self.came = Instant::now();
@@ -502,12 +519,18 @@ impl MenuNote {
             return;
         }
         match self.held() {
-            Some(h) => {
+            Some(h) if self.caret => {
                 let focus = h.editor.read(cx).focus_handle(cx);
                 window.focus(&focus, cx);
             }
-            None => window.focus(&self.focus, cx),
+            _ => window.focus(&self.focus, cx),
         }
+    }
+
+    /// The file chosen: the note showing, or with no tab the note of the
+    /// last one closed. The tree lights it and the files' keys act on it.
+    fn chosen(&self) -> Option<&Path> {
+        self.path().or(self.left.as_deref())
     }
 
     fn toggle_pin(&mut self, cx: &mut Context<Self>) {
@@ -565,6 +588,7 @@ impl MenuNote {
             return;
         }
         self.shown = Some(i);
+        self.left = None;
         self.remember();
         self.with_window(|this, window, cx| this.focus_in(window, cx), cx);
         cx.notify();
@@ -573,6 +597,7 @@ impl MenuNote {
     /// ⌘ and a number: that tab, 9 the last, as the main window's.
     fn go_tab(&mut self, n: usize, cx: &mut Context<Self>) {
         if !self.tabs.is_empty() {
+            self.caret = false;
             self.show_tab((n.saturating_sub(1)).min(self.tabs.len() - 1), cx);
         }
     }
@@ -598,6 +623,10 @@ impl MenuNote {
             self.closed.remove(0);
         }
         self.rewatch(cx);
+        // The tab shown in its place is chosen as a click on it chooses
+        // it; with none left the note stays the file chosen.
+        self.caret = false;
+        self.left = self.tabs.is_empty().then(|| self.closed.last().cloned()).flatten();
         self.shown = match self.shown {
             _ if self.tabs.is_empty() => None,
             Some(s) if s > i => Some(s - 1),
@@ -619,6 +648,7 @@ impl MenuNote {
 
     /// ⌘⇧T: the last tab closed whose note is still there.
     fn reopen_tab(&mut self, cx: &mut Context<Self>) {
+        self.caret = false;
         while let Some(path) = self.closed.pop() {
             if path.is_file() {
                 self.open_tab(path, cx);
@@ -741,6 +771,7 @@ impl MenuNote {
                 }
             }
             EditorEvent::Found => cx.notify(),
+            EditorEvent::Pressed => self.caret = true,
             // A file renamed from its bar: by the main window when it is
             // open, which follows its links through the vault; else the
             // file alone.
@@ -872,6 +903,7 @@ impl MenuNote {
         let sub = cx.subscribe_in(&field, window, |this, field, ev: &InputEvent, window, cx| match ev {
             InputEvent::PressEnter { .. } => {
                 this.keep_title(field, window, cx);
+                this.caret = true;
                 this.focus_in(window, cx);
                 cx.notify();
             }
@@ -899,6 +931,7 @@ impl MenuNote {
         match vault::rename(&path, &name) {
             Ok(to) => {
                 let moves = [(path, to)];
+                crate::file_undo::record(crate::file_undo::Kind::Renamed, moves.to_vec(), cx);
                 self.follow_moves(&moves, cx);
                 if let Some(shell) = main_shell(cx) {
                     shell.update(cx, |s, cx| s.moved_elsewhere(&moves, cx));
@@ -947,7 +980,7 @@ impl MenuNote {
             h.path = to;
             h.title = None;
         }
-        for p in &mut self.closed {
+        for p in self.closed.iter_mut().chain(self.left.iter_mut()).chain(self.gone.iter_mut().map(|(p, _, _)| p)) {
             *p = vault::moved_path(p, moves);
         }
         self.browse.open = self.browse.open.iter().map(|f| vault::moved_path(f, moves)).collect();
@@ -1051,7 +1084,115 @@ impl MenuNote {
 
     /// A note chosen in the tree: its tab shown, made if it has none.
     fn pick_note(&mut self, path: PathBuf, cx: &mut Context<Self>) {
+        self.caret = false;
         self.open_tab(path, cx);
+    }
+
+    // -- the files' keys ------------------------------------------------------
+
+    /// ⌘⌫ with the keyboard in no words: the file chosen goes to the
+    /// trash, held so ⌘Z puts it back (`file_undo`). The main window does
+    /// it while it is open, its own tab of the note written and closed.
+    fn trash_chosen(&mut self, cx: &mut Context<Self>) {
+        let Some(path) = self.chosen().map(Path::to_path_buf) else { return };
+        if main_window(move |s, window, cx| s.remove(vec![path.clone()], window, cx), cx) {
+            return;
+        }
+        let Some(path) = self.chosen().map(Path::to_path_buf) else { return };
+        let paths = [path];
+        self.let_go(&paths, cx);
+        let (_, failed) = crate::file_undo::remove(&paths, cx);
+        if let Some(e) = failed {
+            eprintln!("onyx: the note was not moved to the trash: {e}");
+        }
+        self.read_tree(cx);
+        cx.notify();
+    }
+
+    /// ⌘Z and ⌘⇧Z with the keyboard in no words: the last thing done to
+    /// the files is taken back, or the last taken back done again
+    /// (`Shell::files_step`). The main window does it while it is open,
+    /// since a move's links are written through its editors; shut, the
+    /// step is run on the disk.
+    fn files_step(&mut self, again: bool, cx: &mut Context<Self>) {
+        use crate::file_undo::{self, Kind};
+        if main_window(move |s, window, cx| s.files_step(again, window, cx), cx) {
+            return;
+        }
+        let Some((kind, moves)) = file_undo::next(again, cx) else { return };
+        let leaving: Vec<PathBuf> = moves.iter().filter(|(_, to)| file_undo::held(to, cx)).map(|(from, _)| from.clone()).collect();
+        self.let_go(&leaving, cx);
+        let Some(op) = file_undo::take(again, cx) else { return };
+        let ran = match kind {
+            Kind::Removed => file_undo::run_removal(&moves, cx),
+            kind => file_undo::run_on_disk(kind, &moves, self.browse.vault.as_deref()),
+        };
+        file_undo::settle(op, again, ran.is_ok(), cx);
+        match ran {
+            Ok(()) if kind == Kind::Removed => {
+                let here: Vec<PathBuf> = moves.iter().filter(|(_, to)| !file_undo::held(to, cx)).map(|(_, to)| to.clone()).collect();
+                self.came_back(&here, cx);
+            }
+            Ok(()) => self.follow_moves(&moves, cx),
+            Err(e) => eprintln!("onyx: the step was not run: {e}"),
+        }
+        self.read_tree(cx);
+        cx.notify();
+    }
+
+    /// The tabs of what is on its way out of the vault, written and
+    /// closed, and kept in mind to open again with it.
+    fn let_go(&mut self, paths: &[PathBuf], cx: &mut Context<Self>) {
+        let under = |p: &Path| paths.iter().any(|g| p.starts_with(g));
+        let was = self.path().map(Path::to_path_buf);
+        let going: Vec<(usize, PathBuf)> = self.tabs.iter().map(|h| h.path.clone()).enumerate().filter(|(_, p)| under(p)).collect();
+        for (ix, p) in going {
+            self.gone.retain(|(g, _, _)| *g != p);
+            self.gone.push((p.clone(), was.as_ref() == Some(&p), ix));
+            if let Some(i) = self.tab_of(&p) {
+                self.close_tab(i, cx);
+            }
+        }
+        let extra = self.gone.len().saturating_sub(100);
+        self.gone.drain(..extra);
+        if self.left.as_deref().is_some_and(under) {
+            self.left = None;
+        }
+        self.closed.retain(|p| !under(p));
+    }
+
+    /// What ⌘Z brought back: a note that was open as it left is open
+    /// again, the one that showing; with no tab, the note that came back
+    /// is the file chosen.
+    fn came_back(&mut self, here: &[PathBuf], cx: &mut Context<Self>) {
+        let (mut open, rest): (Vec<_>, Vec<_>) = std::mem::take(&mut self.gone).into_iter().partition(|(p, _, _)| here.iter().any(|h| p.starts_with(h)));
+        self.gone = rest;
+        let shown = open.iter().find(|(_, shown, _)| *shown).map(|(p, _, _)| p.clone()).or_else(|| self.path().map(Path::to_path_buf));
+        self.caret = false;
+        // Each back in its place in the row, the leftmost first.
+        open.sort_by_key(|(_, _, ix)| *ix);
+        let mut last = None;
+        for (p, _, ix) in open {
+            if !p.is_file() {
+                continue;
+            }
+            self.open_tab(p.clone(), cx);
+            if let Some(at) = self.tab_of(&p) {
+                let tab = self.tabs.remove(at);
+                self.tabs.insert(ix.min(self.tabs.len()), tab);
+            }
+            last = Some(p);
+        }
+        // The tabs have changed places: the one showing is found by its
+        // note again.
+        if let Some(i) = shown.or(last).and_then(|p| self.tab_of(&p)) {
+            self.show_tab(i, cx);
+        }
+        if self.shown.is_none() {
+            self.left = here.iter().find(|p| vault::is_note(p) && p.is_file()).cloned();
+        }
+        self.read_tree(cx);
+        cx.notify();
     }
 
     /// ⌘N, and the landing page's New Note: a name asked in the tree, in
@@ -1847,7 +1988,7 @@ impl MenuNote {
     /// it under the pointer.
     fn tree_row(&self, e: &vault::Entry, depth: usize, theme: &gpui_component::Theme, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let open = e.dir && self.browse.open.contains(&e.path);
-        let lit = !e.dir && self.path() == Some(e.path.as_path());
+        let lit = !e.dir && self.chosen() == Some(e.path.as_path());
         let file = e.path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| e.name.clone());
         // A folder's icon; a note has none, as in the main window's tree.
         let icon = e.dir.then(|| crate::folder_look::icon(&e.path, &file, open, theme.mode.is_dark(), theme, cx));
@@ -1996,6 +2137,7 @@ impl TabHost for MenuNote {
     }
 
     fn tab_show(&mut self, path: &Path, _: &mut Window, cx: &mut Context<Self>) {
+        self.caret = false;
         if let Some(i) = self.tab_of(path) {
             self.show_tab(i, cx);
         }
@@ -2197,6 +2339,11 @@ impl Render for MenuNote {
             .on_action(cx.listener(|this, _: &crate::shell::Tab8, _, cx| this.go_tab(8, cx)))
             .on_action(cx.listener(|this, _: &crate::shell::Tab9, _, cx| this.go_tab(9, cx)))
             .on_action(cx.listener(|this, _: &crate::shell::ToggleSidebar, _, cx| this.toggle_tree(cx)))
+            // The files' keys, the main window's, while the keyboard is
+            // the window's own, in no words.
+            .on_action(cx.listener(|this, _: &TrashNote, window, cx| if this.focus.is_focused(window) { this.trash_chosen(cx) } else { cx.propagate() }))
+            .on_action(cx.listener(|this, _: &gpui_component::input::Undo, window, cx| if this.focus.is_focused(window) { this.files_step(false, cx) } else { cx.propagate() }))
+            .on_action(cx.listener(|this, _: &gpui_component::input::Redo, window, cx| if this.focus.is_focused(window) { this.files_step(true, cx) } else { cx.propagate() }))
             // Escape: the menu goes, then a name being given.
             .on_action(cx.listener(|this, _: &crate::shell::Escape, _, cx| {
                 if this.menus.open.is_some() {
@@ -2307,6 +2454,16 @@ fn main_shell(cx: &App) -> Option<Entity<Shell>> {
     cx.try_global::<crate::MainShell>().and_then(|m| m.0.upgrade())
 }
 
+/// Something asked of the main window, with its window to hand, a moment
+/// on, outside whatever update asks. False when it is shut.
+fn main_window(f: impl FnOnce(&mut Shell, &mut Window, &mut Context<Shell>) + 'static, cx: &mut App) -> bool {
+    let Some((shell, handle)) = cx.try_global::<crate::MainShell>().and_then(|m| Some((m.0.upgrade()?, m.1))).filter(|(_, h)| cx.windows().contains(h)) else { return false };
+    cx.defer(move |cx| {
+        let _ = cx.update_window(handle, |_, window, cx| shell.update(cx, |s, cx| f(s, window, cx)));
+    });
+    true
+}
+
 fn main_has(path: &Path, cx: &App) -> bool {
     main_shell(cx).is_some_and(|s| s.read(cx).has_note(path))
 }
@@ -2383,6 +2540,32 @@ pub(crate) fn moved(moves: &[(PathBuf, PathBuf)], cx: &mut App) {
     cx.defer(move |cx| note.update(cx, |n, cx| n.follow_moves(&moves, cx)));
 }
 
+/// Files on their way out of the vault: the menu bar note's tabs of them
+/// are written and closed now, before they go.
+pub(crate) fn let_go(paths: &[PathBuf], cx: &mut App) {
+    let Some(note) = cx.try_global::<MenuBarNote>().map(|g| g.0.clone()) else { return };
+    note.update(cx, |n, cx| n.let_go(paths, cx));
+}
+
+/// Files ⌘Z brought back in the main window: the menu bar note's tabs of
+/// them open again.
+pub(crate) fn came_back(here: &[PathBuf], cx: &mut App) {
+    let Some(note) = cx.try_global::<MenuBarNote>().map(|g| g.0.clone()) else { return };
+    let here = here.to_vec();
+    cx.defer(move |cx| note.update(cx, |n, cx| n.came_back(&here, cx)));
+}
+
+/// The vault's files changed in the main window: the tree is read again.
+pub(crate) fn files_changed(cx: &mut App) {
+    let Some(note) = cx.try_global::<MenuBarNote>().map(|g| g.0.clone()) else { return };
+    cx.defer(move |cx| {
+        note.update(cx, |n, cx| {
+            n.read_tree(cx);
+            cx.notify();
+        })
+    });
+}
+
 pub(crate) fn holds(path: &Path, cx: &App) -> bool {
     cx.try_global::<MenuBarNote>().is_some_and(|n| n.1.borrow().iter().any(|p| p == path))
 }
@@ -2425,6 +2608,19 @@ pub(crate) fn probe(step: &str, cx: &mut App) {
     match rest {
         "" => note.update(cx, |n, cx| n.toggle(false, cx)),
         ":say" => probe_say(cx),
+        // The files as the note's window has them: its tabs, the file
+        // chosen, where the keyboard is, and the vault's notes on the disk.
+        ":files" => {
+            let handle = note.read(cx).window;
+            let keys = handle.and_then(|h| {
+                let (own, editor) = (note.read(cx).focus.clone(), note.read(cx).held().map(|h| h.editor.clone()));
+                h.update(cx, |_, w, cx| if own.is_focused(w) { "window" } else if editor.is_some_and(|e| e.read(cx).focus_handle(cx).is_focused(w)) { "words" } else { "elsewhere" }).ok()
+            });
+            let n = note.read(cx);
+            let name = |p: &Path| p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let disk: Vec<String> = n.browse.vault.as_ref().map(|r| vault::notes(r).iter().map(|p| p.strip_prefix(r).unwrap_or(p).to_string_lossy().to_string()).collect()).unwrap_or_default();
+            eprintln!("menufiles shown {:?} tabs {:?} chosen {:?} keys {keys:?} disk {disk:?}", n.path().map(name), n.tabs.iter().map(|h| name(&h.path)).collect::<Vec<_>>(), n.chosen().map(name));
+        }
         // What the main window shows: its vault and its note.
         ":main" => {
             let shown = main_shell(cx).map(|s| {

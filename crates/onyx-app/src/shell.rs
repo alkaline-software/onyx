@@ -332,6 +332,10 @@ pub struct Shell {
     /// Entries the menu bar note renamed, for everything here that knows
     /// them by their path to follow at the next frame (`moved_elsewhere`).
     pending_moves: Vec<(PathBuf, PathBuf)>,
+    /// The tabs let go of as their files left the vault, whether each was
+    /// the one showing, and its place in the row: open again there when
+    /// ⌘Z brings the file back.
+    gone_tabs: Vec<(PathBuf, bool, usize)>,
     /// What a note's menu was opened on (`note_menu.rs`).
     canvas: crate::note_menu::NoteMenu,
     /// The words the person has settled with the check.
@@ -599,6 +603,7 @@ impl Shell {
             menu_focus: None,
             pending_rename: None,
             pending_moves: Vec::new(),
+            gone_tabs: Vec::new(),
             canvas: Default::default(),
             words: Rc::new(Words::load()),
             rename: None,
@@ -764,6 +769,7 @@ impl Shell {
         self.let_tabs_go(window, cx);
         self.shown = None;
         self.closed_tabs.clear();
+        self.forget_files(cx);
         let (watcher, changes) = self.watch_vault(&root, cx);
         let tree = vault::tree(&root);
         library::forget_vaults();
@@ -1020,6 +1026,7 @@ impl Shell {
         self.let_tabs_go(window, cx);
         self.shown = None;
         self.closed_tabs.clear();
+        self.forget_files(cx);
         self.vault = None;
         library::forget_vaults();
         let mut ui = UiState::load();
@@ -1118,6 +1125,8 @@ impl Shell {
                 this.pending_rename = Some((file.clone(), name.clone()));
                 cx.notify();
             }
+            // A press in a note's words is work in it: it is the file chosen.
+            EditorEvent::Pressed => this.choose(&path, cx),
         })
     }
 
@@ -1230,6 +1239,9 @@ impl Shell {
             self.save_tab(ix, cx);
         }
         self.shown = Some(path.to_path_buf());
+        // The tab showing is the file chosen, however it came to show: its
+        // row is lit, and the files' keys are for it.
+        self.choose(path, cx);
         // The note comes up with no caret: the keyboard is the window's
         // until a press in the words asks for it.
         window.focus(&self.focus, cx);
@@ -1256,8 +1268,11 @@ impl Shell {
             match self.tabs.get(ix.min(self.tabs.len().saturating_sub(1))).map(|t| t.path.clone()) {
                 Some(next) => self.show_tab(&next, window, cx),
                 // The last tab gone, the panes beside it go with it: the
-                // vault's page stands alone, as it opens.
+                // vault's page stands alone, as it opens. The note stays
+                // the file chosen, its row lit, so the files' keys still
+                // act on it.
                 None => {
+                    self.choose(path, cx);
                     window.focus(&self.focus, cx);
                     self.put_panes_away(window, cx);
                 }
@@ -1642,16 +1657,27 @@ impl Shell {
     /// is remembered of them. False when the name could not be used,
     /// which is said.
     fn rename_entry(&mut self, path: &Path, name: &str, window: &mut Window, cx: &mut Context<Self>) -> bool {
-        let renamed = if self.is_asset(path) { self.rename_asset(path, name, cx) } else { vault::rename(path, name) };
-        let new_path = match renamed {
-            Ok(new_path) => new_path,
+        match self.rename_quietly(path, name, window, cx) {
+            Ok(to) => {
+                if to != path {
+                    crate::file_undo::record(crate::file_undo::Kind::Renamed, vec![(path.to_path_buf(), to)], cx);
+                }
+                true
+            }
             Err(e) => {
                 self.say(tf("The name was not changed: {why}", &[("why", &e)]), cx);
-                return false;
+                false
             }
-        };
-        self.follow_moves(&[(path.to_path_buf(), new_path)], window, cx);
-        true
+        }
+    }
+
+    /// The rename itself, with nothing written down of it: what ⌘Z and
+    /// ⌘⇧Z run, and `rename_entry`.
+    pub(crate) fn rename_quietly(&mut self, path: &Path, name: &str, window: &mut Window, cx: &mut Context<Self>) -> Result<PathBuf, String> {
+        let renamed = if self.is_asset(path) { self.rename_asset(path, name, cx) } else { vault::rename(path, name) };
+        let to = renamed.map_err(|e| e.to_string())?;
+        self.follow_moves(&[(path.to_path_buf(), to.clone())], window, cx);
+        Ok(to)
     }
 
     fn cancel_rename(&mut self, window: &mut Window, cx: &mut Context<Self>) {
@@ -1669,22 +1695,7 @@ impl Shell {
     }
 
     fn trash(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        // An open note going to the trash is written first, so what was
-        // typed goes with it, and its tab closes.
-        let going: Vec<PathBuf> = self.tabs.iter().map(|t| t.path.clone()).filter(|p| *p == path || p.starts_with(&path)).collect();
-        for p in going {
-            self.close_tab(&p, window, cx);
-        }
-        // A probe says it: the Trash is the person's.
-        if std::env::var_os("ONYX_GO").is_some() {
-            eprintln!("trash {}", path.display());
-        } else if let Err(e) = vault::trash(&path) {
-            self.say(tf("It was not moved to the trash: {why}", &[("why", &e)]), cx);
-        } else {
-            crate::folder_look::removed(&path, cx);
-        }
-        self.reread_tree(cx);
-        self.save_ui(window);
+        self.remove(vec![path], window, cx);
     }
 
     /// A note's or a folder's menu, one menu wherever it is opened: its
@@ -4863,6 +4874,13 @@ impl Render for Shell {
             }))
             .on_action(cx.listener(|this, _: &CloseTab, window, cx| this.close_nearest(window, cx)))
             .on_action(cx.listener(|this, _: &ReopenTab, window, cx| this.reopen_tab(window, cx)))
+            // The files' keys, while the keyboard is in no words: ⌘⌫ puts
+            // the file chosen in the trash, ⌘Z takes the last thing done
+            // to the files back and ⌘⇧Z does it again. Anywhere else each
+            // goes on to whatever has the keyboard.
+            .on_action(cx.listener(|this, _: &tree::TreeTrash, window, cx| if this.files_keys(window) { this.trash_chosen(window, cx) } else { cx.propagate() }))
+            .on_action(cx.listener(|this, _: &gpui_component::input::Undo, window, cx| if this.files_keys(window) { this.files_step(false, window, cx) } else { cx.propagate() }))
+            .on_action(cx.listener(|this, _: &gpui_component::input::Redo, window, cx| if this.files_keys(window) { this.files_step(true, window, cx) } else { cx.propagate() }))
             .on_action(cx.listener(|this, _: &Tab1, window, cx| this.go_tab(1, window, cx)))
             .on_action(cx.listener(|this, _: &Tab2, window, cx| this.go_tab(2, window, cx)))
             .on_action(cx.listener(|this, _: &Tab3, window, cx| this.go_tab(3, window, cx)))
@@ -5157,6 +5175,38 @@ impl Shell {
                         })
                         .detach();
                     }
+                }
+                "files" => {
+                    // The files as the window has them, in its turn among
+                    // the presses and keys: the note showing, the tabs,
+                    // the rows chosen, where the keyboard is, and the
+                    // vault's notes on the disk.
+                    let wait = later;
+                    later += GO_STEP;
+                    cx.spawn_in(window, async move |this, cx| {
+                        cx.background_executor().timer(Duration::from_millis(wait)).await;
+                        let _ = this.update_in(cx, |s, window, cx| {
+                            let name = |p: &PathBuf| p.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+                            let keys = if s.tree_focus.is_focused(window) {
+                                "tree"
+                            } else if s.focus.is_focused(window) {
+                                "window"
+                            } else if s.shown_editor().is_some_and(|e| e.read(cx).focus_handle(cx).is_focused(window)) {
+                                "words"
+                            } else {
+                                "elsewhere"
+                            };
+                            let on_disk: Vec<String> = s.vault_root().map(|r| vault::notes(r).iter().map(|p| p.strip_prefix(r).unwrap_or(p).to_string_lossy().to_string()).collect()).unwrap_or_default();
+                            eprintln!(
+                                "files shown {:?} tabs {:?} chosen {:?} lit {:?} keys {keys} disk {on_disk:?}",
+                                s.shown.as_ref().map(name),
+                                s.tabs.iter().map(|t| name(&t.path)).collect::<Vec<_>>(),
+                                s.choice.marked.iter().map(name).collect::<Vec<_>>(),
+                                s.visible_rows().iter().filter(|(p, _)| s.row_lit(p)).map(|(p, _)| name(p)).collect::<Vec<_>>(),
+                            );
+                        });
+                    })
+                    .detach();
                 }
                 "where" => {
                     // Where the caret and the selection's other end stand,
