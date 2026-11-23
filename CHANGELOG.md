@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.5.2
+
+1. **Keys for files.** ⌘⌫ moves the chosen note or folder to the Trash, and ⌘Z and ⌘⇧Z undo and redo a removal, a move or a rename, in the main window and in the menu bar note.
+2. **One chosen note.** A click on a tab chooses its note as a click in the sidebar does, and the note of the last tab you close stays chosen, so the keys still act on it.
+3. **A calmer vault.** A vault's block is gray like the rest of the sidebar, with its color on a solid tile of its own.
+4. **The source pane.** Its line numbers take less room, its ground is a shade darker, and its sheet scrolls away under the fade as the note's does.
+5. **Fonts.** The faces stand in a new order, in a settings window wide enough to show each name whole.
+
+**Fixes**
+
+- A click anywhere under a note's words puts the caret at their end, with the text pointer over all of it.
+- A table pasted from elsewhere, ruled under its head, opens at its full width.
+- A long note with the source pane open no longer keeps the processor busy while nothing moves.
+
 ## v0.5.1
 
 1. **The menu bar note.** MiniNotes comes back inside Onyx: any note in a small window under Onyx's item in the menu bar, or at ⌃⌥⌘O from any app, with the vault's tree, tabs and the same editor as the main window.
