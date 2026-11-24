@@ -6,7 +6,7 @@
 //! `fade_in`; something small that is there or is not plays its change by
 //! `Motion::presence`.
 //!
-//! The timings are the studio's (the constitution's `docs/design.md`,
+//! The timings are the studio's (the standards' `docs/design.md`,
 //! Motion, Timing), and every motion eases with `ease_out_quint`.
 
 use std::cell::RefCell;

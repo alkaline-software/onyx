@@ -2,7 +2,7 @@
 
 ## What this is
 
-**Onyx** is a note-taking app: a folder of plain markdown files, a vault, shown in a sidebar, and a note drawn as it reads while you write it, as Obsidian's live preview does. Rust and GPUI, built to the Alkaline Software constitution; it took the place of MiniNotes, a Swift menu bar app, at v0.5.0, and MiniNotes lives on in it as the note in the menu bar (`menubar.rs`). **Only the Mac version is published.** The code keeps the constitution's Windows and Linux paths, but no release is cut for them and nothing is checked there. The same app runs on an iPhone and an iPad through gpui's backend for them, checked in simulators and not yet on a device or published (`docs/platform.md`, iPhone and iPad).
+**Onyx** is a note-taking app: a folder of plain markdown files, a vault, shown in a sidebar, and a note drawn as it reads while you write it, as Obsidian's live preview does. Rust and GPUI, built to the Alkaline Software standards; it took the place of MiniNotes, a Swift menu bar app, at v0.5.0, and MiniNotes lives on in it as the note in the menu bar (`menubar.rs`). **Only the Mac version is published.** The code keeps the standards' Windows and Linux paths, but no release is cut for them and nothing is checked there. The same app runs on an iPhone and an iPad through gpui's backend for them, checked in simulators and not yet on a device or published (`docs/platform.md`, iPhone and iPad).
 
 ## The one idea
 
@@ -149,7 +149,7 @@ One dev build at a time: two copies share `~/.onyx` and both write what the wind
 
 - How a part works, a trap, or a fact learned about gpui or the toolkit goes in that part's doc under `docs/`, in its `## Rules` when breaking it loses data or brings back a bug.
 - This file gets a line only for a rule every session follows whatever it works on, or a row in the table above. Keep it under 300 lines.
-- Write what is so now and why, in plain words, with no hard wraps, American spelling and no em dashes (the constitution's `docs/docs.md`). An approach tried and dropped gets one sentence, where someone might try it again. What was checked and how belongs in the reply to the person, not in a doc.
+- Write what is so now and why, in plain words, with no hard wraps, American spelling and no em dashes (the standards' `docs/docs.md`). An approach tried and dropped gets one sentence, where someone might try it again. What was checked and how belongs in the reply to the person, not in a doc.
 
 ## Testing
 

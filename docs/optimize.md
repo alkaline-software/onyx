@@ -1,6 +1,6 @@
 # Optimization
 
-About keeping Onyx fast and light: how an optimization pass is done, the rules passes have left, and the log of every pass, which is what makes the next one incremental. The studio's method is the constitution's `docs/optimize.md`; this page is Onyx's own part of it.
+About keeping Onyx fast and light: how an optimization pass is done, the rules passes have left, and the log of every pass, which is what makes the next one incremental. The studio's method is the standards' `docs/optimize.md`; this page is Onyx's own part of it.
 
 ## Rules
 

@@ -1,6 +1,6 @@
 # Platforms
 
-How Onyx works on macOS, Windows and Linux, each on Intel-class and ARM machines, and on an iPhone and an iPad, and what is gated. The studio's constitution has the reasoning; this is what Onyx itself does.
+How Onyx works on macOS, Windows and Linux, each on Intel-class and ARM machines, and on an iPhone and an iPad, and what is gated. The studio's standards have the reasoning; this is what Onyx itself does.
 
 ## Rules
 
