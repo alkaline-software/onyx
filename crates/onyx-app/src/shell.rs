@@ -337,6 +337,8 @@ pub struct Shell {
     side_moved: Option<(SideView, Instant)>,
     /// Where the vaults' list rises from: the button, as it was last drawn.
     vaults_at: Rc<std::cell::Cell<Bounds<Pixels>>>,
+    /// Where a compact window's foot bar was last drawn, for More's menu to rise from.
+    foot_at: Rc<std::cell::Cell<Bounds<Pixels>>>,
     /// The folder's row the pointer is on, which shows its New Note and New Folder.
     hover_row: Option<PathBuf>,
     library: Library,
@@ -622,6 +624,7 @@ impl Shell {
             side_view: SideView::from_key(ui.side_view.as_deref().unwrap_or("notes")),
             side_moved: None,
             vaults_at: Rc::default(),
+            foot_at: Rc::default(),
             hover_row: None,
             choice: Choice::default(),
             tree_focus: cx.focus_handle(),
@@ -2722,7 +2725,10 @@ impl Shell {
             return self.render_side_stack(div().flex().flex_col().child(assets), ground, theme, cx);
         }
         let rows = self.render_tree(theme, cx);
-        let list = div().flex().flex_col().children(self.render_vault_root(theme, cx)).child(
+        // A compact window names the vault once, on its block at the
+        // drawer's top, which has the row's menu and takes its drops.
+        let head = if self.compact { None } else { self.render_vault_root(theme, cx) };
+        let list = div().flex().flex_col().children(head).child(
                 div()
                     .relative()
                     .flex_1()
@@ -3527,10 +3533,13 @@ impl Shell {
     }
 
     /// The bar at a compact window's foot, over the note's page and above
-    /// the home indicator, where a thumb reaches: Search and New Note.
-    /// It goes while the keyboard is out, which has the window's foot
-    /// then, and there is none before a vault, with nothing to search or
-    /// to make a note in.
+    /// the home indicator, where a thumb reaches: Search, New Note and
+    /// More, the menu of the note showing (`entry_menu`, the one its row
+    /// in the sidebar opens), which rises from the bar. More keeps its
+    /// place with no note showing, dimmed, so the bar is one width. It
+    /// goes while the keyboard is out, which has the window's foot then,
+    /// and there is none before a vault, with nothing to search or to
+    /// make a note in.
     fn render_foot_bar(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
         if !self.compact {
             return None;
@@ -3539,8 +3548,12 @@ impl Shell {
         let theme = cx.theme().clone();
         let wash = theme.foreground.opacity(0.08);
         let button = |id: &'static str, icon: &'static str| div().id(id).size(px(FOOT_BAR_H - 8.)).rounded_full().flex().items_center().justify_center().cursor_pointer().hover(move |s| s.bg(wash)).active(move |s| s.bg(wash)).child(Icon::default().path(icon).with_size(px(22.)).text_color(theme.foreground.opacity(0.8)));
+        let note = self.shown.as_deref().is_some_and(vault::is_note);
+        let listed = note && self.menus.open.as_ref().is_some_and(|m| m.what == "entry") && self.pressed.is_some() && self.pressed == self.shown;
+        let place = self.foot_at.clone();
         let bar = h_flex()
             .id("foot-bar")
+            .relative()
             .occlude()
             .h(px(FOOT_BAR_H))
             .px(px(4.))
@@ -3560,6 +3573,22 @@ impl Shell {
                 swallow_click(window, cx);
                 this.new_note(&NewNote, window, cx)
             })))
+            .child(button("foot-more", "icons/menu.svg").when(!note, |d| d.opacity(0.35).cursor_default()).when(listed, |d| d.bg(wash)).on_click(cx.listener(|this, _, window, cx| {
+                swallow_click(window, cx);
+                let Some(path) = this.shown.clone().filter(|p| vault::is_note(p)) else { return };
+                if this.menus.open.as_ref().is_some_and(|m| m.what == "entry") {
+                    this.menus.close(cx);
+                    cx.notify();
+                    return;
+                }
+                // The menu's bottom right over the bar's top right, under the button pressed.
+                let b = this.foot_at.get();
+                this.show_entry_menu(path, point(b.right(), b.top() - px(6.)), cx);
+                if let Some(m) = this.menus.open.as_mut() {
+                    m.corner = Anchor::BottomRight;
+                }
+            })))
+            .child(canvas(move |b, _, _| place.set(b), |_, _, _, _| ()).absolute().top_0().left_0().size_full())
             .into_any_element();
         let bar = match self.motion.presence("foot-bar", on, cx) {
             Some((coming, serial)) => div().child(bar).with_animation(("foot-bar", serial as u64), Animation::new(crate::widgets::FOLD_ANIM).with_easing(ease_out_quint()), move |d, t| d.opacity(if coming { t } else { 1. - t })).into_any_element(),
@@ -3700,13 +3729,15 @@ impl Shell {
     /// sidebar opens on a right click (`entry_menu`), Export… with the rest,
     /// opened at the button. It stands in the strip's column of buttons,
     /// square and placed as the terminal's over it (`toggle_button`,
-    /// `STRIP_END`), so the two line up; lit while its menu is open.
+    /// `STRIP_END`), so the two line up; lit while its menu is open. A
+    /// compact window has no path row: its More is on the bar at the
+    /// page's foot (`render_foot_bar`).
     fn render_more(&self, theme: &gpui_component::Theme, cx: &mut Context<Self>) -> Stateful<Div> {
         let (lit, wash) = (theme.foreground, theme.muted);
         let open = self.menus.open.as_ref().is_some_and(|m| m.what == "entry") && self.pressed.is_some() && self.pressed == self.shown;
         div()
             .id("path-more")
-            .size(self.toggle_w())
+            .size(TOGGLE_W)
             .flex()
             .items_center()
             .justify_center()
@@ -3723,7 +3754,7 @@ impl Shell {
                     this.show_entry_menu(path, ev.position(), cx);
                 }
             }))
-            .child(Icon::default().path("icons/file-dots.svg").with_size(px(if self.compact { 20. } else { 15. })))
+            .child(Icon::default().path("icons/file-dots.svg").with_size(px(15.)))
     }
 
     /// The ends of the tabs' row, after Emaki's panel buttons: at the
@@ -3747,12 +3778,8 @@ impl Shell {
         // (`render_strip`); an iPhone and an iPad have no shell.
         let source = end("strip-source", note && !self.compact, source, cx);
         let term = end("strip-term", (self.vault.is_some() || self.term_on) && !self.compact && cfg!(not(target_os = "ios")), term, cx);
-        // A compact window's right end is More's, the note's own menu,
-        // as the left is the sidebar's button's.
-        let more_theme = cx.theme().clone();
-        let more = end("strip-more", self.compact && self.shown.as_deref().is_some_and(vault::is_note), self.render_more(&more_theme, cx).into_any_element(), cx);
         let left = h_flex().w(self.toggle_w()).flex_shrink_0().items_center().children(source).into_any_element();
-        let right = h_flex().w(self.toggle_w()).flex_shrink_0().justify_end().items_center().children(term).children(more).into_any_element();
+        let right = h_flex().w(self.toggle_w()).flex_shrink_0().justify_end().items_center().children(term).into_any_element();
         (left, right)
     }
 

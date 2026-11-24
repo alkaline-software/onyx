@@ -61,6 +61,7 @@ Looked at and left as they are:
 - The long press's listener, the edge swipe's and the settings' `NARROW`: nothing at a frame but while a finger is down or the sheet is up.
 
 - Later the same day, the pages with nothing open sized for a compact window, no tooltip after a touch, and each font row's first tile as a new install's: a page's words take their font from `Look::words` as the frame is built, two reference counts, and the tooltip's listener asks the window one flag when a hover begins. Then the sidebar and the menus at a hand's size: `widgets::hand` reads one flag of the thread and multiplies, a few dozen times a frame, and `tree_row_h` the same flag where a row's place is summed. Then a compact window's page as the whole screen: two more flags of the thread set a frame (`set_reach`), the status bar's ink asked a frame and told to the system only when it changes (`sys::status_bar`), and the foot bar's presence asked a frame as the strip's ends' are. Nothing runs at a frame that did not.
+- Later the same day (from `451d8e8`), a compact window's drawer reordered: the vault's block and the tabs over the card, the vault's row at the tree's head left out. The same elements in another order and one row fewer, nothing new at a frame. Then More on the foot bar: one more button, and a canvas that keeps the bar's bounds as it is drawn (`foot_at`, a `Cell` set), as the vault's block has.
 
 Left for later: a release build measured on a device (memory at launch with a large vault, the watcher's listing on a phone's storage, the iCloud wait).
 

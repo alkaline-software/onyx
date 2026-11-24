@@ -106,8 +106,8 @@ pub struct Menu {
     /// Which menu it is, for the view that answers its choices.
     pub what: &'static str,
     pub at: Point<Pixels>,
-    /// The menu's corner that stands at `at`: its top left, or its bottom
-    /// left for a menu that rises from what opened it.
+    /// The menu's corner that stands at `at`: its top left, or a bottom
+    /// corner for a menu that rises from what opened it.
     pub corner: Anchor,
     /// Its width, where it is to be as wide as what opened it; else its rows'.
     pub width: Option<Pixels>,
@@ -292,7 +292,7 @@ fn card<V: 'static>(m: &Menu, going: Option<Duration>, pick: std::rc::Rc<dyn Fn(
     let body = match going {
         // It comes in from the side it opens toward: down, or up when it rises.
         None => {
-            let from = if m.corner == Anchor::BottomLeft { 4. } else { -4. };
+            let from = if matches!(m.corner, Anchor::BottomLeft | Anchor::BottomRight) { 4. } else { -4. };
             body.with_animation(ElementId::NamedInteger("menu-in".into(), m.serial as u64), Animation::new(MENU_IN).with_easing(ease_out_quint()), move |d, t| d.opacity(t).mt(px(from * (1. - t)))).into_any_element()
         }
         Some(gone) => {

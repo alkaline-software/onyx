@@ -4,7 +4,9 @@
 //!
 //! The sidebar is the vault's card, after Emaki's computers
 //! (`render_side_stack`): the tabs of Notes and Assets at its top, the
-//! vault's own row over the tree, and the vault's button at the foot. The
+//! vault's own row over the tree, and the vault's button at the foot (a
+//! compact window's drawer has the button and the tabs over the card and
+//! no vault's row). The
 //! assets' card lists every file of the folder
 //! by its kind (`preview::kind`), a row each: a picture's with its small
 //! square in the icon's place, on a taller row. A press opens the file in a
@@ -320,22 +322,24 @@ impl Shell {
         };
         let tabs = div().relative().h(px(hand(30.))).child(plate).child(h_flex().size_full().child(tab(SideView::Notes)).child(tab(SideView::Assets)));
         let content = fade_in(content.flex_1().min_h_0(), format!("side-card-{serial}"));
-        let card = v_flex().mx(px(8.)).mt(px(10.)).mb(px(8.)).flex_1().min_h_0().rounded(px(10.)).border_1().border_color(theme.foreground.opacity(0.1)).bg(ground).overflow_hidden();
+        let compact = self.is_compact();
+        let card = v_flex().mx(px(8.)).mt(px(if compact { 0. } else { 10. })).mb(px(8.)).flex_1().min_h_0().rounded(px(10.)).border_1().border_color(theme.foreground.opacity(0.1)).bg(ground).overflow_hidden();
         let block = self.render_vault_block(theme, cx);
-        // In a compact window, held in a hand, what is pressed is at the
-        // foot, under the thumb, as a phone's own apps have it: the card
-        // is the tree alone, and under it the tools, the two tabs on a
-        // track of their own, and the vault's block.
-        if self.is_compact() {
+        // In a compact window, held in a hand, the drawer reads from its
+        // top as what is shown: the vault's block, which names the vault
+        // and lists the others, the two tabs on a track of their own, and
+        // the card, the tree alone; the tools are under it, by the thumb.
+        if compact {
             let band = div().flex_shrink_0().mx(px(8.)).mb(px(8.)).p(px(4.)).rounded(px(11.)).bg(track_bg).border_1().border_color(theme.foreground.opacity(0.1)).child(tabs);
-            return v_flex().flex_1().min_h_0().child(card.child(content)).child(self.render_side_tools(theme, cx)).child(band).children(block).into_any_element();
+            return v_flex().flex_1().min_h_0().children(block).child(band).child(card.child(content)).child(self.render_side_tools(theme, cx)).into_any_element();
         }
         let band = div().flex_shrink_0().p(px(4.)).rounded_t(px(9.)).bg(track_bg).border_b_1().border_color(theme.foreground.opacity(0.1)).child(tabs);
         v_flex().flex_1().min_h_0().child(card.child(band).child(content)).children(block).into_any_element()
     }
 
     /// The tools at the foot of a compact window's sidebar, where the
-    /// Mac has them on the vault's row and its title row: New Note and
+    /// Mac has them on the vault's row, which a compact window leaves
+    /// out, and its title row: New Note and
     /// New Folder at the vault's top, Collapse All Folders, and Search.
     /// Each is a finger's size, spread across the drawer.
     fn render_side_tools(&self, theme: &gpui_component::Theme, cx: &mut Context<Self>) -> AnyElement {
@@ -399,6 +403,8 @@ impl Shell {
     /// The vault under its card (`vault_block`, as the menu bar note has
     /// it on its head): a press lists the vaults over it, as wide as it
     /// (`show_vaults_at`), and a press while they show puts them away; a
+    /// compact window has it at the drawer's top, over the tabs, and its
+    /// list drops from it; a
     /// right click gives the vault's menu (Rename, Icon and Color…, Reveal
     /// in Finder); a row let go on it goes to the vault's top.
     pub(crate) fn render_vault_block(&self, theme: &gpui_component::Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
@@ -409,10 +415,12 @@ impl Shell {
         let wash = theme.primary.opacity(0.22);
         let under = cx.theme().title_bar;
         let block = vault_block("vault-block", &root, &name, BlockSize::sidebar(), under, listed, theme, cx);
+        let compact = self.is_compact();
         Some(
             block
                 .mx(px(8.))
-                .mb(px(10.))
+                .mb(px(if compact { 8. } else { 10. }))
+                .when(compact, |d| d.mt(px(10.)))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(|this, _, window, cx| {
                     swallow_click(window, cx);
@@ -422,6 +430,9 @@ impl Shell {
                         return;
                     }
                     let b = this.vaults_at.get();
+                    if this.is_compact() {
+                        return this.show_vaults_at(point(b.origin.x, b.bottom() + px(6.)), Some(b.size.width), false, cx);
+                    }
                     this.show_vaults_at(point(b.origin.x, b.origin.y - px(6.)), Some(b.size.width), true, cx);
                 }))
                 .on_mouse_down(MouseButton::Right, cx.listener(|this, ev: &MouseDownEvent, window, cx| {
@@ -443,7 +454,8 @@ impl Shell {
     /// Notes tools at its right: Collapse All Folders, and New Note and
     /// New Folder at the vault's top (⌘N makes beside the note showing).
     /// A right click gives the vault's menu; a row let go on it goes to
-    /// the vault's top.
+    /// the vault's top. A compact window has no such row: its drawer
+    /// names the vault on the block at its top.
     pub(crate) fn render_vault_root(&self, theme: &gpui_component::Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
         let root = self.vault_root()?.to_path_buf();
         let name = self.vault.as_ref().map(|v| v.tree.name.clone()).unwrap_or_default();
@@ -484,8 +496,7 @@ impl Shell {
                     cx.stop_propagation();
                     this.tree_drop(drag, root.clone(), window, cx)
                 }))
-                // A compact window's tools are at the sidebar's foot (`render_side_tools`).
-                .when(!self.is_compact(), |d| d.child(tools))
+                .child(tools)
                 .into_any_element(),
         )
     }
@@ -1097,7 +1108,8 @@ impl BlockSize {
 /// note, which give it its press: a gray block with an edge, its mark and
 /// its name. The block is the switch: no
 /// arrows say so. Each has it at the tree's foot: under the card in the
-/// sidebar, under the tree in the menu bar note.
+/// sidebar, under the tree in the menu bar note. A compact window's
+/// drawer has it at its top (`render_vault_block`).
 /// `under` is the ground it stands on; `listed` lights it while its list
 /// shows.
 #[allow(clippy::too_many_arguments)]
