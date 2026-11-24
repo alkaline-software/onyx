@@ -1,5 +1,19 @@
 # Changelog
 
+## v0.6.0
+
+1. **Nothing moves at a press.** A press changes only what is in its own place: a control that does not apply stays where it is, dimmed, and one whose words change keeps one width, in Settings and in Export.
+2. **Notices.** A notice hangs over the page for a moment and no longer pushes the note down.
+3. **Updates.** The Updates button says what a check found on itself (Checking…, Up to date, Check failed), with a failure's reason in its tooltip.
+4. **Fonts.** A new install starts with the first face of each row: Source Serif for a note's words.
+5. **iPhone and iPad.** Onyx now runs on both, with a layout of its own on an iPhone; it is not on the App Store yet.
+
+**Fixes**
+
+- The terminal's lower corners stay round.
+- A long container path in Settings stays on one line, cut at its start.
+- Why keys were refused as the menu bar note's shortcut, or Open at login by the system, is said in place.
+
 ## v0.5.2
 
 1. **Keys for files.** ⌘⌫ moves the chosen note or folder to the Trash, and ⌘Z and ⌘⇧Z undo and redo a removal, a move or a rename, in the main window and in the menu bar note.
