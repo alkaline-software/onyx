@@ -36,6 +36,30 @@ About keeping Onyx fast and light: how an optimization pass is done, the rules p
 
 Newest first. Each entry: the version and date, the commits covered, what was looked at, what was found and done with numbers, what was looked at and left as it is, and what was left for later.
 
+### v0.6.0, 2026-11-24
+
+Covers `46a1280` to the commit that adds this entry, and what the entry below read later the same day without timing it: the sidebar, the menus, the sheets and the settings at a hand's size, a compact window's page as the whole screen, its drawer, one file at a time on an iPhone, a press that moves nothing (the Updates button's states, a notice hung over the page, controls of fixed widths, Export's options dimmed in place), `round_corners` shared from `widgets`, the drawer's order and More on the foot bar. A release build of the branch as the entry below measured it against a release build of this pass, each a probe copy with a scratch home on the vault of three notes, idle from 10 seconds on, over 20 seconds, measured the same way.
+
+| | Before | This pass |
+|---|---|---|
+| A vault open, nothing open | 0.30% of a core, 131 MB in two runs | 0.35% of a core, 132 MB |
+| A note open | 0.30% of a core, 244 MB | 0.35% of a core, 244 MB |
+| Idle wakeups in 20 seconds: the vault, the note | 1 to 2, 0 | 1, 2 |
+
+The same within what two runs of one build differ by (a tick of `ps` is 0.05% here).
+
+Found and fixed: nothing.
+
+Looked at and left as they are:
+- On a Mac the hand's sizes and the reach are three flags of the thread set a frame (`set_in_hand`, `set_reach`) and read where a measure is made; `sys::status_bar` is empty off an iPhone and an iPad, and there tells the system only a change.
+- A compact window's drawer is built only while it is out (`t_side` over 0), its scrim too; the foot bar copies the theme once a frame it is drawn, and keeps its bounds in a `Cell` for More's menu.
+- One file at a time (`Shell::keep_one`): a walk of the tabs when a file is shown, never at a frame.
+- The notice is one element hung over the page where it was a line under the strip; the Updates button's state is a match on four fields; the widths that hold a control's longest words are constants, measured once by hand and not by the window.
+- `round_corners` paints four small paths a box that has it, as `embed::corners` did before it moved; the terminal's screen rounds its own two corners.
+- Settings and Export are drawn only while they are open.
+
+Left for later: a release build measured on a device, as below.
+
 ### The iPhone and iPad branch, 2026-11-24
 
 Covers `e36802b` (v0.5.2) to the commit that adds this entry: gpui moved from zed `ce48461e` to `f8cfc7ed` for its iPhone and iPad backend, the toolkit built against it, and everything for an iPhone and an iPad (the insets, the compact window, the settings as a sheet, the watcher, the trash, the fixed container). The release build of v0.5.2 as installed (a copy signed ad hoc, since the signed one carries iCloud entitlements and is killed outside its bundle) against a release build of this pass, each a probe copy with a scratch home on a vault of three notes, idle from 10 seconds on, over 20 seconds: CPU from `ps -o time=`, memory from `footprint`, wakeups from `top -stats idlew`. A Mac with the person's own apps running; the memory of a copy with a note open moved by a hundred megabytes between two runs of one build (the first grammar check and the faces' loading land differently), so those two rows say only that nothing grew out of that range.
