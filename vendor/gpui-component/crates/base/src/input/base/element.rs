@@ -199,14 +199,6 @@ impl<M: InputModeKind> EditorScrollbar<M> {
     }
 }
 
-impl<M: InputModeKind> IntoElement for EditorScrollbar<M> {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
-    }
-}
-
 impl<M: InputModeKind> Element for EditorScrollbar<M> {
     type RequestLayoutState = ();
     type PrepaintState = Option<AnyElement>;
@@ -1658,14 +1650,6 @@ impl PrepaintState {
             bounds.origin.y += self.cursor_scroll_offset.y;
             bounds
         })
-    }
-}
-
-impl<M: InputModeKind> IntoElement for TextElement<M> {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
     }
 }
 

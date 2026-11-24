@@ -25,7 +25,8 @@ use gpui_component::{h_flex, v_flex, ActiveTheme as _, Icon, Sizable as _};
 use onyx_core::preview::{self, Kind};
 use onyx_core::vault;
 
-use super::{edge_fade, page_ground, Shell, Tab, ROW_BREATH, TREE_ROW_H};
+use super::{edge_fade, page_ground, tree_row_h, Shell, Tab, ROW_BREATH};
+use crate::widgets::hand;
 use crate::editor::{AssetDrag, Editor, Mode, Seen, Viewing};
 use crate::embed::{Embed, TabAsk};
 use crate::i18n::t;
@@ -304,8 +305,8 @@ impl Shell {
                 .h_full()
                 .justify_center()
                 .items_center()
-                .gap(px(7.))
-                .text_size(px(12.5))
+                .gap(px(hand(7.)))
+                .text_size(px(hand(12.5)))
                 .font_weight(if open { FontWeight::SEMIBOLD } else { FontWeight::MEDIUM })
                 .text_color(ink)
                 .when(!open, |d| d.cursor_pointer().hover(move |s| s.text_color(hover)))
@@ -314,15 +315,85 @@ impl Shell {
                     swallow_click(window, cx);
                     this.set_side_view(view, window, cx);
                 }))
-                .child(Icon::default().path(icon).with_size(px(14.)))
+                .child(Icon::default().path(icon).with_size(px(hand(14.))))
                 .child(div().min_w_0().truncate().child(name))
         };
-        let tabs = div().relative().h(px(30.)).child(plate).child(h_flex().size_full().child(tab(SideView::Notes)).child(tab(SideView::Assets)));
-        let band = div().flex_shrink_0().p(px(4.)).rounded_t(px(9.)).bg(track_bg).border_b_1().border_color(theme.foreground.opacity(0.1)).child(tabs);
+        let tabs = div().relative().h(px(hand(30.))).child(plate).child(h_flex().size_full().child(tab(SideView::Notes)).child(tab(SideView::Assets)));
         let content = fade_in(content.flex_1().min_h_0(), format!("side-card-{serial}"));
-        let card = v_flex().mx(px(8.)).mt(px(10.)).mb(px(8.)).flex_1().min_h_0().rounded(px(10.)).border_1().border_color(theme.foreground.opacity(0.1)).bg(ground).overflow_hidden().child(band).child(content);
+        let card = v_flex().mx(px(8.)).mt(px(10.)).mb(px(8.)).flex_1().min_h_0().rounded(px(10.)).border_1().border_color(theme.foreground.opacity(0.1)).bg(ground).overflow_hidden();
         let block = self.render_vault_block(theme, cx);
-        v_flex().flex_1().min_h_0().child(card).children(block).into_any_element()
+        // In a compact window, held in a hand, what is pressed is at the
+        // foot, under the thumb, as a phone's own apps have it: the card
+        // is the tree alone, and under it the tools, the two tabs on a
+        // track of their own, and the vault's block.
+        if self.is_compact() {
+            let band = div().flex_shrink_0().mx(px(8.)).mb(px(8.)).p(px(4.)).rounded(px(11.)).bg(track_bg).border_1().border_color(theme.foreground.opacity(0.1)).child(tabs);
+            return v_flex().flex_1().min_h_0().child(card.child(content)).child(self.render_side_tools(theme, cx)).child(band).children(block).into_any_element();
+        }
+        let band = div().flex_shrink_0().p(px(4.)).rounded_t(px(9.)).bg(track_bg).border_b_1().border_color(theme.foreground.opacity(0.1)).child(tabs);
+        v_flex().flex_1().min_h_0().child(card.child(band).child(content)).children(block).into_any_element()
+    }
+
+    /// The tools at the foot of a compact window's sidebar, where the
+    /// Mac has them on the vault's row and its title row: New Note and
+    /// New Folder at the vault's top, Collapse All Folders, and Search.
+    /// Each is a finger's size, spread across the drawer.
+    fn render_side_tools(&self, theme: &gpui_component::Theme, cx: &mut Context<Self>) -> AnyElement {
+        let root = self.vault_root().map(Path::to_path_buf);
+        let (lit, wash, muted) = (theme.foreground, theme.foreground.opacity(0.1), theme.muted_foreground);
+        let tool = |id: &'static str, icon: &'static str| {
+            div()
+                .id(id)
+                .size(px(44.))
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .rounded_full()
+                .cursor_pointer()
+                .text_color(muted)
+                .hover(move |s| s.bg(wash).text_color(lit))
+                .active(move |s| s.bg(wash).text_color(lit))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .child(Icon::default().path(icon).with_size(px(22.)))
+        };
+        let notes = self.side_view == SideView::Notes;
+        h_flex()
+            .flex_shrink_0()
+            .mx(px(8.))
+            .mb(px(6.))
+            .justify_around()
+            .items_center()
+            .child(tool("side-tool-note", "icons/file-plus.svg").on_click(cx.listener({
+                let root = root.clone();
+                move |this, _, window, cx| {
+                    swallow_click(window, cx);
+                    if let Some(root) = root.clone() {
+                        this.new_note_in(root, window, cx);
+                    }
+                }
+            })))
+            .child(tool("side-tool-folder", "icons/folder-plus.svg").on_click(cx.listener({
+                let root = root.clone();
+                move |this, _, window, cx| {
+                    swallow_click(window, cx);
+                    if let Some(root) = root.clone() {
+                        this.new_folder_in(root, window, cx);
+                    }
+                }
+            })))
+            // The assets' list has no folders to fold.
+            .child(tool("side-tool-collapse", "icons/copy-minus.svg").when(!notes, |d| d.opacity(0.35)).on_click(cx.listener(move |this, _, window, cx| {
+                swallow_click(window, cx);
+                if notes {
+                    this.collapse_all(window, cx);
+                }
+            })))
+            .child(tool("side-tool-search", "icons/search.svg").on_click(cx.listener(|this, _, window, cx| {
+                swallow_click(window, cx);
+                this.open_search(window, cx)
+            })))
+            .into_any_element()
     }
 
     /// The vault under its card (`vault_block`, as the menu bar note has
@@ -337,7 +408,7 @@ impl Shell {
         let place = self.vaults_at.clone();
         let wash = theme.primary.opacity(0.22);
         let under = cx.theme().title_bar;
-        let block = vault_block("vault-block", &root, &name, BlockSize::SIDEBAR, under, listed, theme, cx);
+        let block = vault_block("vault-block", &root, &name, BlockSize::sidebar(), under, listed, theme, cx);
         Some(
             block
                 .mx(px(8.))
@@ -413,7 +484,8 @@ impl Shell {
                     cx.stop_propagation();
                     this.tree_drop(drag, root.clone(), window, cx)
                 }))
-                .child(tools)
+                // A compact window's tools are at the sidebar's foot (`render_side_tools`).
+                .when(!self.is_compact(), |d| d.child(tools))
                 .into_any_element(),
         )
     }
@@ -475,8 +547,8 @@ impl Shell {
             if count == 0 {
                 continue;
             }
-            let label = div().h(px(LABEL_H)).flex_shrink_0().px(px(6.)).pt(px(10.)).pb(px(6.)).text_size(px(11.)).font_weight(FontWeight::SEMIBOLD).text_color(theme.muted_foreground).child(format!("{}  {}", kind_title(kind), count));
-            let row_h = if kind == Kind::Picture { PICTURE_ROW_H } else { TREE_ROW_H };
+            let label = div().h(px(LABEL_H)).flex_shrink_0().px(px(6.)).pt(px(10.)).pb(px(6.)).text_size(px(hand(11.))).font_weight(FontWeight::SEMIBOLD).text_color(theme.muted_foreground).child(format!("{}  {}", kind_title(kind), count));
+            let row_h = if kind == Kind::Picture { PICTURE_ROW_H } else { tree_row_h() };
             let mut rows: Vec<AnyElement> = Vec::new();
             y += LABEL_H;
             for (p, _) in self.library.files.iter().filter(|(_, k)| *k == kind) {
@@ -529,7 +601,7 @@ impl Shell {
             _ => false,
         };
         let mark: AnyElement = if !picture {
-            img(crate::file_icons::path(&name, false, false, true)).size(px(16.)).flex_shrink_0().into_any_element()
+            img(crate::file_icons::path(&name, false, false, true)).size(px(hand(16.))).flex_shrink_0().into_any_element()
         } else {
             let square: AnyElement = if let Some(kept) = self.library.kept.as_ref().filter(|_| is_svg(path)) {
                 img(crate::pictures::through(kept, ImageSource::Resource(Resource::Path(path.to_path_buf().into())), THUMB_PX)).size_full().object_fit(ObjectFit::Contain).into_any_element()
@@ -561,10 +633,10 @@ impl Shell {
         div()
             .id(ElementId::Name(format!("asset-row-{}", path.display()).into()))
             .group("asset-row")
-            .h(px(if picture { PICTURE_ROW_H } else { TREE_ROW_H }))
+            .h(px(if picture { PICTURE_ROW_H } else { tree_row_h() }))
             .flex_shrink_0()
             .py(px(ROW_BREATH))
-            .text_size(px(13.))
+            .text_size(px(hand(13.)))
             .text_color(theme.foreground.opacity(if chosen { 1. } else { 0.88 }))
             .cursor_pointer()
             .on_drag(AssetDrag(path.to_path_buf(), name.into()), |drag, _, _, cx| cx.new(|_| drag.clone()))
@@ -809,13 +881,16 @@ impl Shell {
                 .gap(px(14.))
                 .child(img(icon).size(px(48.)))
                 .child(div().text_size(px(13.)).text_color(theme.muted_foreground).child(why.clone()))
-                .child(small_pill("asset-open-app", "icons/external-link.svg", t("Open with Default App"), Press::Primary, false, &theme).on_click(cx.listener({
-                    let path = path.to_path_buf();
-                    move |this, _, window, cx| {
-                        swallow_click(window, cx);
-                        this.open_outside(&path.to_string_lossy())
-                    }
-                })))
+                // Not on an iPhone or an iPad, where a file is no other app's to open.
+                .when(cfg!(not(target_os = "ios")), |d| {
+                    d.child(small_pill("asset-open-app", "icons/external-link.svg", t("Open with Default App"), Press::Primary, false, &theme).on_click(cx.listener({
+                        let path = path.to_path_buf();
+                        move |this, _, window, cx| {
+                            swallow_click(window, cx);
+                            this.open_outside(&path.to_string_lossy())
+                        }
+                    })))
+                })
                 .into_any_element(),
         };
         div().size_full().child(body).into_any_element()
@@ -860,8 +935,13 @@ impl Shell {
     }
 }
 
-/// The container a configuration names, while it is there.
+/// The container a configuration names, while it is there. On an iPhone
+/// and an iPad it is no setting: the one place the app has
+/// (`sys::fixed_container`).
 pub(crate) fn container_of(cfg: &onyx_core::config::Config) -> Option<PathBuf> {
+    if let Some(fixed) = crate::sys::fixed_container() {
+        return Some(fixed);
+    }
     Some(PathBuf::from(&cfg.app.container)).filter(|p| !cfg.app.container.is_empty() && p.is_dir())
 }
 
@@ -1005,6 +1085,11 @@ pub(crate) struct BlockSize {
 
 impl BlockSize {
     pub const SIDEBAR: Self = Self { h: VAULT_BLOCK_H, mark: 22., text: 14. };
+
+    /// The sidebar's as it is drawn now: `SIDEBAR`, larger in a compact window.
+    pub fn sidebar() -> Self {
+        Self { h: hand(Self::SIDEBAR.h), mark: hand(Self::SIDEBAR.mark), text: hand(Self::SIDEBAR.text) }
+    }
     pub const MENU: Self = Self { h: 38., mark: 17., text: 13. };
 }
 
@@ -1057,16 +1142,16 @@ pub(crate) fn notes_tools(prefix: &str, theme: &gpui_component::Theme) -> [State
 /// (`notes_tools`) at its right, its right padding and its presses. The
 /// vault's block lists the vaults; this row is the tree's own head.
 pub(crate) fn vault_root_row(id: &'static str, root: &Path, name: &str, theme: &gpui_component::Theme, cx: &mut App) -> Stateful<Div> {
-    let mark = vault_badge(root, name, 16., theme, cx);
+    let mark = vault_badge(root, name, hand(16.), theme, cx);
     h_flex()
         .id(id)
         .flex_shrink_0()
-        .h(px(32.))
-        .pl(px(5.))
-        .gap(px(9.))
+        .h(px(hand(32.)))
+        .pl(px(hand(5.)))
+        .gap(px(hand(9.)))
         .items_center()
         .rounded(px(7.))
-        .text_size(px(13.))
+        .text_size(px(hand(13.)))
         .child(mark)
         .child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::SEMIBOLD).text_color(theme.foreground).child(name.to_string()))
 }
@@ -1075,10 +1160,11 @@ pub(crate) fn vault_root_row(id: &'static str, root: &Path, name: &str, theme: &
 /// lit under the pointer, its words with it.
 pub(crate) fn row_tool(id: impl Into<ElementId>, icon: &'static str, words: SharedString, theme: &gpui_component::Theme) -> Stateful<Div> {
     let (lit, wash, muted) = (theme.foreground, theme.foreground.opacity(0.1), theme.muted_foreground);
-    // A little smaller than the icon buttons on a head, the icon theirs.
+    // A little smaller than the icon buttons on a head, the icon theirs;
+    // in a compact window as large as its row lets a finger have.
     div()
         .id(id.into())
-        .size(px(22.))
+        .size(px(if crate::widgets::in_hand() { 32. } else { 22. }))
         .flex_shrink_0()
         .flex()
         .items_center()
@@ -1090,5 +1176,5 @@ pub(crate) fn row_tool(id: impl Into<ElementId>, icon: &'static str, words: Shar
         .active(move |s| s.bg(lit.opacity(0.14)))
         .managed_tooltip(move |window, cx| crate::widgets::tip(words.clone(), window, cx))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-        .child(Icon::default().path(icon).with_size(px(14.)))
+        .child(Icon::default().path(icon).with_size(px(hand(14.))))
 }

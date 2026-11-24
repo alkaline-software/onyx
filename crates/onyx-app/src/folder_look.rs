@@ -371,7 +371,7 @@ pub fn put_back(taken: Taken, cx: &mut App) {
 /// none), else Catppuccin's in its own.
 pub fn icon(path: &Path, name: &str, open: bool, dark: bool, theme: &gpui_component::Theme, cx: &App) -> AnyElement {
     let look = look_of(path, cx).unwrap_or_default();
-    drawn(look.icon.as_deref(), look.color.as_deref().and_then(parse_hex), name, open, dark, 16., theme)
+    drawn(look.icon.as_deref(), look.color.as_deref().and_then(parse_hex), name, open, dark, crate::widgets::hand(16.), theme)
 }
 
 /// An icon by its name, or the default for `None`, in `ink`; the default
@@ -392,15 +392,15 @@ pub fn mark(folder: &Path, cx: &App) -> Icon {
     match look_of(folder, cx) {
         Some(look) => {
             let icon = match look.icon {
-                Some(glyph) => Icon::default().path(glyph_path(&glyph)).with_size(px(13.)),
-                None => Icon::new(IconName::Folder).with_size(px(13.)),
+                Some(glyph) => Icon::default().path(glyph_path(&glyph)).with_size(px(crate::widgets::hand(13.))),
+                None => Icon::new(IconName::Folder).with_size(px(crate::widgets::hand(13.))),
             };
             match look.color.as_deref().and_then(parse_hex) {
                 Some(ink) => icon.text_color(ink),
                 None => icon,
             }
         }
-        None => Icon::new(IconName::Folder).with_size(px(13.)),
+        None => Icon::new(IconName::Folder).with_size(px(crate::widgets::hand(13.))),
     }
 }
 
@@ -855,6 +855,7 @@ impl Render for Picker {
                 .inset_0()
                 .occlude()
                 .bg(theme.overlay)
+                .children(crate::widgets::reaches(theme.overlay))
                 .flex()
                 .flex_col()
                 .items_center()

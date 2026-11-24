@@ -137,8 +137,10 @@ impl Shell {
     /// The sheet over the note: a note open in a tab is set as it stands,
     /// changes and all, and any other as the disk has it.
     pub(crate) fn open_export(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
-        // A note only: an asset has its own app for paper.
-        if !onyx_core::vault::is_note(&path) {
+        // A note only: an asset has its own app for paper. And not on an
+        // iPhone or an iPad yet: the sheet is laid out for a wide window
+        // and ends in the system's save panel, which they do not have.
+        if !onyx_core::vault::is_note(&path) || cfg!(target_os = "ios") {
             return;
         }
         if let Some(text) = self.text_of_tab(&path, cx) {
@@ -357,7 +359,7 @@ impl Shell {
     /// all; the note itself is not written.
     pub(crate) fn print_note(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
         // A note only: an asset has its own app for paper.
-        if !onyx_core::vault::is_note(&path) {
+        if !onyx_core::vault::is_note(&path) || cfg!(target_os = "ios") {
             return;
         }
         if let Some(sheet) = self.export.as_ref().filter(|s| s.path == path) {

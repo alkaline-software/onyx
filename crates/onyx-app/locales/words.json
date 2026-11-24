@@ -1070,6 +1070,24 @@
     "de": "Nichts wurde bewegt: {why}",
     "es": "No se movió nada: {why}"
   },
+  "On My iPad": {
+    "zh-Hans": "我的 iPad",
+    "zh-Hant": "我的 iPad",
+    "ja": "この iPad 内",
+    "ko": "나의 iPad",
+    "fr": "Sur mon iPad",
+    "de": "Auf meinem iPad",
+    "es": "En mi iPad"
+  },
+  "On My iPhone": {
+    "zh-Hans": "我的 iPhone",
+    "zh-Hant": "我的 iPhone",
+    "ja": "この iPhone 内",
+    "ko": "나의 iPhone",
+    "fr": "Sur mon iPhone",
+    "de": "Auf meinem iPhone",
+    "es": "En mi iPhone"
+  },
   "On the page": {
     "zh-Hans": "页面内容",
     "zh-Hant": "頁面內容",

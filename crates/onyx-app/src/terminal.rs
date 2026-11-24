@@ -39,29 +39,29 @@ pub(crate) const TERM_FIND_CONTEXT: &str = "TermFind";
 /// The terminal's own keys, bound in its context, after the window's so a
 /// tie of depth is theirs: off a Mac every Ctrl and a letter is the
 /// shell's.
-pub(crate) fn key_bindings() -> Vec<KeyBinding> {
+pub(crate) fn key_bindings(cx: &App) -> Vec<KeyBinding> {
     let c = Some(TERMINAL_CONTEXT);
     let mut keys = vec![
-        KeyBinding::new("tab", TermTab, c),
-        KeyBinding::new("shift-tab", TermBackTab, c),
-        KeyBinding::new("secondary-k", TermClear, c),
-        KeyBinding::new("secondary-t", TermNewTab, c),
-        KeyBinding::new("secondary-n", TermNewTab, c),
-        KeyBinding::new("secondary-f", TermFind, c),
-        KeyBinding::new("secondary-g", TermFindNext, c),
-        KeyBinding::new("secondary-shift-g", TermFindPrev, c),
-        KeyBinding::new("secondary-f", TermFind, Some(TERM_FIND_CONTEXT)),
-        KeyBinding::new("secondary-g", TermFindNext, Some(TERM_FIND_CONTEXT)),
-        KeyBinding::new("secondary-shift-g", TermFindPrev, Some(TERM_FIND_CONTEXT)),
-        KeyBinding::new("escape", crate::shell::Escape, Some(TERM_FIND_CONTEXT)),
+        crate::sys::key("tab", TermTab, c, cx),
+        crate::sys::key("shift-tab", TermBackTab, c, cx),
+        crate::sys::key("secondary-k", TermClear, c, cx),
+        crate::sys::key("secondary-t", TermNewTab, c, cx),
+        crate::sys::key("secondary-n", TermNewTab, c, cx),
+        crate::sys::key("secondary-f", TermFind, c, cx),
+        crate::sys::key("secondary-g", TermFindNext, c, cx),
+        crate::sys::key("secondary-shift-g", TermFindPrev, c, cx),
+        crate::sys::key("secondary-f", TermFind, Some(TERM_FIND_CONTEXT), cx),
+        crate::sys::key("secondary-g", TermFindNext, Some(TERM_FIND_CONTEXT), cx),
+        crate::sys::key("secondary-shift-g", TermFindPrev, Some(TERM_FIND_CONTEXT), cx),
+        crate::sys::key("escape", crate::shell::Escape, Some(TERM_FIND_CONTEXT), cx),
     ];
     if !cfg!(target_os = "macos") {
-        keys.extend(('a'..='z').map(|ch| KeyBinding::new(&format!("ctrl-{ch}"), NoAction, c)));
+        keys.extend(('a'..='z').map(|ch| crate::sys::key(&format!("ctrl-{ch}"), NoAction, c, cx)));
         keys.extend([
-            KeyBinding::new("ctrl-enter", NoAction, c),
-            KeyBinding::new("ctrl-shift-k", TermClear, c),
-            KeyBinding::new("ctrl-shift-t", TermNewTab, c),
-            KeyBinding::new("ctrl-shift-w", crate::shell::CloseTab, c),
+            crate::sys::key("ctrl-enter", NoAction, c, cx),
+            crate::sys::key("ctrl-shift-k", TermClear, c, cx),
+            crate::sys::key("ctrl-shift-t", TermNewTab, c, cx),
+            crate::sys::key("ctrl-shift-w", crate::shell::CloseTab, c, cx),
         ]);
     }
     keys
@@ -1051,7 +1051,7 @@ impl TermPanel {
         let (col, row) = self.cell(e.position, &pty);
         // ⌘ and a click opens the link under the pointer, in a program
         // that hears the mouse too; Ctrl off a Mac.
-        if e.button == MouseButton::Left && e.modifiers.secondary() {
+        if e.button == MouseButton::Left && e.modifiers.secondary(cx) {
             if let Some(link) = self.link_at(&pty, row, col) {
                 match link.target {
                     Target::Url(url) => cx.open_url(&url),
@@ -2463,7 +2463,7 @@ impl Render for TermPanel {
                     None => cx.emit(TermEvent::Away),
                 }
             }))
-            .on_scroll_wheel(cx.listener(|this, e: &ScrollWheelEvent, _, cx| {
+            .on_scroll(cx.listener(|this, e: &ScrollEvent, _, cx| {
                 let lh = this.line_h();
                 this.wheel(e.delta.pixel_delta(px(lh)).y, e.position, &e.modifiers);
                 cx.notify();

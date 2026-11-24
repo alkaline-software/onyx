@@ -2,7 +2,7 @@
 
 ## What this is
 
-**Onyx** is a note-taking app: a folder of plain markdown files, a vault, shown in a sidebar, and a note drawn as it reads while you write it, as Obsidian's live preview does. Rust and GPUI, built to the Alkaline Software constitution; it took the place of MiniNotes, a Swift menu bar app, at v0.5.0, and MiniNotes lives on in it as the note in the menu bar (`menubar.rs`). **Only the Mac version is published.** The code keeps the constitution's Windows and Linux paths, but no release is cut for them and nothing is checked there; iOS and iPadOS are wanted later, and nothing is done for them yet.
+**Onyx** is a note-taking app: a folder of plain markdown files, a vault, shown in a sidebar, and a note drawn as it reads while you write it, as Obsidian's live preview does. Rust and GPUI, built to the Alkaline Software constitution; it took the place of MiniNotes, a Swift menu bar app, at v0.5.0, and MiniNotes lives on in it as the note in the menu bar (`menubar.rs`). **Only the Mac version is published.** The code keeps the constitution's Windows and Linux paths, but no release is cut for them and nothing is checked there. The same app runs on an iPhone and an iPad through gpui's backend for them, checked in simulators and not yet on a device or published (`docs/platform.md`, iPhone and iPad).
 
 ## The one idea
 
@@ -18,6 +18,7 @@ Onyx is held to the bar of the work that wins Awwwards, the Webbys and the FWA (
 - **The sidebar and the menu bar note's tree are one design.** They differ only in the vault block's size (`BlockSize`) and the tree's ground, lighter in the menu bar note; each tree starts with the vault's row and the Notes tools at its right, and ends with the vault's block, whose list rises from it. Both are built from `shell/library.rs`'s shared parts (`vault_block`, `vault_root_row`, `notes_tools`, `row_tool`). A change to either is made to both (`docs/window.md`).
 - **No square corner inside a round one.** gpui clips to a rectangle: a lit row, a band or a picture at a rounded card's corner rounds its own corners there (`docs/design.md`, Rules).
 - **A pass of optimization follows every round of changes** (`docs/optimize.md`, its log first): from the commit the log's last entry names, what is new is looked at for work done for nothing (a disk read or a copy in a frame, a clock that runs while nothing moves or no one sees, a picture decoded whole or kept), measured before and after, and logged. Nothing a person sees or can do is traded for it.
+- **What a person sees is looked at on an iPhone and an iPad too** (`docs/probing.md`, An iPhone and an iPad): a compact window is one column, a finger has no pointer to hover with and no button to hold, the keyboard takes the window's foot, and the system keeps its edges (`docs/window.md`, A compact window). A thing reached only under the pointer or by a drag is not reached there. A measure of the sidebar's or a menu's goes through `widgets::hand`, and a row's height through `tree_row_h`, which make them a hand's size in a compact window. There the note's page is the whole screen: what covers the room (a scrim, a page over the window) carries its ground past it with `widgets::reaches`.
 - **Look before saying it is done:** in both appearances, in a long language, in a narrow window, and in every state the thing can be in, the empty one first (no container, no vault, no notes, nothing chosen): a control built for its usual state shows its empty one only when someone meets it (`docs/probing.md`).
 
 ## Rules that hold everywhere
@@ -36,9 +37,10 @@ Each is here because breaking it loses data or brings back a fixed bug. The doc 
 - **A button is `choice_pill`**, a pill with an icon before its word. The toolkit's `Button` is only for an icon alone.
 - **Every word the window shows goes through `i18n::t`** and is in `locales/words.json` in every language; `cargo test -p onyx-app` fails otherwise.
 - **A picture of the vault's is never handed to gpui as a path or as bytes** (the app's own icons and the person's picture, few and small, may be): gpui keeps every picture it decodes, and its copy on the GPU, until the app quits, and every frame of a GIF. One drawn from a file goes through the cache of the view that shows it (`pictures::through`), one Onyx decodes is an `ImageSource::Render`, and whatever showed it lets it go when it goes. (`docs/optimize.md`)
-- **A key is drawn on caps** through `key_text`, `kbd_hint` or `tip`, named as the Mac has it and bound as `secondary-<key>`.
+- **A key is drawn on caps** through `key_text`, `kbd_hint` or `tip`, named as the Mac has it and bound as `secondary-<key>` through `sys::key`, never `KeyBinding::new`, which panics on `secondary-` (`docs/platform.md`).
 - **Every child process starts through `onyx_core::process::command`**, never `Command::new`; the terminal's shell is the one exception, a pty's child that portable-pty starts (`pty.rs`).
-- **Per-system calls live in `sys.rs`**, each with a body for every system. (`docs/platform.md`)
+- **Per-system calls live in `sys.rs`**, each with a body for every system, an iPhone and an iPad among them. (`docs/platform.md`)
+- **The window is measured by its room, never `viewport_size()`** (`Shell::room`, the window less what the system keeps of it, `Shell::safe`): on an iPhone the status bar, the home indicator and the keyboard are part of the window. (`docs/window.md`)
 - **One copy of gpui.** The pin is in `Cargo.lock`. Changes to the toolkit go in `vendor/gpui-component/`, marked `(Studio addition.)` and listed in its `UPSTREAM.md`. Build from the root, never inside `vendor/`.
 
 ## Before you edit, read
@@ -48,7 +50,7 @@ Each is here because breaking it loses data or brings back a fixed bug. The doc 
 | `editor.rs`, `editor/`, `embed.rs`, `viewer.rs`, `layout.rs`, `lines.rs`, `markdown.rs`, `tables.rs`, `source.rs`, `sublime.rs`; `onyx-core/src/rhythm.rs`, `html.rs`, `check.rs`: the live preview, the source pane, spacing, the caret, the keys, tables, HTML, pictures, spelling | `docs/editor.md` |
 | `shell.rs`, `shell/library.rs`, `shell/places.rs`, `tabs.rs`, `terminal.rs`, `menubar.rs`, `note_menu.rs`, `folder_look.rs`, `ui_state.rs`, `main.rs`: the sidebar, the vault, a note's life, the tabs, the strip, the terminal, the menu bar note, the page before a vault, the menus; `onyx-core/src/vault.rs`, `pty.rs`, `shell_marks.rs`, `shortcut.rs` | `docs/window.md` |
 | `settings.rs`, `look.rs`, `fonts.rs`, `assets.rs`, `themes/onyx.json`, `scripts/icon/`; anything a person sees, new or changed | `docs/design.md`, then the doc of the part it is in |
-| `sys.rs`, `sys/`, `csd.rs`, `update.rs`, `process.rs`, `vendor/`, `Cargo.toml`, `.github/workflows/`, any `cfg` for an OS | `docs/platform.md` |
+| `sys.rs`, `sys/`, `csd.rs`, `update.rs`, `process.rs`, `terminal_none.rs`, `onyx-core/src/watch.rs`, `ios/`, `scripts/ios-app.sh`, `vendor/`, `Cargo.toml`, `.github/workflows/`, any `cfg` for an OS | `docs/platform.md` |
 | `export.rs`, `onyx-core/src/pdf.rs`, `docx.rs`, `web.rs`, `reading.rs`, `pdf/template.typ`: Export (PDF, image, Word, web page), printing, its sheet, how a note looks on paper | `docs/export.md` |
 | An optimization pass, or anything that runs at every frame, in a row, on a timer or in a loop, or that decodes or keeps a picture | `docs/optimize.md`, its log first |
 | Checking a change in the window from a script | `docs/probing.md` |
@@ -60,6 +62,7 @@ Each is here because breaking it loses data or brings back a fixed bug. The doc 
 Cargo.toml                 the workspace and the one version
 crates/onyx-core/          everything without a window
   src/vault.rs               the folder of notes: the tree, new, rename, trash, wikilinks, the watcher
+  src/watch.rs               the watcher on an iPhone and an iPad: a descriptor a folder, never one a file
   src/config.rs              the settings file
   src/paths.rs               ~/.onyx, overridden by ONYX_HOME; atomic writes
   src/update.rs              the newest release and its installer
@@ -76,7 +79,7 @@ crates/onyx-core/          everything without a window
   src/merge.rs               a note changed on the disk and in the window at once, joined
   src/check.rs               spelling and grammar
   src/preview.rs             any file read for the preview: as markdown where it can be (code, CSV, notebooks, HTML, Office), else its kind; a PDF's pages
-  src/bin/onyx-core.rs       paths | config | update | vault <folder> [new <name>] | pdf <note> <out> <fonts>
+  src/bin/onyx-core.rs       paths | config | update | vault <folder> [new <name>] | trash <path> | pdf <note> <out> <fonts>
   tests/core.rs
 crates/onyx-app/           the window
   src/main.rs                menus, key bindings, the main window, the probe's variables
@@ -94,6 +97,7 @@ crates/onyx-app/           the window
   src/source.rs              the note's source in a pane beside it, a code editor that follows the note and is followed
   src/sublime.rs             Sublime Text's keys in the source pane, as Emaki's editor has them
   src/terminal.rs            the terminal at the page's right: the vault's shells, a tab each, as Emaki's shell terminal
+  src/terminal_none.rs       the terminal with nothing in it, where there is no shell: an iPhone, an iPad
   src/menubar.rs             the note in the menu bar: MiniNotes' window under Onyx's item, one file, Onyx's editor
   src/note_menu.rs           a note's right-click menu, for the main window and the menu bar note
   src/folder_look.rs         a folder's Tabler icon and color: the sheet, the vault's .onyx/folders.json, the drawing
@@ -120,8 +124,9 @@ crates/onyx-app/           the window
   src/ui_state.rs            what the window remembers: bounds, sidebar, vault, tabs, note, source, widths, recent vaults, the menu bar note
   assets/ themes/ locales/   icons (tabler/: Tabler's whole outline set as one file), fonts, the app icon; the palette; the words
   macos/ windows/ linux/     what each system's package needs
+  ios/                       an iPhone's and an iPad's bundle: Info.plist, the entitlements, the asset catalog (the icon, the launch color)
 vendor/                    the toolkit, the blocks crate and the terminal's screen model (vt100), each with an UPSTREAM.md
-scripts/                   the dev build, the icon, the README's picture (make-readme-gif.sh, readme/), Tabler's icons (tabler.py), the release
+scripts/                   the dev build, a simulator's (ios-app.sh), the icon, the README's picture (make-readme-gif.sh, readme/), Tabler's icons (tabler.py), the release
 docs/                      how each part works and its traps; release.md; probing.md
 ```
 
@@ -130,6 +135,12 @@ docs/                      how each part works and its traps; release.md; probin
 ```
 cargo test -p onyx-core -p onyx-app
 cargo build -p onyx-app && scripts/dev-app.sh
+```
+
+For an iPhone or an iPad, in a simulator (`rustup target add aarch64-apple-ios aarch64-apple-ios-sim` once):
+
+```
+cargo build -p onyx-app --target aarch64-apple-ios-sim && scripts/ios-app.sh "iPhone 17 Pro"
 ```
 
 One dev build at a time: two copies share `~/.onyx` and both write what the window remembers. After a change to the app, build it and run `scripts/relaunch.sh` as the last command, without being asked; a change to documents alone needs no relaunch. Probe a change with a copy of its own first (`docs/probing.md`), never the copy the person is writing in. On the maintainer's Mac the vaults in Onyx's iCloud folder (`~/Library/Mobile Documents/iCloud~com~alkalinesoftware~onyx/Documents/`) are copies kept for testing: a probe may use and change them.

@@ -181,14 +181,6 @@ impl InlineFlow {
     }
 }
 
-impl IntoElement for InlineFlow {
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
-    }
-}
-
 impl Element for InlineFlow {
     type RequestLayoutState = InlineFlowLayoutState;
     type PrepaintState = Vec<AnyElement>;
@@ -619,7 +611,7 @@ fn line_ranges(
             .collect::<Vec<_>>();
 
         let boundaries = wrapper
-            .wrap_line(&wrap_fragments, wrap_width)
+            .wrap_line(&wrap_fragments, wrap_width, gpui::IndentAdjustment::NoIndent)
             .map(|boundary| hard_line.start + boundary.ix.min(hard_line.len()))
             .collect::<Vec<_>>();
         let mut start = hard_line.start;

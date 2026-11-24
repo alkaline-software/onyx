@@ -60,24 +60,28 @@ pub fn choice_pill(id: impl Into<ElementId>, icon: &'static str, label: impl Int
     };
     h_flex()
         .id(id)
-        .h(px(28.))
-        .px(px(12.))
-        .gap(px(6.))
+        .h(px(hand(28.)))
+        .px(px(hand(12.)))
+        .gap(px(hand(6.)))
         .flex_shrink_0()
         .items_center()
         .rounded_full()
-        .text_size(px(12.5))
+        .text_size(px(hand(12.5)))
         .text_color(ink)
         .border_1()
         .border_color(edge)
         .when_some(ground, |d, bg| d.bg(bg))
-        .child(Icon::default().path(icon).with_size(px(14.)).text_color(ink))
+        .child(Icon::default().path(icon).with_size(px(hand(14.))).text_color(ink))
         .child(label.into())
         .map(|d| if off { d.opacity(0.4) } else { d.cursor_pointer().hover(move |s| s.bg(hover)) })
 }
 
 /// `choice_pill` in the size a strip or a foot line takes.
 pub fn small_pill(id: impl Into<ElementId>, icon: &'static str, label: impl Into<SharedString>, kind: Press, off: bool, theme: &gpui_component::Theme) -> Stateful<Div> {
+    // In a compact window it is a finger's: 36 high, its words 15.
+    if in_hand() {
+        return choice_pill(id, icon, label, kind, off, theme).h(px(36.)).px(px(14.)).gap(px(6.)).text_size(px(15.));
+    }
     choice_pill(id, icon, label, kind, off, theme).h(px(24.)).px(px(10.)).gap(px(5.)).text_size(px(12.))
 }
 
@@ -114,8 +118,8 @@ pub fn waiting_dot(on: bool, moving: Option<(bool, u32)>, color: Hsla) -> Option
 /// one. Off a Mac ⌘ and ⌥ are the words Ctrl and Alt on their caps.
 fn key_sign(c: char) -> Option<&'static str> {
     Some(match c {
-        '⌘' if cfg!(target_os = "macos") => "icons/key-command.svg",
-        '⌥' if cfg!(target_os = "macos") => "icons/key-option.svg",
+        '⌘' if cfg!(any(target_os = "macos", target_os = "ios")) => "icons/key-command.svg",
+        '⌥' if cfg!(any(target_os = "macos", target_os = "ios")) => "icons/key-option.svg",
         '⇧' => "icons/key-shift.svg",
         '⌃' => "icons/chevron-up.svg",
         '↩' => "icons/key-return.svg",
@@ -251,6 +255,67 @@ pub fn kbd_hint(text: &str, theme: &gpui_component::Theme) -> Div {
 /// after a sign.
 pub fn kbd_key(key: &str, theme: &gpui_component::Theme) -> Div {
     div().flex_shrink_0().text_color(theme.muted_foreground).child(key_cap(key))
+}
+
+thread_local! {
+    /// Whether the main window is compact (`Shell::compact`), said as
+    /// each of its frames is built.
+    static HAND: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// The main window says whether it is compact, which on an iPhone it is:
+/// held in a hand and pressed with a finger.
+pub fn set_in_hand(on: bool) {
+    HAND.with(|h| h.set(on));
+}
+
+/// Whether what is drawn now is drawn for a hand (`set_in_hand`). The
+/// menu bar note's and the settings' own windows never are.
+pub fn in_hand() -> bool {
+    HAND.with(std::cell::Cell::get)
+}
+
+/// A measure made for a pointer as a hand wants it: the same on a Mac,
+/// and in a compact window larger by what takes a row's 13 points to 16,
+/// to the half point. The sidebar's and the menus' sizes, heights, icons
+/// and gaps all go through it, so they keep their proportions.
+pub fn hand(x: f32) -> f32 {
+    if in_hand() { (x * 16. / 13. * 2.).round() / 2. } else { x }
+}
+
+thread_local! {
+    /// How far a compact window's page runs past the room, over the
+    /// status bar and under the home indicator (`Shell::render`).
+    static REACH: std::cell::Cell<(Pixels, Pixels)> = const { std::cell::Cell::new((px(0.), px(0.))) };
+}
+
+/// The main window says how far its page runs past the room.
+pub fn set_reach(top: Pixels, foot: Pixels) {
+    REACH.with(|r| r.set((top, foot)));
+}
+
+/// How far a compact window's page runs past the room, at its top and
+/// at its foot: nothing in a window whose page stays in the frame.
+pub fn reach() -> (Pixels, Pixels) {
+    REACH.with(std::cell::Cell::get)
+}
+
+/// A ground carried past the room where the page runs past it: for
+/// something that covers the room (a sheet's scrim, a page over the
+/// window) and stands `absolute` over it, as two children of it, over
+/// the status bar and under the home indicator. Without them the page
+/// shows bare above and below what covers it.
+pub fn reaches(ground: impl Into<Hsla>) -> [Div; 2] {
+    let (top, foot) = reach();
+    let ground = ground.into();
+    [div().absolute().left_0().right_0().top(-top).h(top).bg(ground), div().absolute().left_0().right_0().bottom(-foot).h(foot).bg(ground)]
+}
+
+/// `hand`, not rounded: for measures that are summed to place something
+/// (the tabs' widths and where the plate stands under them), where a
+/// rounded part and a rounded sum would part by a fraction.
+pub fn hand_exact(x: f32) -> f32 {
+    if in_hand() { x * 16. / 13. } else { x }
 }
 
 /// A hover's label, with the keys it names on caps: what every
@@ -416,7 +481,7 @@ impl Motion {
     /// the width it is given among the choices.
     #[allow(clippy::type_complexity)]
     pub fn segmented<V: 'static>(&self, control: &'static str, options: Vec<(&'static str, &'static str, SharedString)>, current: &'static str, fill: bool, on: Rc<dyn Fn(&mut V, &'static str, &mut Window, &mut Context<V>)>, cx: &mut Context<V>) -> AnyElement {
-        let (pad, seg_h, seg_px, seg_text, round) = (px(3.), px(22.), px(11.), px(12.5), px(6.));
+        let (pad, seg_h, seg_px, seg_text, round) = (px(3.), px(hand(22.)), px(hand(11.)), px(hand(12.5)), px(hand(6.)));
         let theme = cx.theme().clone();
         let dark = theme.mode.is_dark();
         let track_bg = if dark { theme.tab_bar_segmented } else { theme.muted };

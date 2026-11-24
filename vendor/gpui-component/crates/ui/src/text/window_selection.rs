@@ -853,7 +853,7 @@ mod tests {
 
     #[gpui::test]
     fn selection_spans_blocks_scrolled_past(cx: &mut TestAppContext) {
-        use gpui::{ScrollDelta, ScrollWheelEvent};
+        use gpui::{ScrollDelta, ScrollEvent};
 
         const BLOCKS: usize = 20;
 
@@ -885,7 +885,7 @@ mod tests {
             let _ = window.draw(cx);
         });
         for _ in 0..BLOCKS {
-            cx.simulate_event(ScrollWheelEvent {
+            cx.simulate_event(ScrollEvent {
                 position: point(px(10.), px(30.)),
                 delta: ScrollDelta::Pixels(point(px(0.), px(-40.))),
                 ..Default::default()
@@ -928,7 +928,7 @@ mod tests {
     /// selection of its own, and must still be copied — with its markup.
     #[gpui::test]
     fn source_selection_spans_blocks_scrolled_past(cx: &mut TestAppContext) {
-        use gpui::{ScrollDelta, ScrollWheelEvent};
+        use gpui::{ScrollDelta, ScrollEvent};
 
         const BLOCKS: usize = 20;
 
@@ -959,7 +959,7 @@ mod tests {
         });
         // Jump the whole document in one go, so the blocks in between never
         // paint at all and cannot leave a stale selection behind.
-        cx.simulate_event(ScrollWheelEvent {
+        cx.simulate_event(ScrollEvent {
             position: point(px(10.), px(30.)),
             delta: ScrollDelta::Pixels(point(px(0.), px(-40.) * BLOCKS as f32)),
             ..Default::default()

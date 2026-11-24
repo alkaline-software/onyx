@@ -15,10 +15,6 @@ dirs.workspace = true
 ureq = { version = "2", default-features = false, features = ["tls"] }
 # A web link's card: the page's address joined with what its head names.
 url = "2"
-# A note deleted goes to the system's trash, never straight off the disk.
-trash = "5"
-# The vault's folder watched, so the tree and an open note follow the disk.
-notify = "7"
 # A note changed on the disk while the window had changes of its own,
 # joined line by line (`merge.rs`).
 similar = "2"
@@ -49,14 +45,27 @@ hayro = "0.7"
 # Typst already brings.
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif", "webp", "bmp"] }
 
+# Whether the program in the terminal reads its line a key at a time, and
+# the folders' watcher on an iPhone and an iPad (`watch.rs`).
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+# What an iPhone and an iPad have another way, or not at all.
+[target.'cfg(not(target_os = "ios"))'.dependencies]
+# A note deleted goes to the system's trash, never straight off the disk.
+trash = "5"
+# The vault's folder watched, so the tree and an open note follow the disk.
+notify = "7"
 # The terminal beside a note (`pty.rs`): a pty of the system's and a
 # screen model with no renderer, which the window draws.
 vt100 = "0.16"
 portable-pty = "0.9"
 
-# Whether the program in the terminal reads its line a key at a time.
-[target.'cfg(unix)'.dependencies]
-libc = "0.2"
+# The system's trash on an iPhone and an iPad (`vault::trash`), at the
+# versions the window already builds.
+[target.'cfg(target_os = "ios")'.dependencies]
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSFileManager", "NSURL", "NSString", "NSError"] }
 
 [target.'cfg(windows)'.dependencies]
 # The installer and updater on Windows; pinned to the version release.yml's vpk uses.

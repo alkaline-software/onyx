@@ -51,53 +51,53 @@ pub const EDITOR_CONTEXT: &str = "Editor";
 /// meant (Ctrl off a Mac). Copy, Cut, Paste, Select All, Undo and Redo
 /// are the toolkit's own actions, so the Edit menu serves a field and
 /// the editor alike.
-pub fn key_bindings() -> Vec<KeyBinding> {
+pub fn key_bindings(cx: &App) -> Vec<KeyBinding> {
     let c = Some(EDITOR_CONTEXT);
     vec![
-        KeyBinding::new("enter", Enter, c),
-        KeyBinding::new("shift-enter", NewLine, c),
-        KeyBinding::new("tab", Tab, c),
-        KeyBinding::new("shift-tab", Outdent, c),
-        KeyBinding::new("backspace", Backspace, c),
-        KeyBinding::new("shift-backspace", Backspace, c),
-        KeyBinding::new("delete", Delete, c),
-        KeyBinding::new("alt-backspace", DeleteWordBack, c),
-        KeyBinding::new("secondary-backspace", DeleteLineBack, c),
-        KeyBinding::new("left", Left, c),
-        KeyBinding::new("right", Right, c),
-        KeyBinding::new("up", Up, c),
-        KeyBinding::new("down", Down, c),
-        KeyBinding::new("shift-left", SelectLeft, c),
-        KeyBinding::new("shift-right", SelectRight, c),
-        KeyBinding::new("shift-up", SelectUp, c),
-        KeyBinding::new("shift-down", SelectDown, c),
-        KeyBinding::new("alt-left", WordLeft, c),
-        KeyBinding::new("alt-right", WordRight, c),
-        KeyBinding::new("alt-shift-left", SelectWordLeft, c),
-        KeyBinding::new("alt-shift-right", SelectWordRight, c),
-        KeyBinding::new("secondary-left", LineStart, c),
-        KeyBinding::new("secondary-right", LineEnd, c),
-        KeyBinding::new("home", LineStart, c),
-        KeyBinding::new("end", LineEnd, c),
-        KeyBinding::new("secondary-shift-left", SelectLineStart, c),
-        KeyBinding::new("secondary-shift-right", SelectLineEnd, c),
-        KeyBinding::new("shift-home", SelectLineStart, c),
-        KeyBinding::new("shift-end", SelectLineEnd, c),
-        KeyBinding::new("secondary-up", DocStart, c),
-        KeyBinding::new("secondary-down", DocEnd, c),
-        KeyBinding::new("secondary-shift-up", SelectDocStart, c),
-        KeyBinding::new("secondary-shift-down", SelectDocEnd, c),
-        KeyBinding::new("pageup", PageUp, c),
-        KeyBinding::new("pagedown", PageDown, c),
-        KeyBinding::new("secondary-b", Bold, c),
-        KeyBinding::new("secondary-i", Italic, c),
-        KeyBinding::new("secondary-enter", ToggleTask, c),
-        KeyBinding::new("secondary-a", input::SelectAll, c),
-        KeyBinding::new("secondary-c", input::Copy, c),
-        KeyBinding::new("secondary-x", input::Cut, c),
-        KeyBinding::new("secondary-v", input::Paste, c),
-        KeyBinding::new("secondary-z", input::Undo, c),
-        KeyBinding::new("secondary-shift-z", input::Redo, c),
+        crate::sys::key("enter", Enter, c, cx),
+        crate::sys::key("shift-enter", NewLine, c, cx),
+        crate::sys::key("tab", Tab, c, cx),
+        crate::sys::key("shift-tab", Outdent, c, cx),
+        crate::sys::key("backspace", Backspace, c, cx),
+        crate::sys::key("shift-backspace", Backspace, c, cx),
+        crate::sys::key("delete", Delete, c, cx),
+        crate::sys::key("alt-backspace", DeleteWordBack, c, cx),
+        crate::sys::key("secondary-backspace", DeleteLineBack, c, cx),
+        crate::sys::key("left", Left, c, cx),
+        crate::sys::key("right", Right, c, cx),
+        crate::sys::key("up", Up, c, cx),
+        crate::sys::key("down", Down, c, cx),
+        crate::sys::key("shift-left", SelectLeft, c, cx),
+        crate::sys::key("shift-right", SelectRight, c, cx),
+        crate::sys::key("shift-up", SelectUp, c, cx),
+        crate::sys::key("shift-down", SelectDown, c, cx),
+        crate::sys::key("alt-left", WordLeft, c, cx),
+        crate::sys::key("alt-right", WordRight, c, cx),
+        crate::sys::key("alt-shift-left", SelectWordLeft, c, cx),
+        crate::sys::key("alt-shift-right", SelectWordRight, c, cx),
+        crate::sys::key("secondary-left", LineStart, c, cx),
+        crate::sys::key("secondary-right", LineEnd, c, cx),
+        crate::sys::key("home", LineStart, c, cx),
+        crate::sys::key("end", LineEnd, c, cx),
+        crate::sys::key("secondary-shift-left", SelectLineStart, c, cx),
+        crate::sys::key("secondary-shift-right", SelectLineEnd, c, cx),
+        crate::sys::key("shift-home", SelectLineStart, c, cx),
+        crate::sys::key("shift-end", SelectLineEnd, c, cx),
+        crate::sys::key("secondary-up", DocStart, c, cx),
+        crate::sys::key("secondary-down", DocEnd, c, cx),
+        crate::sys::key("secondary-shift-up", SelectDocStart, c, cx),
+        crate::sys::key("secondary-shift-down", SelectDocEnd, c, cx),
+        crate::sys::key("pageup", PageUp, c, cx),
+        crate::sys::key("pagedown", PageDown, c, cx),
+        crate::sys::key("secondary-b", Bold, c, cx),
+        crate::sys::key("secondary-i", Italic, c, cx),
+        crate::sys::key("secondary-enter", ToggleTask, c, cx),
+        crate::sys::key("secondary-a", input::SelectAll, c, cx),
+        crate::sys::key("secondary-c", input::Copy, c, cx),
+        crate::sys::key("secondary-x", input::Cut, c, cx),
+        crate::sys::key("secondary-v", input::Paste, c, cx),
+        crate::sys::key("secondary-z", input::Undo, c, cx),
+        crate::sys::key("secondary-shift-z", input::Redo, c, cx),
     ]
 }
 
@@ -243,7 +243,17 @@ pub struct Look {
 
 impl Default for Look {
     fn default() -> Self {
-        Self { text_family: "Inter".into(), mono_family: "JetBrains Mono".into(), text_px: 16., mono_px: 14., text_fallbacks: None, mono_fallbacks: None, cjk_family: "Noto Sans SC".into(), cjk_fallbacks: None }
+        Self { text_family: "Source Serif 4".into(), mono_family: "JetBrains Mono".into(), text_px: 16., mono_px: 14., text_fallbacks: None, mono_fallbacks: None, cjk_family: "Noto Serif SC".into(), cjk_fallbacks: None }
+    }
+}
+
+impl Look {
+    /// The face a note's words are set in, with the faces behind it: for
+    /// words outside a note that are set as its words are (a page's
+    /// greeting), so their Chinese is in the note's CJK face and not the
+    /// system's.
+    pub fn words(&self) -> Font {
+        Font { family: self.text_family.clone(), features: FontFeatures::default(), fallbacks: self.text_fallbacks.clone(), weight: FontWeight::NORMAL, style: FontStyle::Normal }
     }
 }
 
@@ -1891,9 +1901,11 @@ impl EntityInputHandler for Editor {
     /// active Chinese, Japanese or Korean input method first while the
     /// handler says it takes text, and the method swallowed the ⌃ and ⌥ chords of the modes and the widths.
     /// Nothing of typing changes: a key no binding takes still reaches the
-    /// method and composes, and this is read nowhere else on a Mac.
+    /// method and composes, and this is read nowhere else on a Mac. An
+    /// iPhone and an iPad read it for another thing: their keyboard comes
+    /// out only for a handler that says it takes text.
     fn accepts_text_input(&self, _: &mut Window, _: &mut Context<Self>) -> bool {
-        false
+        cfg!(target_os = "ios")
     }
 
     fn text_for_range(&mut self, range_utf16: Range<usize>, adjusted_range: &mut Option<Range<usize>>, _: &mut Window, _: &mut Context<Self>) -> Option<String> {
@@ -2090,14 +2102,6 @@ struct PaintInfo {
     picture: Option<picture::PicPaint>,
     /// A row's or a column's move under way or settling (`cells::move_paint`).
     table_move: Option<cells::MovePaint>,
-}
-
-impl IntoElement for EditorElement {
-    type Element = Self;
-
-    fn into_element(self) -> Self {
-        self
-    }
 }
 
 /// Words, with what stands behind and over them: chips, what the find
@@ -2648,10 +2652,10 @@ impl Element for EditorElement {
                         e.toggle_task_on(line, cx);
                         e.doc.end_step();
                     }
-                    Some(Hit::Link(target)) if !reading && (ev.modifiers.secondary() || ev.click_count == 1) => e.follow(target, cx),
+                    Some(Hit::Link(target)) if !reading && (ev.modifiers.secondary(cx) || ev.click_count == 1) => e.follow(target, cx),
                     hit => {
                         e.pressed_link = match hit {
-                            Some(Hit::Link(target)) if reading && (ev.modifiers.secondary() || ev.click_count == 1) => Some(target),
+                            Some(Hit::Link(target)) if reading && (ev.modifiers.secondary(cx) || ev.click_count == 1) => Some(target),
                             _ => None,
                         };
                         // Beside a picture is not on it: the line nearest.

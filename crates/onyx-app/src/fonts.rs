@@ -32,8 +32,9 @@ pub struct Face {
 
 /// The faces a note's words may be set in, four serifs and four sans
 /// serifs, in the order every studio product offers them (Emaki's): the
-/// Source pair first in each row, so the two rows begin alike. Inter is
-/// a new install's (`NEW_TEXT`), wherever it stands in its row.
+/// Source pair first in each row, so the two rows begin alike. A new
+/// install's is the first tile of all, Source Serif (`NEW_TEXT`), as
+/// the first tile is in the CJK row and in code's.
 pub const SERIFS: &[Face] = &[
     Face { key: "source-serif", name: "Source Serif", family: "Source Serif 4" },
     Face { key: "literata", name: "Literata", family: "Literata" },
@@ -49,8 +50,9 @@ pub const SANS: &[Face] = &[
 ];
 
 /// The face a new install's words are set in, and what an unknown key or
-/// a custom face put away falls back to: by its key, not its place.
-pub const NEW_TEXT: &str = "inter";
+/// a custom face put away falls back to: the first tile, as
+/// `EditorConfig`'s own default has it.
+pub const NEW_TEXT: &str = SERIFS[0].key;
 
 /// The faces code is set in, in the studio's order, JetBrains Mono first
 /// and a new install's. The third (`SYSTEM_MONO`) is the system's where
@@ -186,7 +188,7 @@ pub fn cjk_fallbacks(family: &str, cjk_key: &str, cjk_custom: &str) -> gpui::Fon
 
 /// The system's faces for what the carried ones lack, and its emoji last.
 fn system_fallbacks(serif: bool) -> &'static [&'static str] {
-    if cfg!(target_os = "macos") {
+    if cfg!(any(target_os = "macos", target_os = "ios")) {
         if serif { &["Songti SC", "Songti TC", "Hiragino Mincho ProN", "Apple SD Gothic Neo", "Apple Color Emoji"] } else { &["PingFang SC", "PingFang TC", "Hiragino Sans", "Apple SD Gothic Neo", "Apple Color Emoji"] }
     } else if cfg!(target_os = "windows") {
         if serif { &["SimSun", "PMingLiU", "Yu Mincho", "Batang", "Segoe UI Emoji"] } else { &["Microsoft YaHei", "Microsoft JhengHei", "Yu Gothic", "Malgun Gothic", "Segoe UI Emoji"] }
@@ -230,13 +232,13 @@ pub fn install(cx: &mut App) {
 
 /// The family a note's English is set in: the person's own under
 /// `custom`, else the face by the settings' key; an unknown key, or
-/// Custom with no face, is Inter.
+/// Custom with no face, is the first (`NEW_TEXT`).
 pub fn text_family(key: &str, custom: &str) -> SharedString {
     if key == CUSTOM && !custom.trim().is_empty() {
         return custom.trim().to_string().into();
     }
     let faces = || SERIFS.iter().chain(SANS);
-    faces().find(|f| f.key == key).or_else(|| faces().find(|f| f.key == NEW_TEXT)).map_or("Inter", |f| f.family).into()
+    faces().find(|f| f.key == key).map_or(SERIFS[0].family, |f| f.family).into()
 }
 
 /// The family code is set in, the same way; an unknown key is JetBrains Mono.

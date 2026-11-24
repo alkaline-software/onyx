@@ -48,10 +48,10 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use gpui::{point, px, App, Bounds, Global, Pixels, ScrollHandle, ScrollWheelEvent, TouchPhase, Window};
+use gpui::{point, px, App, Bounds, Global, Pixels, ScrollHandle, ScrollEvent, TouchPhase, Window};
 
 /// What moves a place that scrolls by itself, given a wheel's event.
-pub type Wheel = Rc<dyn Fn(&ScrollWheelEvent, &mut Window, &mut App)>;
+pub type Wheel = Rc<dyn Fn(&ScrollEvent, &mut Window, &mut App)>;
 
 /// A scroller as the router knows it: a handle it moves itself, or a
 /// place that scrolls by its own count, where it was last laid out.
@@ -176,7 +176,7 @@ impl Scrollers {
 
     /// One wheel event, in the capture phase: what to do with it. `system`
     /// is true while a panel of the system's stands over the window.
-    pub fn route(&self, e: &ScrollWheelEvent, system: bool) -> Route {
+    pub fn route(&self, e: &ScrollEvent, system: bool) -> Route {
         if system {
             *self.owner.borrow_mut() = Owner::None;
             return Route::Stop;

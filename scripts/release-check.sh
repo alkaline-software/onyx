@@ -78,4 +78,13 @@ if rustup target list --installed | grep -q x86_64-pc-windows-gnu && command -v 
 else
   fail "no Windows type check: brew install mingw-w64 && rustup target add x86_64-pc-windows-gnu"
 fi
+
+# An iPhone's and an iPad's build is not released yet, and is kept
+# building: a line gated for the wrong system shows here too.
+if rustup target list --installed | grep -q aarch64-apple-ios; then
+  cargo check --locked -p onyx-app -p onyx-core --target aarch64-apple-ios 2>&1 | tail -1 \
+    || fail "the iPhone and iPad type check fails"
+else
+  fail "no iPhone and iPad type check: rustup target add aarch64-apple-ios"
+fi
 print "release-check: v$v is ready to tag at $(git rev-parse --short HEAD)"

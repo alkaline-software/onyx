@@ -2,7 +2,9 @@
 # Regenerate the app icon from scripts/icon/icon.html (the drawing, on a
 # canvas) into crates/onyx-app/assets/icon: the PNGs as the rounded app
 # icon with its margin and shadow, icon.ico for Windows and, on macOS,
-# icon.icns as the full square through iconutil. The page is run by WebKit
+# icon.icns as the full square through iconutil, and the iPhone's and
+# iPad's icon, the full square with no alpha channel, into the asset
+# catalog at crates/onyx-app/ios. The page is run by WebKit
 # (scripts/icon/render.swift), which draws every size on its own pixels, so
 # this runs on a Mac; nothing else is needed.
 #
@@ -27,6 +29,7 @@ for s in 256 128 64 48 32 16; do jobs+=("$TMP/ico-$s.png:$s:margin"); done
 for s in 16 32 128 256 512; do
   jobs+=("$SET/icon_${s}x${s}.png:$s:bleed" "$SET/icon_${s}x${s}@2x.png:$((s * 2)):bleed")
 done
+jobs+=("crates/onyx-app/ios/Assets.xcassets/AppIcon.appiconset/icon-1024.png:1024:opaque")
 if (( menubar )); then
   mkdir -p "$BAR"
   jobs+=("$BAR/menubar.png:36:template" "$BAR/menubar-1x.png:18:template")

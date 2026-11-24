@@ -29,6 +29,11 @@ mod settings;
 mod shell;
 mod tabs;
 mod source;
+#[cfg(not(target_os = "ios"))]
+mod terminal;
+// No shell on an iPhone or an iPad: the terminal with nothing in it.
+#[cfg(target_os = "ios")]
+#[path = "terminal_none.rs"]
 mod terminal;
 mod sublime;
 mod sys;
@@ -49,69 +54,69 @@ actions!(onyx_app, [Quit, CloseWindow, Hide, HideOthers, ShowAll, Minimize, Zoom
 /// A shortcut is named as the Mac has it and bound as `secondary-<key>`,
 /// which gpui makes ⌘ on a Mac and Ctrl elsewhere. The editor's own keys
 /// are in `editor::key_bindings`.
-fn key_bindings() -> Vec<KeyBinding> {
+fn key_bindings(cx: &App) -> Vec<KeyBinding> {
     let mut keys = vec![
-        KeyBinding::new("secondary-shift-b", ToggleSidebar, None),
-        KeyBinding::new("secondary-shift-p", menubar::TogglePin, Some(menubar::CONTEXT)),
+        crate::sys::key("secondary-shift-b", ToggleSidebar, None, cx),
+        crate::sys::key("secondary-shift-p", menubar::TogglePin, Some(menubar::CONTEXT), cx),
         // Over the main window's Open Vault…, in the note alone.
-        KeyBinding::new("secondary-shift-o", menubar::OpenInOnyx, Some(menubar::CONTEXT)),
+        crate::sys::key("secondary-shift-o", menubar::OpenInOnyx, Some(menubar::CONTEXT), cx),
         // The files' keys in the menu bar note, as the main window's
         // (`shell::tree_keys`): for the file chosen, in no words.
-        KeyBinding::new("secondary-backspace", menubar::TrashNote, Some(menubar::CONTEXT)),
-        KeyBinding::new("secondary-z", gpui_component::input::Undo, Some(menubar::CONTEXT)),
-        KeyBinding::new("secondary-shift-z", gpui_component::input::Redo, Some(menubar::CONTEXT)),
-        KeyBinding::new("secondary-n", NewNote, None),
-        KeyBinding::new("secondary-shift-n", NewFolder, None),
-        KeyBinding::new("secondary-shift-o", ChooseContainer, None),
-        KeyBinding::new("secondary-shift-e", ExportPdf, None),
-        KeyBinding::new("secondary-p", PrintNote, None),
-        KeyBinding::new("secondary-=", ZoomIn, None),
-        KeyBinding::new("secondary-+", ZoomIn, None),
-        KeyBinding::new("secondary--", ZoomOut, None),
-        KeyBinding::new("secondary-0", ZoomReset, None),
-        KeyBinding::new("enter", export::ExportNow, Some(shell::EXPORT_CONTEXT)),
-        KeyBinding::new("left", export::PagePrev, Some(shell::EXPORT_CONTEXT)),
-        KeyBinding::new("right", export::PageNext, Some(shell::EXPORT_CONTEXT)),
-        KeyBinding::new("escape", Escape, Some(shell::EXPORT_CONTEXT)),
-        KeyBinding::new("escape", viewer::ViewerClose, Some(viewer::VIEWER_CONTEXT)),
-        KeyBinding::new("space", viewer::ViewerClose, Some(viewer::VIEWER_CONTEXT)),
-        KeyBinding::new("left", viewer::ViewerPrev, Some(viewer::VIEWER_CONTEXT)),
-        KeyBinding::new("right", viewer::ViewerNext, Some(viewer::VIEWER_CONTEXT)),
-        KeyBinding::new("secondary-k", ToggleSearch, None),
-        KeyBinding::new("secondary-f", FindInNote, None),
-        KeyBinding::new("secondary-g", FindNext, None),
-        KeyBinding::new("secondary-shift-g", FindPrev, None),
-        KeyBinding::new("escape", Escape, Some(shell::SEARCH_CONTEXT)),
-        KeyBinding::new("escape", Escape, Some(shell::FIND_CONTEXT)),
-        KeyBinding::new("escape", Escape, Some(shell::TITLE_CONTEXT)),
-        KeyBinding::new("escape", Escape, Some(KEY_CONTEXT)),
-        KeyBinding::new("escape", Escape, Some(settings::SETTINGS_CONTEXT)),
-        KeyBinding::new("escape", Escape, Some(editor::EDITOR_CONTEXT)),
-        KeyBinding::new("escape", Escape, Some("Sheet")),
-        KeyBinding::new("secondary-,", OpenSettings, None),
-        KeyBinding::new("secondary-w", CloseTab, None),
-        KeyBinding::new("secondary-shift-w", CloseWindow, None),
-        KeyBinding::new("secondary-shift-t", ReopenTab, None),
-        KeyBinding::new("secondary-1", Tab1, None),
-        KeyBinding::new("secondary-2", Tab2, None),
-        KeyBinding::new("secondary-3", Tab3, None),
-        KeyBinding::new("secondary-4", Tab4, None),
-        KeyBinding::new("secondary-5", Tab5, None),
-        KeyBinding::new("secondary-6", Tab6, None),
-        KeyBinding::new("secondary-7", Tab7, None),
-        KeyBinding::new("secondary-8", Tab8, None),
-        KeyBinding::new("secondary-9", Tab9, None),
-        KeyBinding::new("secondary-shift-m", ToggleSource, None),
-        KeyBinding::new("secondary-shift-s", ToggleTerminal, None),
-        KeyBinding::new("secondary-q", Quit, None),
+        crate::sys::key("secondary-backspace", menubar::TrashNote, Some(menubar::CONTEXT), cx),
+        crate::sys::key("secondary-z", gpui_component::input::Undo, Some(menubar::CONTEXT), cx),
+        crate::sys::key("secondary-shift-z", gpui_component::input::Redo, Some(menubar::CONTEXT), cx),
+        crate::sys::key("secondary-n", NewNote, None, cx),
+        crate::sys::key("secondary-shift-n", NewFolder, None, cx),
+        crate::sys::key("secondary-shift-o", ChooseContainer, None, cx),
+        crate::sys::key("secondary-shift-e", ExportPdf, None, cx),
+        crate::sys::key("secondary-p", PrintNote, None, cx),
+        crate::sys::key("secondary-=", ZoomIn, None, cx),
+        crate::sys::key("secondary-+", ZoomIn, None, cx),
+        crate::sys::key("secondary--", ZoomOut, None, cx),
+        crate::sys::key("secondary-0", ZoomReset, None, cx),
+        crate::sys::key("enter", export::ExportNow, Some(shell::EXPORT_CONTEXT), cx),
+        crate::sys::key("left", export::PagePrev, Some(shell::EXPORT_CONTEXT), cx),
+        crate::sys::key("right", export::PageNext, Some(shell::EXPORT_CONTEXT), cx),
+        crate::sys::key("escape", Escape, Some(shell::EXPORT_CONTEXT), cx),
+        crate::sys::key("escape", viewer::ViewerClose, Some(viewer::VIEWER_CONTEXT), cx),
+        crate::sys::key("space", viewer::ViewerClose, Some(viewer::VIEWER_CONTEXT), cx),
+        crate::sys::key("left", viewer::ViewerPrev, Some(viewer::VIEWER_CONTEXT), cx),
+        crate::sys::key("right", viewer::ViewerNext, Some(viewer::VIEWER_CONTEXT), cx),
+        crate::sys::key("secondary-k", ToggleSearch, None, cx),
+        crate::sys::key("secondary-f", FindInNote, None, cx),
+        crate::sys::key("secondary-g", FindNext, None, cx),
+        crate::sys::key("secondary-shift-g", FindPrev, None, cx),
+        crate::sys::key("escape", Escape, Some(shell::SEARCH_CONTEXT), cx),
+        crate::sys::key("escape", Escape, Some(shell::FIND_CONTEXT), cx),
+        crate::sys::key("escape", Escape, Some(shell::TITLE_CONTEXT), cx),
+        crate::sys::key("escape", Escape, Some(KEY_CONTEXT), cx),
+        crate::sys::key("escape", Escape, Some(settings::SETTINGS_CONTEXT), cx),
+        crate::sys::key("escape", Escape, Some(editor::EDITOR_CONTEXT), cx),
+        crate::sys::key("escape", Escape, Some("Sheet"), cx),
+        crate::sys::key("secondary-,", OpenSettings, None, cx),
+        crate::sys::key("secondary-w", CloseTab, None, cx),
+        crate::sys::key("secondary-shift-w", CloseWindow, None, cx),
+        crate::sys::key("secondary-shift-t", ReopenTab, None, cx),
+        crate::sys::key("secondary-1", Tab1, None, cx),
+        crate::sys::key("secondary-2", Tab2, None, cx),
+        crate::sys::key("secondary-3", Tab3, None, cx),
+        crate::sys::key("secondary-4", Tab4, None, cx),
+        crate::sys::key("secondary-5", Tab5, None, cx),
+        crate::sys::key("secondary-6", Tab6, None, cx),
+        crate::sys::key("secondary-7", Tab7, None, cx),
+        crate::sys::key("secondary-8", Tab8, None, cx),
+        crate::sys::key("secondary-9", Tab9, None, cx),
+        crate::sys::key("secondary-shift-m", ToggleSource, None, cx),
+        crate::sys::key("secondary-shift-s", ToggleTerminal, None, cx),
+        crate::sys::key("secondary-q", Quit, None, cx),
     ];
-    keys.extend(editor::key_bindings());
-    keys.extend(sublime::bindings());
-    keys.extend(embed::key_bindings());
-    keys.extend(terminal::key_bindings());
-    keys.extend(shell::tree_keys());
+    keys.extend(editor::key_bindings(cx));
+    keys.extend(sublime::bindings(cx));
+    keys.extend(embed::key_bindings(cx));
+    keys.extend(terminal::key_bindings(cx));
+    keys.extend(shell::tree_keys(cx));
     if cfg!(target_os = "macos") {
-        keys.extend([KeyBinding::new("secondary-h", Hide, None), KeyBinding::new("secondary-alt-h", HideOthers, None), KeyBinding::new("secondary-m", Minimize, None), KeyBinding::new("ctrl-secondary-f", ToggleFullScreen, None)]);
+        keys.extend([crate::sys::key("secondary-h", Hide, None, cx), crate::sys::key("secondary-alt-h", HideOthers, None, cx), crate::sys::key("secondary-m", Minimize, None, cx), crate::sys::key("ctrl-secondary-f", ToggleFullScreen, None, cx)]);
     }
     keys
 }
@@ -438,6 +443,11 @@ fn main() {
         gpui_component::tooltip::set_label(|text, window, cx| widgets::tip(text, window, cx));
         sys::install_dock_icon();
         sys::warm_icloud();
+        // An iPhone's and an iPad's container is the first thing drawn.
+        if cfg!(target_os = "ios") {
+            sys::await_icloud(std::time::Duration::from_millis(1500));
+            sys::status_bar(true);
+        }
         // Link cards not shown for two months let go of, off the window's thread.
         let _ = std::thread::Builder::new().name("link cards".into()).spawn(onyx_core::link_card::prune);
         let cfg = Config::load();
@@ -462,7 +472,8 @@ fn main() {
             cx.defer(move |cx| settings::open(shell, cx));
         });
 
-        cx.bind_keys(key_bindings());
+        let keys = key_bindings(cx);
+        cx.bind_keys(keys);
         cx.set_menus(app_menus());
         file_undo::start(cx);
 

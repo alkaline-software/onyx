@@ -11,9 +11,24 @@ mod keys;
 #[cfg(target_os = "macos")]
 mod status_item;
 
-/// Open a file or a link with the app the system gives it.
+/// Open a file or a link with the app the system gives it. On an iPhone
+/// and an iPad only an address opens, in its app (a page in Safari): a
+/// file there is another app's only when the person shares it.
+#[cfg(not(target_os = "ios"))]
 pub fn open(target: &str) {
     let _ = opener::open(target);
+}
+#[cfg(target_os = "ios")]
+pub fn open(target: &str) {
+    use objc2::MainThreadMarker;
+    use objc2_foundation::{NSDictionary, NSString, NSURL};
+    let Some(mtm) = MainThreadMarker::new() else { return };
+    let Some(url) = NSURL::URLWithString(&NSString::from_str(target)) else { return };
+    if url.scheme().is_none() {
+        return;
+    }
+    // SAFETY: a URL and an empty dictionary of options, on the main thread.
+    unsafe { objc2_ui_kit::UIApplication::sharedApplication(mtm).openURL_options_completionHandler(&url, &NSDictionary::new(), None) };
 }
 
 /// Show `path` selected in the file manager. macOS and Windows can select
@@ -35,11 +50,46 @@ pub fn short_path(path: &std::path::Path) -> String {
     if let Ok(rest) = path.strip_prefix(&cloud) {
         return if rest.as_os_str().is_empty() { "iCloud Drive".to_string() } else { format!("iCloud Drive{sep}{}", rest.display()) };
     }
+    // An iPhone's own folder for the app, as Files names it.
+    if cfg!(target_os = "ios") {
+        if let Ok(rest) = path.strip_prefix(onyx_core::paths::documents()) {
+            static PAD: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+            let device = crate::i18n::t(if *PAD.get_or_init(is_pad) { phrase("On My iPad") } else { phrase("On My iPhone") });
+            return if rest.as_os_str().is_empty() { format!("{device}{sep}Onyx") } else { format!("{device}{sep}Onyx{sep}{}", rest.display()) };
+        }
+    }
     match path.strip_prefix(&home) {
         Ok(rest) if rest.as_os_str().is_empty() => "~".to_string(),
         Ok(rest) => format!("~{sep}{}", rest.display()),
         Err(_) => path.display().to_string(),
     }
+}
+
+/// Whether this is an iPad, for what is named after the device.
+#[cfg(target_os = "ios")]
+pub fn is_pad() -> bool {
+    use objc2_ui_kit::{UIDevice, UIUserInterfaceIdiom};
+    objc2::MainThreadMarker::new().is_some_and(|mtm| UIDevice::currentDevice(mtm).userInterfaceIdiom() == UIUserInterfaceIdiom::Pad)
+}
+#[cfg(not(target_os = "ios"))]
+pub fn is_pad() -> bool {
+    false
+}
+
+/// Whether one file is open at a time, with no tabs to keep others in:
+/// on an iPhone, as its own apps have it. An iPad has the Mac's tabs.
+pub fn one_file() -> bool {
+    static PHONE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+    cfg!(target_os = "ios") && *PHONE.get_or_init(|| !is_pad())
+}
+
+/// A key binding as this system has it. `secondary-` is ⌘ on a Mac, an
+/// iPhone and an iPad, and Ctrl elsewhere. gpui's own `KeyBinding::new`
+/// reads no `secondary-`, and its `load` gives an iPad's keyboard Ctrl.
+pub fn key<A: gpui::Action>(keys: &str, action: A, context: Option<&str>, cx: &gpui::App) -> gpui::KeyBinding {
+    let secondary = if cfg!(any(target_os = "macos", target_os = "ios")) { "cmd-" } else { "ctrl-" };
+    let context = context.map(|c| std::rc::Rc::new(gpui::KeyBindingContextPredicate::parse(c).expect("a key's context")));
+    gpui::KeyBinding::load(&keys.replace("secondary-", secondary), Box::new(action), context, false, None, cx).expect("a key binding")
 }
 
 /// Onyx's own iCloud container, the folder iCloud Drive shows as an app
@@ -64,7 +114,7 @@ pub fn warm_icloud() {
         .ok();
 }
 
-#[cfg(target_os = "macos")]
+#[cfg(any(target_os = "macos", target_os = "ios"))]
 fn icloud_container_now() -> Option<std::path::PathBuf> {
     use objc2_foundation::NSFileManager;
     // The container's Documents folder is what iCloud Drive shows; the
@@ -76,9 +126,60 @@ fn icloud_container_now() -> Option<std::path::PathBuf> {
     Some(dir)
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
 fn icloud_container_now() -> Option<std::path::PathBuf> {
     None
+}
+
+/// The container on an iPhone and an iPad, where an app reaches no folder
+/// but its own and the person chooses none: Onyx's iCloud container, the
+/// Mac's own, so a vault made on either is on both; with no iCloud, the
+/// app's own Documents, which Files shows as On My iPhone, Onyx. `None`
+/// on every other system, where the container is a setting.
+#[cfg(target_os = "ios")]
+pub fn fixed_container() -> Option<std::path::PathBuf> {
+    // Asked as every frame is built: the app's own folder is made and
+    // named once, and the iCloud container's answer is kept as it comes.
+    static OWN: std::sync::OnceLock<Option<std::path::PathBuf>> = std::sync::OnceLock::new();
+    icloud_container().or_else(|| {
+        OWN.get_or_init(|| {
+            let dir = onyx_core::paths::documents();
+            std::fs::create_dir_all(&dir).ok()?;
+            Some(dir)
+        })
+        .clone()
+    })
+}
+#[cfg(not(target_os = "ios"))]
+pub fn fixed_container() -> Option<std::path::PathBuf> {
+    None
+}
+
+/// The iCloud container's answer waited for, as long as `most`: on an
+/// iPhone the window's first page is the container's vaults, and the
+/// answer comes in a moment whether iCloud is set up or not.
+pub fn await_icloud(most: std::time::Duration) {
+    let until = std::time::Instant::now() + most;
+    while ICLOUD.get().is_none() && std::time::Instant::now() < until {
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
+}
+
+/// A path kept from an earlier launch, as it is now. On an iPhone and an
+/// iPad the app's own folder moves when the app is updated or restored
+/// (`…/Containers/Data/Application/<a new id>/`), so a path under an
+/// older one is the same place under this one. Elsewhere, the path.
+pub fn rehome(path: std::path::PathBuf) -> std::path::PathBuf {
+    if !cfg!(target_os = "ios") || path.exists() {
+        return path;
+    }
+    const MARK: &str = "/Containers/Data/Application/";
+    let text = path.to_string_lossy();
+    let Some(at) = text.find(MARK) else { return path };
+    match text[at + MARK.len()..].split_once('/') {
+        Some((_, rest)) => onyx_core::paths::home().join(rest),
+        None => path,
+    }
 }
 
 pub fn reveal(path: &std::path::Path) {
@@ -244,8 +345,85 @@ pub fn set_window_ground(window: &gpui::Window, ground: gpui::Rgba) {
         native.setBackgroundColor(Some(&color));
     }
 }
-#[cfg(not(target_os = "macos"))]
+/// On an iPhone and an iPad it is what shows while the screen turns.
+#[cfg(target_os = "ios")]
+pub fn set_window_ground(window: &gpui::Window, ground: gpui::Rgba) {
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    let Ok(handle) = HasWindowHandle::window_handle(window) else { return };
+    let RawWindowHandle::UiKit(handle) = handle.as_raw() else { return };
+    // SAFETY: the handle's view is the window's own UIView, alive while the window is, and this is the main thread.
+    let view: &objc2_ui_kit::UIView = unsafe { handle.ui_view.cast().as_ref() };
+    let color = objc2_ui_kit::UIColor::colorWithRed_green_blue_alpha(ground.r as f64, ground.g as f64, ground.b as f64, 1.);
+    if let Some(native) = view.window() {
+        native.setBackgroundColor(Some(&color));
+    }
+}
+#[cfg(not(any(target_os = "macos", target_os = "ios")))]
 pub fn set_window_ground(_window: &gpui::Window, _ground: gpui::Rgba) {}
+
+/// For a probe: words typed as an iPhone's keyboard types them, handed by
+/// UIKit's own `insertText:` to the view that has the keyboard, or with no
+/// words its delete key (`deleteBackward`). Whether a view took them. This
+/// is the whole way a typed key goes, which a probe's `type=` skips by
+/// calling the editor. Nowhere else: there a key is posted to the process
+/// (`docs/probing.md`).
+#[cfg(target_os = "ios")]
+pub fn keyboard_types(window: &gpui::Window, words: Option<&str>) -> bool {
+    use objc2::rc::Retained;
+    use objc2::{msg_send, sel, Message as _};
+    use objc2_foundation::NSObjectProtocol as _;
+    use objc2_ui_kit::UIView;
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    fn holder(view: &UIView) -> Option<Retained<UIView>> {
+        if view.isFirstResponder() {
+            return Some(view.retain());
+        }
+        view.subviews().iter().find_map(|v| holder(&v))
+    }
+    let Ok(handle) = HasWindowHandle::window_handle(window) else { return false };
+    let RawWindowHandle::UiKit(handle) = handle.as_raw() else { return false };
+    // SAFETY: the handle's view is the window's own UIView, alive while the window is, and this is the main thread.
+    let view: &UIView = unsafe { handle.ui_view.cast().as_ref() };
+    let Some(holder) = view.window().and_then(|w| holder(&w)) else { return false };
+    // Sent from the run loop's next turn, as the keyboard sends a key:
+    // outside any update of gpui's, which the backend's answer to a key
+    // has to make one of its own.
+    match words {
+        Some(words) if holder.respondsToSelector(sel!(insertText:)) => {
+            let words = objc2_foundation::NSString::from_str(words);
+            // SAFETY: `insertText:` takes one NSString, which the run loop keeps until it is sent; the view says it answers it.
+            let _: () = unsafe { msg_send![&*holder, performSelector: sel!(insertText:), withObject: &*words, afterDelay: 0.0f64] };
+            true
+        }
+        None if holder.respondsToSelector(sel!(deleteBackward)) => {
+            // SAFETY: `deleteBackward` takes nothing; the object sent with it is not read.
+            let _: () = unsafe { msg_send![&*holder, performSelector: sel!(deleteBackward), withObject: std::ptr::null::<objc2::runtime::AnyObject>(), afterDelay: 0.0f64] };
+            true
+        }
+        _ => false,
+    }
+}
+#[cfg(not(target_os = "ios"))]
+pub fn keyboard_types(_window: &gpui::Window, _words: Option<&str>) -> bool {
+    false
+}
+
+/// The status bar's ink on an iPhone and an iPad, light or dark by what
+/// it stands on: the frame is a dark graphite in both appearances, and a
+/// compact window's note runs under it on its own paper
+/// (`Shell::render`). Asked at every frame, told to the system when it
+/// changes. Nothing elsewhere.
+pub fn status_bar(light: bool) {
+    #[cfg(target_os = "ios")]
+    {
+        static INK: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(2);
+        if INK.swap(light as u8, std::sync::atomic::Ordering::Relaxed) != light as u8 {
+            gpui_ios::ios::set_status_bar_style(if light { gpui_ios::StatusBarContentStyle::Light } else { gpui_ios::StatusBarContentStyle::Dark });
+        }
+    }
+    #[cfg(not(target_os = "ios"))]
+    let _ = light;
+}
 
 /// Where gpui puts the traffic lights' row on the main window: the close
 /// button's top left, from the window's top left (`main.rs`).
@@ -784,6 +962,11 @@ pub fn keep_on_top(_window: &gpui::Window) {}
 /// The account's first name, else the login name, capitalized: whom the
 /// vault's page greets. The same crate asks every system.
 pub fn user_first_name() -> String {
+    // An iPhone tells an app no name: the greeting has none until the
+    // person gives one in the settings.
+    if cfg!(target_os = "ios") {
+        return String::new();
+    }
     let full = whoami::fallible::realname().unwrap_or_default();
     let name = full.split_whitespace().next().map(str::to_string).filter(|s| !s.is_empty()).or_else(|| whoami::fallible::username().ok()).unwrap_or_default();
     let mut chars = name.chars();

@@ -118,7 +118,24 @@ impl UiState {
         if let Some(last) = writer().last.lock().ok().and_then(|l| l.clone()) {
             return last;
         }
-        paths::read_json(&file()).and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default()
+        let mut read: Self = paths::read_json(&file()).and_then(|v| serde_json::from_value(v).ok()).unwrap_or_default();
+        read.rehome();
+        read
+    }
+
+    /// The paths kept, as they are in this launch: an iPhone moves the
+    /// app's own folder under it (`sys::rehome`).
+    fn rehome(&mut self) {
+        if !cfg!(target_os = "ios") {
+            return;
+        }
+        let one = |p: &mut Option<PathBuf>| *p = p.take().map(crate::sys::rehome);
+        let many = |ps: &mut Vec<PathBuf>| *ps = std::mem::take(ps).into_iter().map(crate::sys::rehome).collect();
+        one(&mut self.vault);
+        one(&mut self.note);
+        many(&mut self.tabs);
+        many(&mut self.recent_vaults);
+        many(&mut self.unfolded);
     }
 
     fn write(&self) {

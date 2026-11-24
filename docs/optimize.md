@@ -36,6 +36,34 @@ About keeping Onyx fast and light: how an optimization pass is done, the rules p
 
 Newest first. Each entry: the version and date, the commits covered, what was looked at, what was found and done with numbers, what was looked at and left as it is, and what was left for later.
 
+### The iPhone and iPad branch, 2026-11-24
+
+Covers `e36802b` (v0.5.2) to the commit that adds this entry: gpui moved from zed `ce48461e` to `f8cfc7ed` for its iPhone and iPad backend, the toolkit built against it, and everything for an iPhone and an iPad (the insets, the compact window, the settings as a sheet, the watcher, the trash, the fixed container). The release build of v0.5.2 as installed (a copy signed ad hoc, since the signed one carries iCloud entitlements and is killed outside its bundle) against a release build of this pass, each a probe copy with a scratch home on a vault of three notes, idle from 10 seconds on, over 20 seconds: CPU from `ps -o time=`, memory from `footprint`, wakeups from `top -stats idlew`. A Mac with the person's own apps running; the memory of a copy with a note open moved by a hundred megabytes between two runs of one build (the first grammar check and the faces' loading land differently), so those two rows say only that nothing grew out of that range.
+
+| | v0.5.2 | This pass |
+|---|---|---|
+| A vault open, nothing open | 0.50% of a core, 106 MB | 0.30% of a core, 119 and 132 MB in two runs |
+| A note open | 1.25% of a core, 338 MB | 0.20 and 0.25% of a core, 244 and 360 MB in two runs |
+| Idle wakeups in 20 seconds: the vault, the note | 4, 0 | 1 to 2, 0 to 5 |
+
+The newer gpui costs a vault's window some 13 to 26 MB at rest, and nothing at a frame that these measures show. In an iPhone's and an iPad's simulator, a debug build, a note open and the keyboard out: 247 MB and 0.8% of a core on the iPhone, 403 MB and 1.4% on the iPad. Those are a Mac's processor and a debug build, and say nothing of a device: a release build is to be measured on one when one is built (`docs/platform.md`, Not checked).
+
+Found and fixed:
+- On an iPhone and an iPad the container was asked of the disk at every asking: `sys::fixed_container` made the app's Documents folder (`create_dir_all`, a `stat` when it is there) each time, and it is asked by the page, the card, the path bar and the settings as each frame is built. The folder is made and its path kept once (`OWN`), and the iCloud container's answer was kept already. Found by reading, not timed.
+- The device's kind, for On My iPhone or On My iPad in a path (`sys::short_path`), was asked of UIKit at each path drawn; it is asked once (`PAD`).
+
+Looked at and left as they are:
+- `window.insets()` and the room figured from it at every frame (`Shell::render`): four numbers the backend keeps, and arithmetic. Off an iPhone and an iPad they are zero and the frame's outer element is one more element with no padding.
+- A compact window draws the page that is off the window too: the note's card behind the sidebar's page is still in the frame. Its editor's layout is answered from what it was and its paint is clipped away, 0.02 ms and 0.01 to 0.05 ms in a trace, and a frame is drawn there only while something moves. Left in the tree so its scrollers keep their true places for the scroll router, which reads them by their bounds.
+- The watcher on an iPhone and an iPad (`onyx_core::watch`) sleeps in `kevent` until a folder changes, then lists that one folder: a `stat` an entry, on its own thread. Onyx's own save of a note is such a change, so a folder of 2,000 notes is 2,000 `stat`s every two seconds while a person types in one of them. Left: it is the price of holding one descriptor a folder and not one a note, and it is off the window's thread.
+- The launch waits for the iCloud container's answer, up to a second and a half on the window's thread (`sys::await_icloud`), with the launch screen showing. In a simulator the answer is at once. To be timed on a device with iCloud.
+- The key bindings are made through `sys::key` (a `String` each for `secondary-`), once at launch.
+- The long press's listener, the edge swipe's and the settings' `NARROW`: nothing at a frame but while a finger is down or the sheet is up.
+
+- Later the same day, the pages with nothing open sized for a compact window, no tooltip after a touch, and each font row's first tile as a new install's: a page's words take their font from `Look::words` as the frame is built, two reference counts, and the tooltip's listener asks the window one flag when a hover begins. Then the sidebar and the menus at a hand's size: `widgets::hand` reads one flag of the thread and multiplies, a few dozen times a frame, and `tree_row_h` the same flag where a row's place is summed. Then a compact window's page as the whole screen: two more flags of the thread set a frame (`set_reach`), the status bar's ink asked a frame and told to the system only when it changes (`sys::status_bar`), and the foot bar's presence asked a frame as the strip's ends' are. Nothing runs at a frame that did not.
+
+Left for later: a release build measured on a device (memory at launch with a large vault, the watcher's listing on a phone's storage, the iCloud wait).
+
 ### v0.5.2, 2026-11-23
 
 Covers `abcdd95` to the commit that adds this entry: v0.5.1's release and the v0.5.2 branch (the caret under a note's words, the vault's mark, pasted tables, the source pane's look, the fonts' order and the settings' size, the file chosen and its keys, what is done to the files taken back). The release build of v0.5.1 as installed against a release build of this pass, on a scratch vault of 200 notes in 10 folders made of Onyx's and Emaki's docs, a note of 20,000 lines (1 MB) and a note of 150 tables ruled under their heads; the window in front, the keyboard in the note.

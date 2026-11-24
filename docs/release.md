@@ -14,6 +14,8 @@ The names never change, so `releases/latest/download/<name>` links stay valid.
 
 Only the Mac is published, so the workflow's matrix has only its rows. Its steps for Windows and Linux stay, and a row for each runs them again; with those rows back, the release also carries `Onyx-windows-<arch>-setup.exe`, Velopack's `AlkalineSoftware.Onyx-<version>-win-<arch>-full.nupkg` and `releases.win-<arch>.json`, and `Onyx-linux-<arch>.AppImage` and `.deb`, for x64 and ARM each.
 
+Nothing is released for an iPhone or an iPad yet. The app builds and runs in simulators (`scripts/ios-app.sh`, `docs/platform.md`, iPhone and iPad); a release there waits on a device build being tried, which needs, in the developer account, an Apple Development and an Apple Distribution certificate, the App ID `com.alkalinesoftware.onyx` enabled for iOS with the iCloud container the Mac's App ID already has, and a provisioning profile for each, and then on a script that signs with `ios/Onyx.entitlements` and uploads to App Store Connect. `scripts/release-check.sh` type-checks the device's target with everything else.
+
 ## One-time setup on a Mac
 
 - Rust via rustup, plus `rustup target add x86_64-apple-darwin`.
@@ -24,6 +26,7 @@ Only the Mac is published, so the workflow's matrix has only its rows. Its steps
 - The iCloud container, once, in the developer account at developer.apple.com: under Identifiers, an App ID for `com.alkalinesoftware.onyx` with the iCloud capability; under Identifiers, iCloud Containers, the container `iCloud.com.alkalinesoftware.onyx`, assigned to that App ID; under Profiles, a Developer ID Application profile for that App ID, downloaded to a folder outside the repository, such as `~/Library/MobileDevice/Provisioning Profiles/Onyx.provisionprofile`, with `ONYX_PROVISION_PROFILE` pointing at it in the shell's profile (in CI, the secret `ONYX_PROVISION_PROFILE_B64`). With it, `release-mac.sh` embeds the profile and signs in `macos/Onyx.entitlements`, and a vault made in iCloud goes in Onyx's app library, the folder Finder shows with the icon on it. Without it, the release runs the same, with iCloud vaults as plain folders under `iCloud Drive/Onyx` (`docs/platform.md`, iCloud Drive).
 - `gh auth login` with write access to the repository.
 - For the Windows type check: `brew install mingw-w64` and `rustup target add x86_64-pc-windows-gnu`.
+- For the iPhone's and iPad's type check: `rustup target add aarch64-apple-ios`, and for a simulator `aarch64-apple-ios-sim`.
 - For the disk image's background and the installer's splash: Python with Pillow (`uv run --with pillow …`) and LXGW WenKai Medium in `~/Library/Fonts`.
 
 ## Each release

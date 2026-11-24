@@ -1,6 +1,9 @@
 //! Where Onyx keeps its files: one folder, `~/.onyx`, which
 //! `ONYX_HOME` overrides (the tests and a probe copy use it, so neither
-//! touches the person's own).
+//! touches the person's own). On an iPhone and an iPad it is
+//! `Library/Application Support/Onyx` in the app's own container, the one
+//! place there an app may make a folder that is backed up and that Files
+//! does not show.
 //!
 //! Every write is a temp file and a rename, so a reader sees the old file
 //! or the new one and never half of one.
@@ -40,6 +43,7 @@ pub fn documents() -> PathBuf {
 pub fn root() -> PathBuf {
     match std::env::var_os("ONYX_HOME").filter(|v| !v.is_empty()) {
         Some(p) => PathBuf::from(p),
+        None if cfg!(target_os = "ios") => home().join("Library/Application Support/Onyx"),
         None => home().join(".onyx"),
     }
 }

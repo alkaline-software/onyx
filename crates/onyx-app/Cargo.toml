@@ -78,6 +78,16 @@ core-foundation = "0.10"
 core-graphics = "0.24"
 foreign-types = "0.5"
 
+# An iPhone and an iPad (`sys.rs`): the status bar's ink is gpui's backend's
+# to set, and the rest is asked of UIKit and Foundation, at the versions
+# gpui already builds.
+[target.'cfg(target_os = "ios")'.dependencies]
+gpui_ios = { git = "https://github.com/zed-industries/zed" }
+objc2 = "0.6"
+objc2-foundation = { version = "0.3", features = ["NSString", "NSURL", "NSFileManager", "NSDictionary"] }
+objc2-ui-kit = { version = "0.3", features = ["UIApplication", "UIResponder", "UIView", "UIWindow", "UIColor", "UIDevice"] }
+raw-window-handle = "0.6"
+
 # Installers: `cargo packager --release` (cargo-packager) wraps the app for
 # Linux and is the bundle's base on macOS. release.yml passes `--formats`
 # per system and renames the results to the stable names. No signing

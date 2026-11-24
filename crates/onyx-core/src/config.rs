@@ -101,7 +101,7 @@ impl EditorConfig {
 
 impl Default for EditorConfig {
     fn default() -> Self {
-        Self { text_face: "inter".into(), mono_face: "jetbrains".into(), cjk_face: "auto".into(), text_custom: String::new(), mono_custom: String::new(), cjk_custom: String::new(), custom_keyed: true, size: TextSizes::MEDIUM, text_size: String::new(), sizes: None, check_writing: true, writing_language: "en-US".into() }
+        Self { text_face: "source-serif".into(), mono_face: "jetbrains".into(), cjk_face: "auto".into(), text_custom: String::new(), mono_custom: String::new(), cjk_custom: String::new(), custom_keyed: true, size: TextSizes::MEDIUM, text_size: String::new(), sizes: None, check_writing: true, writing_language: "en-US".into() }
     }
 }
 

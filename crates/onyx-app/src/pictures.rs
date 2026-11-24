@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 
 use futures::FutureExt as _;
 use futures::channel::{mpsc, oneshot};
-use gpui::{App, AppContext as _, Asset as _, Entity, EntityId, ImageCache, ImageCacheError, ImageCacheItem, ImageSource, RenderImage, Resource, Task, Window};
+use gpui::{App, AppContext as _, Asset as _, Entity, EntityId, ImageCache, ImageCacheError, ImageSource, RenderImage, Resource, Task, Window};
 
 use crate::layout::DECODING;
 
@@ -29,11 +29,31 @@ pub struct Kept {
 
 struct Held {
     /// The picture, or the frame of a moving one showing now.
-    item: ImageCacheItem,
+    item: Item,
     /// The bytes a picture was decoded from, for one that came as bytes.
     bytes: Option<Weak<gpui::Image>>,
     /// A picture that may move: its next frames, as they are decoded.
     moving: Option<Moving>,
+}
+
+/// A picture being decoded, or decoded. gpui's own item of an image cache
+/// can only be started by gpui's loader, and a frame cannot be set in it.
+enum Item {
+    Loading(futures::future::Shared<Task<Result<Arc<RenderImage>, ImageCacheError>>>),
+    Loaded(Result<Arc<RenderImage>, ImageCacheError>),
+}
+
+impl Item {
+    fn get(&mut self) -> Option<Result<Arc<RenderImage>, ImageCacheError>> {
+        match self {
+            Item::Loading(task) => {
+                let got = task.now_or_never()?;
+                *self = Item::Loaded(got.clone());
+                Some(got)
+            }
+            Item::Loaded(got) => Some(got.clone()),
+        }
+    }
 }
 
 /// A picture that moves (a GIF, an animated WebP), played a frame at a
@@ -84,7 +104,7 @@ impl Kept {
         let (task, ahead) = start(cx);
         let task = task.shared();
         let moving = ahead.map(|ahead| Moving { ahead, due: None, wake: None });
-        self.held.insert(key, Held { item: ImageCacheItem::Loading(task.clone()), bytes, moving });
+        self.held.insert(key, Held { item: Item::Loading(task.clone()), bytes, moving });
         let view = window.current_view();
         window
             .spawn(cx, async move |cx| {
@@ -206,7 +226,7 @@ fn advance(held: &mut Held, shown: Arc<RenderImage>, window: &mut Window, cx: &m
                 let delay = shows_for(&next);
                 at = if now - due < delay { due + delay } else { now + delay };
                 moving.due = Some(at);
-                if let ImageCacheItem::Loaded(Ok(old)) = std::mem::replace(&mut held.item, ImageCacheItem::Loaded(Ok(next.clone()))) {
+                if let Item::Loaded(Ok(old)) = std::mem::replace(&mut held.item, Item::Loaded(Ok(next.clone()))) {
                     cx.defer(move |cx| cx.drop_image(old, None));
                 }
                 shown = next;

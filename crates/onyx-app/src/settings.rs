@@ -8,6 +8,12 @@
 //! `Shell::render_settings`), so every listener on it is the main view's
 //! and a change shows in both windows at once. Every section fits the
 //! window as it opens; the page scrolls only for a window made smaller.
+//!
+//! An iPhone and an iPad have one window, so there the settings are a
+//! sheet of the main one (`Shell::settings_here`): the same page on a card
+//! over a scrim, with a button to put it away where the traffic lights
+//! are on a Mac; in a compact window the whole of it, the sections in a
+//! row over the page and each row's control under its name.
 
 use std::rc::Rc;
 use std::time::Duration;
@@ -25,7 +31,7 @@ use onyx_core::update;
 use crate::i18n::{phrase, t, tf, weave};
 use crate::menu::Entry;
 use crate::shell::{Escape, OpenSettings, Shell};
-use crate::widgets::{choice_pill, page_in, small_pill, swallow_click, tip, wordmark, Press};
+use crate::widgets::{choice_pill, hand, page_in, small_pill, swallow_click, tip, wordmark, Press};
 
 /// A row of the list of the system's faces.
 const FONT_ROW_H: f32 = 30.;
@@ -57,6 +63,11 @@ const TOP_H: Pixels = px(52.);
 /// start and end together.
 const CONTROL_W: Pixels = px(336.);
 pub(crate) const CONTROL_H: Pixels = px(28.);
+
+/// A control's height as it is drawn: `CONTROL_H`, and a finger's in a compact window.
+fn control_h() -> Pixels {
+    if crate::widgets::in_hand() { px(36.) } else { CONTROL_H }
+}
 const CARD_R: Pixels = px(12.);
 pub const SETTINGS_CONTEXT: &str = "Settings";
 
@@ -69,6 +80,25 @@ pub const SECTIONS: &[(&str, &str, &str)] = &[
     ("about", phrase("About"), "icons/info.svg"),
 ];
 
+/// The sections this system has: no terminal and no menu bar on an iPhone
+/// or an iPad.
+fn sections() -> impl Iterator<Item = &'static (&'static str, &'static str, &'static str)> {
+    SECTIONS.iter().filter(|(key, _, _)| !cfg!(target_os = "ios") || !matches!(*key, "terminal" | "menubar"))
+}
+
+thread_local! {
+    /// Whether the settings being drawn are a compact window's: a row's
+    /// control stands under its name there (`line`), and is as wide as the
+    /// page lets it (`control_w`). Set as the page is built
+    /// (`render_settings`), for the rows' makers, which know no window.
+    static NARROW: std::cell::Cell<Option<Pixels>> = const { std::cell::Cell::new(None) };
+}
+
+/// How wide the widest controls at a row's right are now.
+fn control_w() -> Pixels {
+    NARROW.get().unwrap_or(CONTROL_W)
+}
+
 /// A section by its key, the first when there is none of that name.
 pub fn section_named(key: &str) -> &'static str {
     // The keys the window remembers from before General and Font.
@@ -77,7 +107,7 @@ pub fn section_named(key: &str) -> &'static str {
         "text" | "fonts" => "font",
         k => k,
     };
-    SECTIONS.iter().find(|(k, _, _)| *k == key).map_or(SECTIONS[0].0, |(k, _, _)| k)
+    sections().find(|(k, _, _)| *k == key).map_or(SECTIONS[0].0, |(k, _, _)| k)
 }
 
 /// Whether a menu of the main view's is the settings window's to draw.
@@ -108,6 +138,12 @@ impl Render for SettingsView {
 /// Mac's settings window opens.
 pub fn open(shell: WeakEntity<Shell>, cx: &mut App) {
     let Some(s) = shell.upgrade() else { return };
+    // One window on an iPhone and an iPad: a sheet of the main one.
+    if cfg!(target_os = "ios") {
+        let Some(main) = cx.try_global::<crate::MainShell>().map(|m| m.1) else { return };
+        let _ = main.update(cx, |_, window, cx| s.update(cx, |s, cx| s.settings_here(window, cx)));
+        return;
+    }
     // Login Items is the system's, and may have changed since.
     s.update(cx, |s, cx| s.read_at_login(cx));
     if let Some(handle) = s.read(cx).settings {
@@ -176,13 +212,13 @@ const WRITING: &[(&str, &str, &str)] = &[("en-US", "icons/flags/us.svg", phrase(
 pub(crate) fn group(title: Option<SharedString>, aside: Option<AnyElement>, rows: Vec<AnyElement>, theme: &gpui_component::Theme) -> AnyElement {
     let head = (title.is_some() || aside.is_some()).then(|| {
         h_flex()
-            .min_h(px(20.))
+            .min_h(px(hand(20.)))
             // In line with the rows' names and controls under it.
             .px(px(14.))
             .gap(px(12.))
             .items_center()
             .justify_between()
-            .child(div().text_size(px(12.)).font_weight(FontWeight::SEMIBOLD).text_color(theme.muted_foreground).children(title))
+            .child(div().text_size(px(hand(12.))).font_weight(FontWeight::SEMIBOLD).text_color(theme.muted_foreground).children(title))
             .children(aside)
     });
     v_flex().gap(px(6.)).children(head).child(card(rows, theme)).into_any_element()
@@ -206,26 +242,98 @@ fn card_ground(theme: &gpui_component::Theme) -> Hsla {
 /// not say it all, and its control at the right. Every row is made here,
 /// never laid out by hand.
 fn line(title: SharedString, detail: Option<SharedString>, control: AnyElement, theme: &gpui_component::Theme) -> AnyElement {
+    // In a compact window the control stands under the name, at the row's left.
+    if NARROW.get().is_some() {
+        return v_flex()
+            .px(px(14.))
+            .py(px(10.))
+            .gap(px(8.))
+            .child(v_flex().gap(px(1.)).child(div().text_size(px(hand(13.))).child(title)).children(detail.map(|d| div().text_size(px(hand(11.5))).line_height(px(hand(15.))).text_color(theme.muted_foreground).child(d))))
+            .child(control)
+            .into_any_element();
+    }
     h_flex()
-        .min_h(px(46.))
+        .min_h(px(hand(46.)))
         .px(px(14.))
         .py(px(8.))
         .gap(px(16.))
         .items_center()
-        .child(v_flex().flex_1().min_w_0().gap(px(1.)).child(div().text_size(px(13.)).child(title)).children(detail.map(|d| div().text_size(px(11.5)).line_height(px(15.)).text_color(theme.muted_foreground).child(d))))
+        .child(v_flex().flex_1().min_w_0().gap(px(1.)).child(div().text_size(px(hand(13.))).child(title)).children(detail.map(|d| div().text_size(px(hand(11.5))).line_height(px(hand(15.))).text_color(theme.muted_foreground).child(d))))
         .child(div().flex_shrink_0().child(control))
         .into_any_element()
 }
 
 /// A row of a card on a sheet, where many stand in little room.
 pub(crate) fn compact_line(title: SharedString, control: AnyElement) -> AnyElement {
-    h_flex().min_h(px(40.)).px(px(14.)).py(px(5.)).gap(px(12.)).items_center().child(div().flex_1().min_w_0().text_size(px(13.)).child(title)).child(div().flex_shrink_0().child(control)).into_any_element()
+    h_flex().min_h(px(hand(40.))).px(px(14.)).py(px(5.)).gap(px(12.)).items_center().child(div().flex_1().min_w_0().text_size(px(hand(13.))).child(title)).child(div().flex_shrink_0().child(control)).into_any_element()
 }
 
 impl Shell {
+    /// The settings as a sheet of this window, where there is no second
+    /// one to open: its fields made in this window, and the keyboard its.
+    pub(crate) fn settings_here(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.settings_in {
+            self.make_font_query(window, cx);
+            self.make_name_input(window, cx);
+            self.settings_in = true;
+            self.settings_section = section_named(self.settings_section);
+        }
+        window.focus(&self.settings_own, cx);
+        cx.notify();
+    }
+
+    /// The settings put away: their window closed, or the sheet gone and
+    /// the keyboard the window's again.
+    fn close_settings(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        if !self.settings_in {
+            window.remove_window();
+            return;
+        }
+        self.settings_in = false;
+        self.font_list = None;
+        window.focus(&self.focus_handle().clone(), cx);
+        cx.notify();
+    }
+
+    /// The sheet: the settings' page on a card over a scrim any press puts
+    /// away, as wide and tall as the settings window where there is room,
+    /// and the whole window in a compact one.
+    pub(crate) fn render_settings_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.settings_in {
+            return None;
+        }
+        let theme = cx.theme().clone();
+        let narrow = self.is_compact();
+        let room = self.room_size();
+        let page = self.render_settings(self.settings_own.clone(), window, cx);
+        let card = div()
+            .id("settings-card")
+            .occlude()
+            .on_click(|_, window, cx| swallow_click(window, cx))
+            .overflow_hidden()
+            .map(|d| {
+                if narrow {
+                    d.size_full()
+                } else {
+                    let (w, h) = (SETTINGS_W.min(room.width - px(32.)), SETTINGS_H.min(room.height - px(32.)));
+                    // The page rounds its own corners: a clip is a rectangle.
+                    d.w(w).h(h).rounded(px(16.)).border_1().border_color(theme.border).shadow(crate::widgets::float_shadow(&theme))
+                }
+            })
+            .child(page);
+        // A compact window's settings are a page of the whole screen: its
+        // ground runs under the status bar and the home indicator.
+        let scrim = div().id("settings-scrim").absolute().inset_0().occlude().bg(theme.overlay).children(crate::widgets::reaches(if narrow { theme.popover } else { theme.overlay })).flex().items_center().justify_center().on_click(cx.listener(|this, _, window, cx| this.close_settings(window, cx))).child(card);
+        Some(crate::widgets::fade_in("settings-sheet", scrim).into_any_element())
+    }
+
     pub(crate) fn render_settings(&mut self, focus: FocusHandle, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
         let section = self.settings_section;
+        // A compact window's: the page's width is the rows' measure.
+        let narrow = self.settings_in && self.is_compact();
+        let page_x = if narrow { px(16.) } else { PAGE_X };
+        NARROW.set(narrow.then(|| (self.room_size().width - page_x * 2. - px(30.)).min(CONTROL_W)));
         let rows = match section {
             "font" => self.fonts_rows(cx),
             "about" => self.about_rows(cx),
@@ -233,7 +341,32 @@ impl Shell {
             "menubar" => self.menu_bar_rows(cx),
             _ => self.general_rows(cx),
         };
+        NARROW.set(None);
         let title = SECTIONS.iter().find(|(k, _, _)| *k == section).map(|(_, name, _)| t(name)).unwrap_or(t("General"));
+        // On a sheet there are no traffic lights to close by: a button
+        // where they would be, and the card rounds its own corners.
+        let here = self.settings_in;
+        let mut close_button = here.then(|| {
+            let wash = theme.foreground.opacity(0.08);
+            div()
+                .id("settings-close")
+                .size(px(hand(28.)))
+                .flex_shrink_0()
+                .rounded_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .bg(wash)
+                .hover(move |s| s.bg(wash.opacity(0.14)))
+                .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+                .on_click(cx.listener(|this, _, window, cx| {
+                    swallow_click(window, cx);
+                    this.close_settings(window, cx)
+                }))
+                .child(Icon::default().path("icons/close.svg").with_size(px(hand(13.))).text_color(theme.muted_foreground))
+        });
+        let round = px(if here && !narrow { 15. } else { 0. });
         // At General's title's right, the window's language.
         let language = (section == "general").then(|| self.language_pill(cx));
         let pick = Rc::new(|this: &mut Self, what: &'static str, id: SharedString, window: &mut Window, cx: &mut Context<Self>| this.settings_pick(what, id, window, cx));
@@ -256,7 +389,7 @@ impl Shell {
                         |_, _, _| (),
                         move |_, _, window, _| {
                             let b = b.clone();
-                            window.on_mouse_event(move |e: &ScrollWheelEvent, phase, _, cx| {
+                            window.on_mouse_event(move |e: &ScrollEvent, phase, _, cx| {
                                 if phase == DispatchPhase::Capture && !b.get().contains(&e.position) {
                                     cx.stop_propagation();
                                 }
@@ -273,7 +406,7 @@ impl Shell {
             .relative()
             .bg(theme.popover)
             .text_color(theme.foreground)
-            .text_size(px(13.))
+            .text_size(px(hand(13.)))
             // Escape puts away a list open here, and with none open closes
             // the window, as ⌘W does.
             .on_action(cx.listener(|this, _: &Escape, window, cx| {
@@ -283,39 +416,49 @@ impl Shell {
                     this.menus.close(cx);
                     cx.notify();
                 } else {
-                    window.remove_window();
+                    this.close_settings(window, cx);
                 }
             }))
-            .on_action(cx.listener(|_, _: &crate::CloseWindow, window, _| window.remove_window()))
+            .on_action(cx.listener(|this, _: &crate::CloseWindow, window, cx| this.close_settings(window, cx)))
             .on_action(cx.listener(|_, _: &OpenSettings, window, _| window.activate_window()))
+            .rounded(round)
             .child(
-                h_flex()
+                // In a compact window the sections are a row over the
+                // page; elsewhere the rail at its left.
+                div()
+                    .flex()
+                    .when(narrow, |d| d.flex_col())
                     .size_full()
                     .items_stretch()
                     // A new language is faded into, rail and page alike.
                     .with_animation(ElementId::NamedInteger("settings-lang".into(), self.lang_serial as u64), Animation::new(Duration::from_millis(240)).with_easing(ease_out_quint()), |d, t| d.opacity(t))
-                    .child(self.settings_rail(cx))
+                    .when(!narrow, |d| d.child(self.settings_rail(round, cx)))
                     .child(
                         v_flex()
                             .flex_1()
                             .min_w_0()
                             .min_h_0()
                             .child(
-                                drag_region(h_flex().h(TOP_H).flex_shrink_0().w_full().pl(PAGE_X).pr(PAGE_X + crate::csd::room(window, cx).1).items_center())
-                                    .child(page_in(format!("title-{section}"), div().text_size(px(15.)).font_weight(FontWeight::SEMIBOLD).child(title)))
-                                    .when_some(language, |d, l| d.child(div().flex_1()).child(l)),
+                                drag_region(h_flex().h(TOP_H).flex_shrink_0().w_full().pl(page_x).pr(page_x + crate::csd::room(window, cx).1).gap(px(10.)).items_center())
+                                    .child(page_in(format!("title-{section}"), div().text_size(px(hand(15.))).font_weight(FontWeight::SEMIBOLD).child(title)))
+                                    .child(div().flex_1())
+                                    .children(language)
+                                    .when(narrow, |d| d.children(close_button.take())),
                             )
+                            .when(narrow, |d| d.child(self.settings_tabs(cx)))
                             // One pane: the settings have no gesture to route.
                             .child({
                                 v_flex()
                                     .relative()
                                     .flex_1()
                                     .min_h_0()
-                                    .child(v_flex().id("settings-body").flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.settings_scroll).px(PAGE_X).pt(px(2.)).pb(px(24.)).child(page_in(format!("page-{section}"), v_flex().gap(px(18.)).children(rows))))
+                                    .child(v_flex().id("settings-body").flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.settings_scroll).px(page_x).pt(px(2.)).pb(px(24.)).child(page_in(format!("page-{section}"), v_flex().gap(px(18.)).children(rows))))
                                     .vertical_scrollbar(&self.settings_scroll)
                             }),
                     ),
             )
+            // Where the traffic lights are on a Mac.
+            .children(close_button.map(|c| div().absolute().top((TOP_H - px(28.)) / 2.).left(px(14.)).child(c)))
             .children(menu)
             .children(font_list)
             .children(crate::csd::chrome(window, TOP_H / 2. - px(12.), |window, _| window.remove_window(), cx))
@@ -325,17 +468,68 @@ impl Shell {
     /// The rail of sections, under the traffic lights: an icon and a name
     /// a section, the chosen one on a plate. A section with something
     /// waiting wears a dot in the accent. Its empty room drags the window.
-    fn settings_rail(&self, cx: &mut Context<Self>) -> AnyElement {
+    /// A section chosen, in the rail or in a compact window's row.
+    fn go_section(&mut self, key: &'static str, window: &mut Window, cx: &mut Context<Self>) {
+        if self.settings_section != key {
+            self.settings_section = key;
+            self.stop_recording(cx);
+            if key == "menubar" {
+                self.read_at_login(cx);
+            }
+            self.settings_scroll.set_offset(point(px(0.), px(0.)));
+            self.menus.close(cx);
+            self.save_section(window, cx);
+        }
+        cx.notify();
+    }
+
+    /// The sections in a compact window: a row over the page, an icon and
+    /// a name a section, the chosen one on a plate, each a share of the row.
+    fn settings_tabs(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
         let current = self.settings_section;
         let waiting = self.update.found.is_some();
-        drag_region(v_flex().w(RAIL_W).h_full().flex_shrink_0().pt(TOP_H).px(px(10.)).gap(px(2.)).bg(if theme.mode.is_dark() { theme.sidebar } else { theme.muted.opacity(0.5) }).border_r_1().border_color(theme.border))
-            .children(SECTIONS.iter().map(|(key, label, icon)| {
+        h_flex()
+            .flex_shrink_0()
+            .mx(px(16.))
+            .mb(px(14.))
+            .p(px(3.))
+            .gap(px(2.))
+            .rounded(px(11.))
+            .bg(theme.muted.opacity(0.6))
+            .children(sections().map(|(key, label, icon)| {
+                let active = *key == current;
+                let key: &'static str = key;
+                h_flex()
+                    .id(SharedString::from(format!("settings-tab-{key}")))
+                    .flex_1()
+                    .min_w_0()
+                    .h(px(hand(32.)))
+                    .gap(px(7.))
+                    .items_center()
+                    .justify_center()
+                    .rounded(px(8.))
+                    .cursor_pointer()
+                    .when(active, |d| d.bg(theme.background).shadow_sm())
+                    .on_click(cx.listener(move |this, _, window, cx| this.go_section(key, window, cx)))
+                    .child(Icon::default().path(*icon).with_size(px(hand(15.))).text_color(if active { theme.foreground } else { theme.muted_foreground }))
+                    .child(div().truncate().text_size(px(hand(13.))).when(active, |d| d.font_weight(FontWeight::MEDIUM)).text_color(if active { theme.foreground } else { theme.muted_foreground }).child(t(label)))
+                    .when(key == "about" && waiting, |d| d.child(div().size(px(hand(7.))).rounded_full().bg(theme.primary)))
+            }))
+            .into_any_element()
+    }
+
+    fn settings_rail(&self, round: Pixels, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+        let current = self.settings_section;
+        let waiting = self.update.found.is_some();
+        drag_region(v_flex().w(RAIL_W).h_full().flex_shrink_0().pt(TOP_H).px(px(10.)).gap(px(2.)).rounded_l(round).bg(if theme.mode.is_dark() { theme.sidebar } else { theme.muted.opacity(0.5) }).border_r_1().border_color(theme.border))
+            .children(sections().map(|(key, label, icon)| {
                 let active = *key == current;
                 let key: &'static str = key;
                 h_flex()
                     .id(SharedString::from(format!("settings-nav-{key}")))
-                    .h(px(30.))
+                    .h(px(hand(30.)))
                     .px(px(10.))
                     .gap(px(9.))
                     .items_center()
@@ -345,22 +539,10 @@ impl Shell {
                     .when(!active, |d| d.hover(|s| s.bg(theme.sidebar_accent.opacity(0.6))))
                     // A press on a section is not a drag of the window.
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .on_click(cx.listener(move |this, _, window, cx| {
-                        if this.settings_section != key {
-                            this.settings_section = key;
-                            this.stop_recording(cx);
-                            if key == "menubar" {
-                                this.read_at_login(cx);
-                            }
-                            this.settings_scroll.set_offset(point(px(0.), px(0.)));
-                            this.menus.close(cx);
-                            this.save_section(window, cx);
-                        }
-                        cx.notify();
-                    }))
-                    .child(Icon::default().path(*icon).with_size(px(15.)).text_color(if active { theme.foreground } else { theme.muted_foreground }))
-                    .child(div().flex_1().text_size(px(13.)).when(active, |d| d.font_weight(FontWeight::MEDIUM)).text_color(if active { theme.foreground } else { theme.sidebar_foreground }).child(t(label)))
-                    .when(key == "about" && waiting, |d| d.child(div().size(px(7.)).rounded_full().bg(theme.primary)))
+                    .on_click(cx.listener(move |this, _, window, cx| this.go_section(key, window, cx)))
+                    .child(Icon::default().path(*icon).with_size(px(hand(15.))).text_color(if active { theme.foreground } else { theme.muted_foreground }))
+                    .child(div().flex_1().text_size(px(hand(13.))).when(active, |d| d.font_weight(FontWeight::MEDIUM)).text_color(if active { theme.foreground } else { theme.sidebar_foreground }).child(t(label)))
+                    .when(key == "about" && waiting, |d| d.child(div().size(px(hand(7.))).rounded_full().bg(theme.primary)))
             }))
             .into_any_element()
     }
@@ -371,7 +553,7 @@ impl Shell {
         let theme = cx.theme().clone();
         let dark = theme.mode.is_dark();
         let theme_choice = div()
-            .w(CONTROL_W)
+            .w(control_w())
             .child(self.motion.segmented(
                 "appearance",
                 vec![("system", "icons/device-desktop.svg", t("System").into()), ("light", "icons/sun.svg", t("Light").into()), ("dark", "icons/moon.svg", t("Dark").into())],
@@ -397,7 +579,7 @@ impl Shell {
         let chosen = crate::look::accent(&self.cfg.app.accent).key;
         let ring = card_ground(&theme);
         let accents = h_flex()
-            .w(CONTROL_W)
+            .w(control_w())
             .justify_between()
             .children(crate::look::ACCENTS.iter().map(|a| {
                 let key = a.key;
@@ -407,7 +589,7 @@ impl Shell {
                 div()
                     .id(SharedString::from(format!("accent-{key}")))
                     .group("accent")
-                    .size(px(24.))
+                    .size(px(hand(24.)))
                     .flex_shrink_0()
                     .rounded_full()
                     .flex()
@@ -424,7 +606,7 @@ impl Shell {
                         crate::look::apply(&appearance, Some(window), cx);
                         cx.notify();
                     }))
-                    .child(div().size(px(16.)).rounded_full().border_2().border_color(if active { ring } else { ring.opacity(0.) }).when(!active, |d| d.group_hover("accent", |s| s.border_color(ring.opacity(0.55)))))
+                    .child(div().size(px(hand(16.))).rounded_full().border_2().border_color(if active { ring } else { ring.opacity(0.) }).when(!active, |d| d.group_hover("accent", |s| s.border_color(ring.opacity(0.55)))))
             }))
             .into_any_element();
         let accent_name: SharedString = t(crate::look::accent(&self.cfg.app.accent).name).into();
@@ -434,12 +616,13 @@ impl Shell {
             .gap(px(8.))
             .items_center()
             .child(self.avatar(28., &theme).id("settings-avatar").cursor_pointer().hover(|s| s.opacity(0.85)).on_click(cx.listener(|this, _, _, cx| this.pick_avatar(cx))))
-            .child(small_pill("avatar-choose", "icons/image.svg", t("Choose…"), Press::Quiet, false, &theme).h(CONTROL_H).on_click(cx.listener(|this, _, _, cx| this.pick_avatar(cx))))
-            .when(!self.cfg.app.avatar.is_empty(), |d| d.child(small_pill("avatar-remove", "icons/trash.svg", t("Remove"), Press::Danger, false, &theme).h(CONTROL_H).on_click(cx.listener(|this, _, _, cx| this.set_avatar(String::new(), cx)))))
+            .child(small_pill("avatar-choose", "icons/image.svg", t("Choose…"), Press::Quiet, false, &theme).h(control_h()).on_click(cx.listener(|this, _, _, cx| this.pick_avatar(cx))))
+            .when(!self.cfg.app.avatar.is_empty(), |d| d.child(small_pill("avatar-remove", "icons/trash.svg", t("Remove"), Press::Danger, false, &theme).h(control_h()).on_click(cx.listener(|this, _, _, cx| this.set_avatar(String::new(), cx)))))
             .into_any_element();
         let text = vec![self.size_row(cx), self.spelling_row(cx)];
         vec![
-            group(Some(t("You").into()), None, vec![line(t("Avatar").into(), None, avatar, &theme), line(t("Name").into(), None, self.name_field(cx), &theme)], &theme),
+            // An iPhone and an iPad have no panel to choose a picture's file in.
+            group(Some(t("You").into()), None, (!cfg!(target_os = "ios")).then(|| line(t("Avatar").into(), None, avatar, &theme)).into_iter().chain([line(t("Name").into(), None, self.name_field(cx), &theme)]).collect(), &theme),
             group(Some(t("Container").into()), None, vec![self.container_row(cx)], &theme),
             group(Some(t("Window").into()), None, vec![line(t("Theme").into(), None, theme_choice, &theme), line(t("Accent").into(), Some(accent_name), accents, &theme)], &theme),
             group(Some(t("Text").into()), None, text, &theme),
@@ -462,12 +645,12 @@ impl Shell {
         let Some(dir) = self.container() else {
             return h_flex()
                 .id("container-choose")
-                .min_h(px(46.))
+                .min_h(px(hand(46.)))
                 .px(px(14.))
                 .gap(px(9.))
                 .items_center()
                 .rounded(inner)
-                .text_size(px(13.))
+                .text_size(px(hand(13.)))
                 .cursor_pointer()
                 .hover(move |s| s.bg(lit))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -478,29 +661,42 @@ impl Shell {
                         let _ = main.update(cx, |_, window, cx| me.update(cx, |s, cx| s.choose_container(window, cx)));
                     });
                 }))
-                .child(Icon::default().path("icons/folder-open.svg").with_size(px(15.)).text_color(theme.primary))
+                .child(Icon::default().path("icons/folder-open.svg").with_size(px(hand(15.))).text_color(theme.primary))
                 .child(div().flex_1().child(t("Choose Container…")))
                 .child(crate::widgets::kbd_hint("⌘⇧O", &theme))
                 .into_any_element();
         };
-        let path = {
-            let shown = crate::sys::short_path(&dir);
-            let icon = if shown.starts_with("iCloud Drive") { "icons/cloud.svg" } else { "icons/folder.svg" };
-            let sep = std::path::MAIN_SEPARATOR;
-            let mut parts: Vec<AnyElement> = Vec::new();
-            for (i, part) in shown.split(sep).enumerate() {
-                if i > 0 {
-                    parts.push(div().px(px(3.)).text_color(theme.muted_foreground.opacity(0.7)).child(sep.to_string()).into_any_element());
-                }
-                parts.push(div().child(part.to_string()).into_any_element());
+        let shown = crate::sys::short_path(&dir);
+        let icon = if shown.starts_with("iCloud Drive") { "icons/cloud.svg" } else { "icons/folder.svg" };
+        let sep = std::path::MAIN_SEPARATOR;
+        let mut parts: Vec<AnyElement> = Vec::new();
+        for (i, part) in shown.split(sep).enumerate() {
+            if i > 0 {
+                parts.push(div().px(px(3.)).text_color(theme.muted_foreground.opacity(0.7)).child(sep.to_string()).into_any_element());
             }
+            parts.push(div().child(part.to_string()).into_any_element());
+        }
+        // An iPhone's and an iPad's is the one place the app has: said,
+        // with nothing to choose, close or show.
+        if crate::sys::fixed_container().is_some() {
+            return h_flex()
+                .min_h(px(hand(46.)))
+                .px(px(14.))
+                .py(px(8.))
+                .gap(px(9.))
+                .items_center()
+                .child(Icon::default().path(icon).with_size(px(hand(15.))).text_color(theme.primary))
+                .child(h_flex().flex_1().flex_wrap().min_w_0().font_family(self.look.mono_family.clone()).text_size(px(hand(12.5))).text_color(theme.foreground).children(parts))
+                .into_any_element();
+        }
+        let path = {
             let words: SharedString = t("Reveal in Finder").into();
             // At the path's end, Close Container: the window as at its
             // first launch. Red under the pointer, as a thing let go.
             let (danger, wash) = (theme.danger, theme.danger.opacity(0.12));
             let close = div()
                 .id("container-close")
-                .size(px(24.))
+                .size(px(hand(24.)))
                 .flex_shrink_0()
                 .flex()
                 .items_center()
@@ -518,7 +714,7 @@ impl Shell {
                         let _ = main.update(cx, |_, window, cx| me.update(cx, |s, cx| s.close_container(window, cx)));
                     });
                 }))
-                .child(Icon::default().path("icons/close.svg").with_size(px(13.)));
+                .child(Icon::default().path("icons/close.svg").with_size(px(hand(13.))));
             h_flex()
                 .id("container-path")
                 .size_full()
@@ -532,8 +728,8 @@ impl Shell {
                 .managed_tooltip(move |window, cx| tip(words.clone(), window, cx))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(move |_, _, _| crate::sys::reveal(&dir))
-                .child(Icon::default().path(icon).with_size(px(15.)).text_color(theme.primary))
-                .child(h_flex().flex_1().flex_wrap().min_w_0().font_family(self.look.mono_family.clone()).text_size(px(12.5)).text_color(theme.foreground).children(parts))
+                .child(Icon::default().path(icon).with_size(px(hand(15.))).text_color(theme.primary))
+                .child(h_flex().flex_1().flex_wrap().min_w_0().font_family(self.look.mono_family.clone()).text_size(px(hand(12.5))).text_color(theme.foreground).children(parts))
                 .child(close)
                 .into_any_element()
         };
@@ -544,7 +740,7 @@ impl Shell {
             .gap(px(7.))
             .items_center()
             .rounded_r(inner)
-            .text_size(px(13.))
+            .text_size(px(hand(13.)))
             .cursor_pointer()
             .hover(move |s| s.bg(lit))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -555,10 +751,10 @@ impl Shell {
                     let _ = main.update(cx, |_, window, cx| me.update(cx, |s, cx| s.choose_container(window, cx)));
                 });
             }))
-            .child(Icon::default().path("icons/folder-open.svg").with_size(px(15.)).text_color(theme.muted_foreground))
+            .child(Icon::default().path("icons/folder-open.svg").with_size(px(hand(15.))).text_color(theme.muted_foreground))
             .child(t("Change…"));
         h_flex()
-            .min_h(px(46.))
+            .min_h(px(hand(46.)))
             .items_stretch()
             .child(div().flex_1().min_w_0().flex().items_center().child(path))
             .child(div().w(px(1.)).flex_shrink_0().bg(theme.border))
@@ -571,7 +767,7 @@ impl Shell {
     /// darker under the pointer, and the accent's with a soft ring of it
     /// while the field has the keyboard.
     fn name_field(&self, cx: &mut Context<Self>) -> AnyElement {
-        let Some(input) = self.name_input.clone() else { return div().w(CONTROL_W).h(CONTROL_H).into_any_element() };
+        let Some(input) = self.name_input.clone() else { return div().w(control_w()).h(control_h()).into_any_element() };
         let theme = cx.theme().clone();
         let edge = theme.foreground.opacity(if theme.mode.is_dark() { 0.16 } else { 0.14 });
         let hover = theme.foreground.opacity(0.28);
@@ -580,8 +776,8 @@ impl Shell {
         div()
             .id("name-field")
             .track_focus(&focus)
-            .w(CONTROL_W)
-            .h(CONTROL_H)
+            .w(control_w())
+            .h(control_h())
             .px(px(9.))
             .flex()
             .items_center()
@@ -590,10 +786,10 @@ impl Shell {
             .border_color(edge)
             .bg(theme.background)
             .cursor_text()
-            .text_size(px(12.5))
+            .text_size(px(hand(12.5)))
             .hover(move |s| s.border_color(hover))
             .focus(move |s| s.border_color(ring).shadow(vec![BoxShadow { color: ring.opacity(0.22), offset: point(px(0.), px(0.)), blur_radius: px(0.), spread_radius: px(3.), inset: false }]))
-            .child(Input::new(&input).appearance(false).bordered(false).px_0().on_secondary_click(Self::input_menu(&input, crate::shell::SETTINGS_EDIT, cx)))
+            .child(Input::new(&input).appearance(false).bordered(false).px_0().text_size(px(hand(14.))).on_secondary_click(Self::input_menu(&input, crate::shell::SETTINGS_EDIT, cx)))
             .into_any_element()
     }
 
@@ -608,12 +804,16 @@ impl Shell {
         let e = self.cfg.editor.clone();
         let serif = crate::fonts::is_serif(&self.look.text_family);
         let tile_ground = if theme.mode.is_dark() { theme.muted } else { theme.popover };
+        // In a compact window the tiles stand two to a row, each wide
+        // enough for its face's name, and a Custom tile a row of its own.
+        let narrow = NARROW.get().is_some();
         let tile = |id: SharedString, active: bool, family: SharedString, sample: SharedString, sample_px: f32, name: SharedString| {
             v_flex()
                 .id(id)
                 .flex_1()
+                .when(narrow, |d| d.flex_basis(relative(0.4)))
                 .min_w_0()
-                .h(px(TILE_H))
+                .h(px(hand(TILE_H)))
                 .px(px(10.))
                 .justify_center()
                 .gap(px(1.))
@@ -625,30 +825,35 @@ impl Shell {
                 .when(active, |d| d.bg(theme.primary.opacity(0.08)))
                 .when(!active, |d| d.hover(|s| s.border_color(theme.muted_foreground)))
                 // One line, at a size that fits the narrowest tile.
-                .child(div().whitespace_nowrap().overflow_hidden().text_size(px(sample_px)).line_height(px(24.)).font_family(family).child(sample))
-                .child(div().truncate().text_size(px(11.5)).text_color(if active { theme.foreground } else { theme.muted_foreground }).child(name))
+                .child(div().whitespace_nowrap().overflow_hidden().text_size(px(hand(sample_px))).line_height(px(hand(24.))).font_family(family).child(sample))
+                .child(div().truncate().text_size(px(hand(11.5))).text_color(if active { theme.foreground } else { theme.muted_foreground }).child(name))
         };
         let english = |faces: &'static [crate::fonts::Face], cx: &mut Context<Self>| {
-            h_flex().gap(px(TILE_GAP)).children(faces.iter().map(|face| {
+            h_flex().gap(px(TILE_GAP)).when(narrow, |d| d.flex_wrap()).children(faces.iter().map(|face| {
                 let key = face.key;
                 tile(format!("face-{key}").into(), e.text_face == key, face.family.into(), "Ag".into(), 20., face.name.into()).on_click(cx.listener(move |this, _, _, cx| this.set_text_face(key, cx)))
             }))
         };
-        let kind = |name: SharedString| div().text_size(px(11.5)).text_color(theme.muted_foreground).child(name);
+        let kind = |name: SharedString| div().text_size(px(hand(11.5))).text_color(theme.muted_foreground).child(name);
         // Four tiles and the tall one as five columns of one width: the
         // rows' side grows four times the tall one's, from the gaps it has.
         let mut rows_side = v_flex().flex_basis(px(TILE_GAP * 3.)).min_w_0().gap(px(TILE_GAP));
         rows_side.style().flex_grow = Some(4.);
-        let rows_side = rows_side.child(kind(t("Serif").into())).child(english(crate::fonts::SERIFS, cx)).child(div().h(px(4.))).child(kind(t("Sans serif").into())).child(english(crate::fonts::SANS, cx));
+        let rows_side = rows_side.child(kind(t("Serif").into())).child(english(crate::fonts::SERIFS, cx)).child(div().h(px(hand(4.)))).child(kind(t("Sans serif").into())).child(english(crate::fonts::SANS, cx));
         // Its top level with the first row's, under a label as tall as
         // theirs that shows nothing.
         let mut tall = v_flex().flex_basis(px(0.)).min_w_0().gap(px(TILE_GAP));
         tall.style().flex_grow = Some(1.);
-        let tall = tall.child(kind(t("Serif").into()).invisible()).child(div().flex_1().min_h_0().child(self.custom_tile(Slot::English, e.text_face == CUSTOM, true, cx)));
-        let note = h_flex().p(px(TILE_PAD)).gap(px(TILE_GAP)).items_stretch().child(rows_side).child(tall).into_any_element();
+        let note = if narrow {
+            v_flex().p(px(TILE_PAD)).gap(px(TILE_GAP)).child(rows_side).child(self.custom_tile(Slot::English, e.text_face == CUSTOM, false, cx)).into_any_element()
+        } else {
+            let tall = tall.child(kind(t("Serif").into()).invisible()).child(div().flex_1().min_h_0().child(self.custom_tile(Slot::English, e.text_face == CUSTOM, true, cx)));
+            h_flex().p(px(TILE_PAD)).gap(px(TILE_GAP)).items_stretch().child(rows_side).child(tall).into_any_element()
+        };
         let cjk = h_flex()
             .p(px(TILE_PAD))
             .gap(px(TILE_GAP))
+            .when(narrow, |d| d.flex_wrap())
             .children(crate::fonts::CJK.iter().map(|face| {
                 let key = face.key;
                 let family = crate::fonts::cjk_family(key, serif);
@@ -658,16 +863,17 @@ impl Shell {
                 };
                 tile(format!("face-{key}").into(), e.cjk_face == key, family, sample, CJK_SAMPLE_PX, name).on_click(cx.listener(move |this, _, _, cx| this.set_cjk_face(key, cx)))
             }))
-            .child(self.custom_tile(Slot::Cjk, e.cjk_face == CUSTOM, false, cx))
+            .child(if narrow { div().w_full().flex().child(self.custom_tile(Slot::Cjk, e.cjk_face == CUSTOM, false, cx)).into_any_element() } else { self.custom_tile(Slot::Cjk, e.cjk_face == CUSTOM, false, cx) })
             .into_any_element();
         let mono = h_flex()
             .p(px(TILE_PAD))
             .gap(px(TILE_GAP))
+            .when(narrow, |d| d.flex_wrap())
             .children(crate::fonts::MONOS.iter().map(|face| {
                 let key = face.key;
                 tile(format!("face-{key}").into(), e.mono_face == key, face.family.into(), "fn(0) -> 1".into(), MONO_SAMPLE_PX, face.name.into()).on_click(cx.listener(move |this, _, _, cx| this.set_mono_face(key, cx)))
             }))
-            .child(self.custom_tile(Slot::Mono, e.mono_face == CUSTOM, false, cx))
+            .child(if narrow { div().w_full().flex().child(self.custom_tile(Slot::Mono, e.mono_face == CUSTOM, false, cx)).into_any_element() } else { self.custom_tile(Slot::Mono, e.mono_face == CUSTOM, false, cx) })
             .into_any_element();
         vec![group(Some(t("English font").into()), None, vec![note], &theme), group(Some(t("CJK font").into()), None, vec![cjk], &theme), group(Some(t("Monospace font").into()), None, vec![mono], &theme)]
     }
@@ -722,7 +928,7 @@ impl Shell {
                 .absolute()
                 .top(px(3.))
                 .right(px(3.))
-                .size(px(16.))
+                .size(px(hand(16.)))
                 .flex()
                 .items_center()
                 .justify_center()
@@ -739,16 +945,16 @@ impl Shell {
                         this.clear_custom_font(slot, cx);
                     }
                 }))
-                .child(Icon::default().path("icons/close.svg").with_size(px(10.)))
+                .child(Icon::default().path("icons/close.svg").with_size(px(hand(10.))))
                 .with_animation(ElementId::Name(format!("{clear_key}-{}", moving.map(|(_, n)| n).unwrap_or(0)).into()), Animation::new(crate::widgets::FOLD_ANIM).with_easing(ease_out_quint()), move |d, t| d.opacity(if moving.is_none() { 1. } else if shown { t } else { 1. - t }))
         });
-        let mark = Icon::default().path("icons/chevrons-up-down.svg").with_size(px(12.)).text_color(quiet);
+        let mark = Icon::default().path("icons/chevrons-up-down.svg").with_size(px(hand(12.))).text_color(quiet);
         let tiles = self.font_tiles.clone();
         v_flex()
             .id(SharedString::from(format!("face-custom-{slot:?}")))
             .relative()
             .when(tall, |d| d.size_full())
-            .when(!tall, |d| d.flex_1().h(px(TILE_H)))
+            .when(!tall, |d| d.flex_1().h(px(hand(TILE_H))))
             .min_w_0()
             .px(px(10.))
             .justify_center()
@@ -760,8 +966,8 @@ impl Shell {
             .border_color(if lit { theme.primary } else { theme.border })
             .when(lit, |d| d.bg(theme.primary.opacity(0.08)))
             .when(!lit, |d| d.hover(move |s| s.border_color(quiet)))
-            .child(div().whitespace_nowrap().overflow_hidden().text_size(px(sample_px)).line_height(px(if tall { 38. } else { 24. })).font_family(face).when(none, |d| d.text_color(quiet)).child(sample))
-            .child(h_flex().gap(px(2.)).items_center().child(div().flex_1().min_w_0().truncate().text_size(px(11.5)).text_color(if active { theme.foreground } else { quiet }).child(name)).child(mark))
+            .child(div().whitespace_nowrap().overflow_hidden().text_size(px(hand(sample_px))).line_height(px(hand(if tall { 38. } else { 24. }))).font_family(face).when(none, |d| d.text_color(quiet)).child(sample))
+            .child(h_flex().gap(px(2.)).items_center().child(div().flex_1().min_w_0().truncate().text_size(px(hand(11.5))).text_color(if active { theme.foreground } else { quiet }).child(name)).child(mark))
             .when(!none, |d| {
                 let full: SharedString = crate::fonts::both_names(native.as_deref(), &family).into();
                 d.managed_tooltip(move |window, cx| tip(full.clone(), window, cx))
@@ -991,7 +1197,7 @@ impl Shell {
             h_flex()
                 .mx(px(8.))
                 .mb(px(6.))
-                .h(px(30.))
+                .h(px(hand(30.)))
                 .px(px(8.))
                 .gap(px(6.))
                 .items_center()
@@ -1007,10 +1213,10 @@ impl Shell {
                     this.font_list_step(1, cx);
                     cx.stop_propagation();
                 }))
-                .child(Icon::default().path("icons/search.svg").with_size(px(13.)).text_color(theme.muted_foreground))
+                .child(Icon::default().path("icons/search.svg").with_size(px(hand(13.))).text_color(theme.muted_foreground))
                 .child(div().flex_1().min_w_0().track_focus(&q.read(cx).focus_handle(cx)).child(Input::new(q).appearance(false).bordered(false).px_0()))
         });
-        let quiet = |words: &str| div().px(px(14.)).py(px(10.)).text_size(px(12.5)).text_color(theme.muted_foreground).child(words.to_string()).into_any_element();
+        let quiet = |words: &str| div().px(px(14.)).py(px(10.)).text_size(px(hand(12.5))).text_color(theme.muted_foreground).child(words.to_string()).into_any_element();
         let body = match &self.font_families {
             None => quiet(t("Reading fonts…")),
             Some(_) if rows.is_empty() => quiet(t("No font matches")),
@@ -1035,11 +1241,11 @@ impl Shell {
                             .items_center()
                             .rounded(px(7.))
                             .cursor_pointer()
-                            .text_size(px(13.))
+                            .text_size(px(hand(13.)))
                             .when(ix == at, |d| d.bg(if dark { theme.foreground.opacity(0.11) } else { theme.list_hover }))
                             .when(ix != at, |d| d.hover(move |s| s.bg(over)))
                             .child(div().flex_1().min_w_0().truncate().child(families.shown(&family)))
-                            .when(on, |d| d.child(Icon::new(gpui_component::IconName::Check).with_size(px(12.)).text_color(theme.primary)))
+                            .when(on, |d| d.child(Icon::new(gpui_component::IconName::Check).with_size(px(hand(12.))).text_color(theme.primary)))
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 swallow_click(window, cx);
                                 this.font_list_choose(Some(ix), window, cx);
@@ -1095,9 +1301,12 @@ impl Shell {
     fn size_row(&mut self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
         let sizes = self.cfg.editor.text_sizes();
-        let place = |this: &Self, key: &'static str, name: &str, value: f32, cx: &mut Context<Self>| h_flex().gap(px(8.)).items_center().child(div().text_size(px(12.5)).text_color(theme.muted_foreground).child(name.to_string())).child(this.stepper(key, value, true, cx));
+        let place = |this: &Self, key: &'static str, name: &str, value: f32, cx: &mut Context<Self>| h_flex().gap(px(8.)).items_center().child(div().text_size(px(hand(12.5))).text_color(theme.muted_foreground).child(name.to_string())).child(this.stepper(key, value, true, cx));
+        // In a compact window the two stand one over the other.
         let control = h_flex()
-            .gap(px(16.))
+            .gap_x(px(16.))
+            .gap_y(px(8.))
+            .when(NARROW.get().is_some(), |d| d.flex_wrap())
             .items_center()
             .children(self.size_reset(sizes, cx))
             .child(place(self, "note", t("Text"), sizes.note, cx))
@@ -1121,7 +1330,7 @@ impl Shell {
         let tip: SharedString = tf("Reset to {size} pt", &[("size", &format!("{} / {}", size_words(TextSizes::MEDIUM.note), size_words(TextSizes::MEDIUM.code)))]).into();
         let button = div()
             .id(id)
-            .size(px(26.))
+            .size(px(hand(26.)))
             .flex_shrink_0()
             .rounded(px(7.))
             .flex()
@@ -1134,7 +1343,7 @@ impl Shell {
                 }))
             })
             .managed_tooltip(move |window, cx| crate::widgets::tip(tip.clone(), window, cx))
-            .child(Icon::default().path("icons/rotate.svg").with_size(px(14.)).text_color(theme.muted_foreground));
+            .child(Icon::default().path("icons/rotate.svg").with_size(px(hand(14.))).text_color(theme.muted_foreground));
         Some(match moving {
             Some((coming, n)) => button.with_animation(ElementId::Name(format!("{id}-{n}").into()), Animation::new(crate::widgets::FOLD_ANIM).with_easing(ease_out_quint()), move |d, t| d.opacity(if coming { t } else { 1. - t })).into_any_element(),
             None => button.into_any_element(),
@@ -1166,7 +1375,7 @@ impl Shell {
             let set = set.clone();
             div()
                 .id(SharedString::from(format!("size-{key}-{}", if up { "up" } else { "down" })))
-                .size(px(22.))
+                .size(px(hand(22.)))
                 .flex_shrink_0()
                 .rounded(px(6.))
                 .flex()
@@ -1178,20 +1387,20 @@ impl Shell {
                         set(this, to, cx);
                     }))
                 })
-                .child(Icon::default().path(icon).with_size(px(13.)).text_color(if able { theme.foreground } else { theme.muted_foreground.opacity(0.5) }))
+                .child(Icon::default().path(icon).with_size(px(hand(13.))).text_color(if able { theme.foreground } else { theme.muted_foreground.opacity(0.5) }))
         };
         let down = step(false, down, "icons/minus.svg", cx);
         let up = step(true, up, "icons/plus.svg", cx);
         h_flex()
             .w(px(140.))
-            .h(CONTROL_H)
+            .h(control_h())
             .p(px(3.))
             .gap(px(4.))
             .rounded(px(8.))
             .bg(track)
             .items_center()
             .child(down)
-            .child(h_flex().flex_1().justify_center().items_center().gap(px(3.)).child(div().w(px(42.)).text_center().font_weight(FontWeight::MEDIUM).text_size(px(13.)).text_color(if live { theme.foreground } else { theme.muted_foreground }).child(size_words(value))).child(div().text_size(px(12.5)).text_color(theme.muted_foreground).child("pt")))
+            .child(h_flex().flex_1().justify_center().items_center().gap(px(3.)).child(div().w(px(42.)).text_center().font_weight(FontWeight::MEDIUM).text_size(px(hand(13.))).text_color(if live { theme.foreground } else { theme.muted_foreground }).child(size_words(value))).child(div().text_size(px(hand(12.5))).text_color(theme.muted_foreground).child("pt")))
             .child(up)
             .into_any_element()
     }
@@ -1253,18 +1462,18 @@ impl Shell {
             .items_center()
             .pt(px(30.))
             .pb(px(28.))
-            .child(weave(&t("{studio} presents"), vec![("studio", studio)], h_flex().text_size(px(14.)).line_height(px(22.)).text_color(theme.muted_foreground).gap(px(0.))))
-            .child(img("icon/icon-512.png").mt(px(18.)).size(px(88.)))
+            .child(weave(&t("{studio} presents"), vec![("studio", studio)], h_flex().text_size(px(hand(14.))).line_height(px(hand(22.))).text_color(theme.muted_foreground).gap(px(0.))))
+            .child(img("icon/icon-512.png").mt(px(18.)).size(px(hand(88.))))
             // The row's height is its own, whatever face or marks the name holds.
-            .child(div().mt(px(6.)).child(wordmark("Onyx", 42., theme.primary, cx).line_height(px(48.))))
-            .child(div().mt(px(4.)).text_size(px(12.5)).text_color(theme.muted_foreground).child(tf("Version {version}", &[("version", &update::current_version())])));
+            .child(div().mt(px(6.)).child(wordmark("Onyx", 42., theme.primary, cx).line_height(px(hand(48.)))))
+            .child(div().mt(px(4.)).text_size(px(hand(12.5))).text_color(theme.muted_foreground).child(tf("Version {version}", &[("version", &update::current_version())])));
         let pills = h_flex()
             .w_full()
             .justify_center()
             .pt(px(4.))
             .gap(px(8.))
-            .child(small_pill("about-source", "icons/github.svg", "GitHub", Press::Quiet, false, &theme).h(px(28.)).on_click(|_, _, _| crate::sys::open(&update::repo_page())))
-            .child(small_pill("about-notes", "icons/file-text.svg", t("Release Notes"), Press::Quiet, false, &theme).h(px(28.)).on_click(|_, _, _| crate::sys::open(&update::release_page(update::current_version()))));
+            .child(small_pill("about-source", "icons/github.svg", "GitHub", Press::Quiet, false, &theme).h(px(hand(28.))).on_click(|_, _, _| crate::sys::open(&update::repo_page())))
+            .child(small_pill("about-notes", "icons/file-text.svg", t("Release Notes"), Press::Quiet, false, &theme).h(px(hand(28.))).on_click(|_, _, _| crate::sys::open(&update::release_page(update::current_version()))));
         let u = self.update.clone();
         let (icon, words, kind) = match (&u.found, u.downloading) {
             (_, Some(p)) => ("icons/download.svg", tf("Downloading… {percent}%", &[("percent", &p)]), Press::Primary),
@@ -1272,7 +1481,7 @@ impl Shell {
             (None, None) => ("icons/refresh.svg", t("Check for updates").to_string(), Press::Quiet),
         };
         let busy = u.checking || u.downloading.is_some();
-        let button = small_pill("update", icon, words, kind, busy, &theme).h(CONTROL_H).min_w(px(190.)).justify_center().when(!busy, |d| {
+        let button = small_pill("update", icon, words, kind, busy, &theme).h(control_h()).min_w(px(190.)).justify_center().when(!busy, |d| {
             d.on_click(cx.listener(|this, _, _, cx| {
                 if this.update.found.is_some() {
                     this.install_update(cx);
@@ -1311,14 +1520,14 @@ impl Shell {
         };
         h_flex()
             .id("language-pill")
-            .h(CONTROL_H)
+            .h(control_h())
             .px(px(12.))
             .gap(px(7.))
             .items_center()
             .rounded_full()
             .border_1()
             .border_color(theme.foreground.opacity(0.16))
-            .text_size(px(12.5))
+            .text_size(px(hand(12.5)))
             .cursor_pointer()
             .hover(|s| s.bg(theme.foreground.opacity(0.06)))
             // A press on it is not a drag of the window's top.
@@ -1331,9 +1540,9 @@ impl Shell {
                 this.menus.show("language", at, entries);
                 cx.notify();
             }))
-            .map(|d| if picture { d.child(img(icon).w(px(17.)).h(px(12.))) } else { d.child(Icon::default().path(icon).with_size(px(14.))) })
+            .map(|d| if picture { d.child(img(icon).w(px(17.)).h(px(hand(12.)))) } else { d.child(Icon::default().path(icon).with_size(px(hand(14.)))) })
             .child(label)
-            .child(Icon::default().path("icons/chevron-down.svg").with_size(px(12.)).text_color(theme.muted_foreground))
+            .child(Icon::default().path("icons/chevron-down.svg").with_size(px(hand(12.))).text_color(theme.muted_foreground))
             .into_any_element()
     }
 
@@ -1359,14 +1568,14 @@ impl Shell {
         let (_, flag, name) = WRITING.iter().find(|(key, _, _)| *key == chosen).copied().unwrap_or(WRITING[0]);
         let pill = h_flex()
             .id("writing-pill")
-            .h(CONTROL_H)
+            .h(control_h())
             .px(px(12.))
             .gap(px(7.))
             .items_center()
             .rounded_full()
             .border_1()
             .border_color(theme.foreground.opacity(0.16))
-            .text_size(px(12.5))
+            .text_size(px(hand(12.5)))
             .cursor_pointer()
             .hover(|s| s.bg(theme.foreground.opacity(0.06)))
             .on_click(cx.listener(move |this, ev: &ClickEvent, _, cx| {
@@ -1376,9 +1585,9 @@ impl Shell {
                 this.menus.show("writing-language", at, entries);
                 cx.notify();
             }))
-            .child(img(flag).w(px(17.)).h(px(12.)))
+            .child(img(flag).w(px(17.)).h(px(hand(12.))))
             .child(t(name))
-            .child(Icon::default().path("icons/chevron-down.svg").with_size(px(12.)).text_color(theme.muted_foreground))
+            .child(Icon::default().path("icons/chevron-down.svg").with_size(px(hand(12.))).text_color(theme.muted_foreground))
             .into_any_element();
         let language = div().when(!on, |d| d.opacity(0.45).occlude()).child(pill);
         line(t("Check spelling and grammar").into(), None, h_flex().gap(px(12.)).items_center().child(language).child(check).into_any_element(), &theme)
@@ -1391,14 +1600,14 @@ impl Shell {
         let theme = cx.theme().clone();
         let term = self.cfg.terminal.clone();
         let pick = |keys: &[&'static str], now: &str| keys.iter().copied().find(|k| *k == now).unwrap_or(keys[0]);
-        let scheme = div().w(CONTROL_W).child(self.motion.segmented("term-theme", vec![("match", "", t("Match window").into()), ("dark", "", t("Dark").into()), ("light", "", t("Light").into())], pick(&["match", "dark", "light"], &term.theme), true, Rc::new(|this: &mut Self, key, _, cx| this.set_terminal(|t| t.theme = key.into(), cx)), cx)).into_any_element();
-        let cursor = div().w(CONTROL_W).child(self.motion.segmented("term-cursor", vec![("bar", "", t("Bar").into()), ("block", "", t("Block").into()), ("underline", "", t("Underline").into())], pick(&["bar", "block", "underline"], &term.cursor), true, Rc::new(|this: &mut Self, key, _, cx| this.set_terminal(|t| t.cursor = key.into(), cx)), cx)).into_any_element();
+        let scheme = div().w(control_w()).child(self.motion.segmented("term-theme", vec![("match", "", t("Match window").into()), ("dark", "", t("Dark").into()), ("light", "", t("Light").into())], pick(&["match", "dark", "light"], &term.theme), true, Rc::new(|this: &mut Self, key, _, cx| this.set_terminal(|t| t.theme = key.into(), cx)), cx)).into_any_element();
+        let cursor = div().w(control_w()).child(self.motion.segmented("term-cursor", vec![("bar", "", t("Bar").into()), ("block", "", t("Block").into()), ("underline", "", t("Underline").into())], pick(&["bar", "block", "underline"], &term.cursor), true, Rc::new(|this: &mut Self, key, _, cx| this.set_terminal(|t| t.cursor = key.into(), cx)), cx)).into_any_element();
         let blink = self.motion.switch("term-blink", term.cursor_blink, Rc::new(|this: &mut Self, on, _, cx| this.set_terminal(|t| t.cursor_blink = on, cx)), cx);
         let ligatures = self.motion.switch("term-ligatures", term.ligatures, Rc::new(|this: &mut Self, on, _, cx| this.set_terminal(|t| t.ligatures = on, cx)), cx);
         let copy = self.motion.switch("term-copy", term.copy_on_select, Rc::new(|this: &mut Self, on, _, cx| this.set_terminal(|t| t.copy_on_select = on, cx)), cx);
         // The face is the window's code face, set in Font.
         let fonts = choice_pill("term-fonts", "icons/a-large-small.svg", t("Open Fonts"), Press::Quiet, false, &theme)
-            .h(CONTROL_H)
+            .h(control_h())
             .on_click(cx.listener(|this, _, _, cx| {
                 this.settings_section = "font";
                 cx.notify();
@@ -1423,7 +1632,7 @@ impl Shell {
         let credit = weave(
             t("The styling and UI design are from {kaku}, made by {tw93}."),
             vec![("kaku", credit_link("term-credit", "Kaku", "https://kaku.fun").into_any_element()), ("tw93", credit_link("term-credit-author", "tw93", "https://github.com/tw93").into_any_element())],
-            h_flex().flex_wrap().px(px(14.)).text_size(px(11.5)).text_color(theme.muted_foreground),
+            h_flex().flex_wrap().px(px(14.)).text_size(px(hand(11.5))).text_color(theme.muted_foreground),
         )
         .into_any_element();
         vec![
@@ -1509,7 +1718,7 @@ impl Shell {
             let hover = theme.foreground.opacity(0.08);
             div()
                 .id("bar-shortcut-clear")
-                .size(px(18.))
+                .size(px(hand(18.)))
                 .rounded_full()
                 .flex()
                 .items_center()
@@ -1522,12 +1731,12 @@ impl Shell {
                     this.stop_recording(cx);
                     this.set_menu_shortcut(None, cx);
                 }))
-                .child(Icon::default().path("icons/close.svg").with_size(px(12.)).text_color(theme.muted_foreground))
+                .child(Icon::default().path("icons/close.svg").with_size(px(hand(12.))).text_color(theme.muted_foreground))
         });
         h_flex()
             .id("bar-shortcut")
             .w(px(180.))
-            .h(CONTROL_H)
+            .h(control_h())
             .pl(px(10.))
             .pr(px(5.))
             .gap(px(6.))
@@ -1536,7 +1745,7 @@ impl Shell {
             .border_1()
             .border_color(if recording { theme.primary } else { theme.foreground.opacity(0.16) })
             .when(recording, |d| d.bg(theme.primary.opacity(0.06)))
-            .text_size(px(12.5))
+            .text_size(px(hand(12.5)))
             .cursor_pointer()
             .hover(|s| s.border_color(theme.foreground.opacity(0.28)))
             .on_click(cx.listener(|this, _, window, cx| {

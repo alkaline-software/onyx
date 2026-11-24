@@ -261,8 +261,42 @@ fn same_file_other_case(a: &Path, b: &Path) -> bool {
 }
 
 /// Put a note or a folder in the system's trash.
+#[cfg(not(target_os = "ios"))]
 pub fn trash(path: &Path) -> Result<(), String> {
     trash::delete(path).map_err(|e| e.to_string())
+}
+
+/// Put a note or a folder in the system's trash: on an iPhone and an iPad,
+/// Recently Deleted in Files. The system has a trash there only for what
+/// is in the app's Documents or in iCloud, and says of anything else that
+/// its volume has none: what Onyx holds out of a vault (`file_undo`) is
+/// under the app's own support folder. Such a thing is moved into
+/// Documents first, into a dotted folder of its own, and trashed from
+/// there, so it too is in Recently Deleted and never simply gone.
+#[cfg(target_os = "ios")]
+pub fn trash(path: &Path) -> Result<(), String> {
+    use objc2_foundation::{NSFileManager, NSString, NSURL};
+    let to_trash = |path: &Path| {
+        let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+        NSFileManager::defaultManager().trashItemAtURL_resultingItemURL_error(&url, None).map_err(|e| e.localizedDescription().to_string())
+    };
+    let Err(refused) = to_trash(path) else { return Ok(()) };
+    let Some(name) = path.file_name() else { return Err(refused) };
+    let stamp = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map_or(0, |d| d.as_nanos());
+    let stage = crate::paths::documents().join(".onyx-leaving").join(format!("{}-{stamp}", std::process::id()));
+    fs::create_dir_all(&stage).map_err(|e| e.to_string())?;
+    let staged = stage.join(name);
+    let done = fs::rename(path, &staged).map_err(|e| e.to_string()).and_then(|()| {
+        // Refused again, it goes back where it was: held, not lost.
+        to_trash(&staged).inspect_err(|_| {
+            let _ = fs::rename(&staged, path);
+        })
+    });
+    let _ = fs::remove_dir(&stage);
+    if let Some(parent) = stage.parent() {
+        let _ = fs::remove_dir(parent);
+    }
+    done
 }
 
 /// The note a wikilink names, as Obsidian resolves one: `[[Name]]`,
@@ -801,7 +835,21 @@ fn encoded(part: &str) -> String {
 }
 
 /// The watcher `watch` hands back; it watches for as long as it is kept.
+#[cfg(not(target_os = "ios"))]
 pub type Watcher = notify::RecommendedWatcher;
+/// On an iPhone and an iPad, Onyx's own (`watch.rs`).
+#[cfg(target_os = "ios")]
+pub type Watcher = crate::watch::Watcher;
+
+/// Every folder watched looked at again, for a change the watcher cannot
+/// hear: a note another app wrote in place while Onyx was not in front
+/// (`watch.rs`). Nothing where the system's watcher hears every write.
+pub fn look_again(watcher: &Watcher) {
+    #[cfg(target_os = "ios")]
+    watcher.look();
+    #[cfg(not(target_os = "ios"))]
+    let _ = watcher;
+}
 
 /// The vault watched: `on_change` is called, on the watcher's own
 /// thread, with the paths that changed. The watcher is handed back and
@@ -809,10 +857,17 @@ pub type Watcher = notify::RecommendedWatcher;
 /// A change that changes no file's words and no folder's entries: a read,
 /// or a file's times, rights or extended attributes, which iCloud and
 /// Spotlight touch all day. A change of the words is a change of data too.
+#[cfg(not(target_os = "ios"))]
 fn quiet(kind: &notify::EventKind) -> bool {
     matches!(kind, notify::EventKind::Access(_) | notify::EventKind::Modify(notify::event::ModifyKind::Metadata(_)))
 }
 
+#[cfg(target_os = "ios")]
+pub fn watch(root: &Path, on_change: impl Fn(Vec<PathBuf>) + Send + 'static) -> Result<Watcher, String> {
+    crate::watch::watch(root, true, on_change)
+}
+
+#[cfg(not(target_os = "ios"))]
 pub fn watch(root: &Path, on_change: impl Fn(Vec<PathBuf>) + Send + 'static) -> Result<Watcher, String> {
     use notify::Watcher as _;
     let mut watcher = notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {
@@ -833,6 +888,12 @@ pub fn watch(root: &Path, on_change: impl Fn(Vec<PathBuf>) + Send + 'static) -> 
 /// as big as the home folder. A note is written by a rename (`write`),
 /// which the system reports as a change of the folder, so the note's own
 /// file is not enough to watch.
+#[cfg(target_os = "ios")]
+pub fn watch_folder(dir: &Path, on_change: impl Fn(Vec<PathBuf>) + Send + 'static) -> Result<Watcher, String> {
+    crate::watch::watch(dir, false, on_change)
+}
+
+#[cfg(not(target_os = "ios"))]
 pub fn watch_folder(dir: &Path, on_change: impl Fn(Vec<PathBuf>) + Send + 'static) -> Result<Watcher, String> {
     use notify::Watcher as _;
     let mut watcher = notify::recommended_watcher(move |res: Result<notify::Event, notify::Error>| {

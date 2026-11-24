@@ -289,6 +289,12 @@ pub trait ManagedTooltipExt:
             let trigger_bounds_cell = trigger_bounds_cell.clone();
             let build_tooltip = build_tooltip.clone();
             move |hovered, window, cx| {
+                // A finger has no pointer to hover with: after a tap gpui
+                // keeps the pointer where the finger was, and what is under
+                // it would show its tooltip and keep it. (Studio addition.)
+                if *hovered && window.last_input_was_touch() {
+                    return;
+                }
                 if let Some(overlay) = Root::tooltip_overlay(window, cx) {
                     if *hovered {
                         let bounds = trigger_bounds_cell.get();

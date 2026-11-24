@@ -30,6 +30,18 @@ fn main() {
         },
         Some("pdf") => pdf_of(&args[1..]),
         Some(kind @ ("docx" | "html")) => document_of(kind, &args[1..]),
+        // A file or a folder put in the system's trash, as a note deleted is.
+        Some("trash") => match args.get(1).map(std::path::Path::new).map(vault::trash) {
+            Some(Ok(())) => 0,
+            Some(Err(e)) => {
+                eprintln!("onyx-core: {e}");
+                1
+            }
+            None => {
+                eprintln!("usage: onyx-core trash <path>");
+                2
+            }
+        },
         Some("vault") => {
             // The tree of a vault, as the window shows it, or a note made in it.
             let Some(root) = args.get(1).map(std::path::PathBuf::from) else {
@@ -77,7 +89,7 @@ fn main() {
             }
         }
         _ => {
-            eprintln!("usage: onyx-core paths | config | update | vault <folder> [new <name>] | pdf <note> <out> <fonts> | docx <note> <out> | html <note> <out> | --try-update <version> <bundle>");
+            eprintln!("usage: onyx-core paths | config | update | vault <folder> [new <name>] | trash <path> | pdf <note> <out> <fonts> | docx <note> <out> | html <note> <out> | --try-update <version> <bundle>");
             2
         }
     };

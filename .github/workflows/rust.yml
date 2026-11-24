@@ -59,6 +59,14 @@ jobs:
       - name: Build the app
         run: cargo build -p onyx-app -p onyx-core --locked
 
+      # An iPhone's and an iPad's build, type-checked from the Mac: every
+      # gate for them, with no simulator and no signing.
+      - name: Type check for iPhone and iPad
+        if: runner.os == 'macOS'
+        run: |
+          rustup target add aarch64-apple-ios
+          cargo check -p onyx-app -p onyx-core --target aarch64-apple-ios --locked
+
       - name: The CLI runs
         run: cargo run -q -p onyx-core --locked -- paths
         env:

@@ -16,7 +16,7 @@ use gpui_component::ActiveTheme as _;
 
 use onyx_core::vault;
 
-use super::{Shell, TREE_ROW_H};
+use super::{tree_row_h, Shell};
 use crate::file_undo::{self, Kind};
 use crate::i18n::{t, tf};
 use crate::menu::Entry;
@@ -32,24 +32,24 @@ pub const TREE_CONTEXT: &str = "SideTree";
 /// keyboard on the window with the file chosen, and they act on it
 /// there as in the tree (`Shell::files_keys`). A place with words binds
 /// its own under them, and takes them.
-pub fn key_bindings() -> Vec<KeyBinding> {
+pub fn key_bindings(cx: &App) -> Vec<KeyBinding> {
     let c = Some(TREE_CONTEXT);
     let w = Some(super::KEY_CONTEXT);
     vec![
-        KeyBinding::new("secondary-backspace", TreeTrash, w),
-        KeyBinding::new("secondary-z", gpui_component::input::Undo, w),
-        KeyBinding::new("secondary-shift-z", gpui_component::input::Redo, w),
-        KeyBinding::new("up", TreeUp, c),
-        KeyBinding::new("down", TreeDown, c),
-        KeyBinding::new("shift-up", TreeExtendUp, c),
-        KeyBinding::new("shift-down", TreeExtendDown, c),
-        KeyBinding::new("left", TreeLeft, c),
-        KeyBinding::new("right", TreeRight, c),
-        KeyBinding::new("enter", TreeOpen, c),
-        KeyBinding::new("secondary-a", TreeSelectAll, c),
-        KeyBinding::new("secondary-x", TreeCut, c),
-        KeyBinding::new("secondary-v", TreePaste, c),
-        KeyBinding::new("escape", TreeLetGo, c),
+        crate::sys::key("secondary-backspace", TreeTrash, w, cx),
+        crate::sys::key("secondary-z", gpui_component::input::Undo, w, cx),
+        crate::sys::key("secondary-shift-z", gpui_component::input::Redo, w, cx),
+        crate::sys::key("up", TreeUp, c, cx),
+        crate::sys::key("down", TreeDown, c, cx),
+        crate::sys::key("shift-up", TreeExtendUp, c, cx),
+        crate::sys::key("shift-down", TreeExtendDown, c, cx),
+        crate::sys::key("left", TreeLeft, c, cx),
+        crate::sys::key("right", TreeRight, c, cx),
+        crate::sys::key("enter", TreeOpen, c, cx),
+        crate::sys::key("secondary-a", TreeSelectAll, c, cx),
+        crate::sys::key("secondary-x", TreeCut, c, cx),
+        crate::sys::key("secondary-v", TreePaste, c, cx),
+        crate::sys::key("escape", TreeLetGo, c, cx),
     ]
 }
 
@@ -136,7 +136,7 @@ impl Shell {
                 self.choice.marked = rows[from.min(to)..=from.max(to)].iter().map(|(p, _)| p.clone()).collect();
             }
             self.choice.cursor = Some(path);
-        } else if modifiers.secondary() {
+        } else if modifiers.secondary(cx) {
             match self.choice.marked.iter().position(|p| *p == path) {
                 Some(ix) => {
                     self.choice.marked.remove(ix);
@@ -181,7 +181,7 @@ impl Shell {
     /// A press in the room around the rows: the start of a rectangle, and
     /// with no ⌘ or ⇧ the rows chosen let go.
     pub(crate) fn band_start(&mut self, y: f32, modifiers: Modifiers, window: &mut Window, cx: &mut Context<Self>) {
-        if !modifiers.secondary() && !modifiers.shift {
+        if !modifiers.secondary(cx) && !modifiers.shift {
             self.choice.marked.clear();
         }
         self.choice.band = Some(Band { from: y, to: y, moved: false });
@@ -201,7 +201,7 @@ impl Shell {
         }
         let (top, bottom) = (band.from.min(band.to).max(0.), band.from.max(band.to).max(0.));
         let rows = self.visible_rows();
-        let (first, last) = ((top / TREE_ROW_H).floor() as usize, (bottom / TREE_ROW_H).floor() as usize);
+        let (first, last) = ((top / tree_row_h()).floor() as usize, (bottom / tree_row_h()).floor() as usize);
         self.choice.marked = rows.iter().skip(first).take(last.saturating_sub(first) + 1).map(|(p, _)| p.clone()).collect();
         self.choice.anchor = self.choice.marked.first().cloned();
         self.choice.cursor = self.choice.marked.last().cloned();
@@ -263,7 +263,7 @@ impl Shell {
             return;
         }
         let top = -f32::from(self.side_scroll.offset().y);
-        let (y, h) = (ix as f32 * TREE_ROW_H + super::LIST_TOP, TREE_ROW_H);
+        let (y, h) = (ix as f32 * tree_row_h() + super::LIST_TOP, tree_row_h());
         let to = if y < top { y } else if y + h > top + view - 12. { y + h - view + 12. } else { return };
         self.side_scroll.set_offset(point(px(0.), px(-to.max(0.))));
     }

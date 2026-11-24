@@ -3,3 +3,8 @@
 # would not start.
 [target.'cfg(all(windows, target_env = "msvc"))']
 rustflags = ["-C", "target-feature=+crt-static"]
+
+# The oldest iOS and iPadOS Onyx runs on, for the compiler and for every C
+# dependency's build; `ios/Info.plist` says the same (MinimumOSVersion).
+[env]
+IPHONEOS_DEPLOYMENT_TARGET = "17.0"

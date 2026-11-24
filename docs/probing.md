@@ -34,12 +34,40 @@ ONYX_HOME=<scratch>/home ONYX_VAULT=<scratch>/vault ONYX_NOTE=<scratch>/vault/We
 
 Keys can be sent to a probe copy with `osascript -e 'tell application "System Events" to keystroke "ab"'` while it is in front, which is how the gap between a key and its frame was measured. Whether the source shows is remembered in the copy's home, and `source` turns it, so a probe that wants it says how it stands first or starts from a home without it. The terminal never shows at a launch. A process may take a picture of its own windows without Screen Recording access, which a terminal running a probe usually lacks.
 
+## An iPhone and an iPad
+
+A simulator stands in for the device, with no Simulator window open: it is booted and driven from the command line, and nothing reaches the person's screen.
+
+```
+cargo build -p onyx-app --target aarch64-apple-ios-sim
+ONYX_HOME=<scratch>/home ONYX_VAULT=<scratch>/vault ONYX_GO='tap=70,276;wait=500;tap=200,300' scripts/ios-app.sh --log <file.log> "iPhone 17 Pro"
+xcrun simctl io "iPhone 17 Pro" screenshot <file.png>
+```
+
+`scripts/ios-app.sh` makes the bundle, installs it in the simulator named (else the one booted, else an iPad) and starts it with every `ONYX_` variable handed on. A variable with a space in it is not handed on, so a step's words have none. A simulator's app reads the Mac's own files, so the scratch home and vault are the Mac's. `ONYX_SHOT` takes no picture there: `simctl io … screenshot` does, from outside, whenever it is asked, so wait for the steps first. `--log` keeps what the app prints (`where`, `files`, `uikeys`), through the simulator's console; `where` says how many files are open too (`open 1`), which on an iPhone is never more than one.
+
+The steps of `ONYX_GO` for a finger and a keyboard, each in its turn, in the window's points from its top left (the status bar is part of the window, so a row's place is its place in the picture divided by the screen's scale):
+
+| Step | What it does |
+|---|---|
+| `tap=<x>,<y>[,<taps>]` | a touch begun and ended there; `2` a double tap |
+| `pan=<x>,<y>,<to x>,<to y>` | a touch begun at the first place, moved to the second in ten steps and lifted: what is under it scrolls, and goes on by its own momentum |
+| `longtap=<x>,<y>` | a touch held 700 ms, then lifted: the right button there, so a row's or a note's menu |
+| `back=<how far>` | the swipe from the screen's edge, 0 to 1, let go there: past a half the system says it went back |
+| `uikeys=<words>` | typed as the keyboard types them: handed to the view that has the keyboard by UIKit's own `insertText:`, from the run loop, and `uikeys true` on stderr when a view took them |
+| `uidelete` | the keyboard's delete key once, the same way |
+
+`tap`, `pan`, `longtap` and `back` go into gpui as the screen's touches do and through its own reading of them, so they check everything from there on, not UIKit's hit test. `uikeys` and `uidelete` go the whole way a typed key does (UIKit, gpui's backend, the input handler), which `type=` skips; they need the keyboard out, which it is once a tap has put the caret in words or in a field. A mouse's steps (`press=`, `drag=`) work there too and say nothing about a finger.
+
+Look at an iPhone and an iPad both, each in its states: no vault, a vault with no note, a note, the keyboard out, the settings' sections, a menu. The core's CLI runs in a simulator as a plain process, for what the system answers there: `xcrun simctl spawn <simulator> target/aarch64-apple-ios-sim/debug/onyx-core trash <path>`.
+
 ## The core from a terminal
 
 ```
 cargo run -p onyx-core -- paths | config | update
 cargo run -p onyx-core -- vault <folder>
 cargo run -p onyx-core -- vault <folder> new <name>
+cargo run -p onyx-core -- trash <path>
 cargo run -p onyx-core -- --try-update <version> <copy of Onyx.app>
 ```
 

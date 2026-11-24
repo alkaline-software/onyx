@@ -1,0 +1,70 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- The bundle's whole Info.plist on an iPhone and an iPad: no packager
+       writes one there. scripts/ios-app.sh sets the identifier, the
+       version and the platform, and adds what actool says of the icon. -->
+  <key>CFBundleName</key><string>Onyx</string>
+  <key>CFBundleDisplayName</key><string>Onyx</string>
+  <key>CFBundleExecutable</key><string>Onyx</string>
+  <key>CFBundleIdentifier</key><string>com.alkalinesoftware.onyx</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>0.0.0</string>
+  <key>CFBundleVersion</key><string>0</string>
+  <key>CFBundleDevelopmentRegion</key><string>en</string>
+  <key>CFBundleLocalizations</key><array><string>en</string><string>zh-Hans</string><string>zh-Hant</string><string>ja</string><string>ko</string><string>fr</string><string>de</string><string>es</string></array>
+  <key>LSRequiresIPhoneOS</key><true/>
+  <key>MinimumOSVersion</key><string>17.0</string>
+  <key>UIDeviceFamily</key><array><integer>1</integer><integer>2</integer></array>
+  <key>ITSAppUsesNonExemptEncryption</key><false/>
+  <!-- gpui's scene: one window, the size the system gives it. -->
+  <key>UIApplicationSceneManifest</key>
+  <dict>
+    <key>UIApplicationSupportsMultipleScenes</key><false/>
+    <key>UISceneConfigurations</key>
+    <dict>
+      <key>UIWindowSceneSessionRoleApplication</key>
+      <array>
+        <dict>
+          <key>UISceneConfigurationName</key><string>Default Configuration</string>
+          <key>UISceneDelegateClassName</key><string>GPUIIosSceneDelegate</string>
+        </dict>
+      </array>
+    </dict>
+  </dict>
+  <!-- The launch screen is the frame's ground, light or dark, with nothing on it. -->
+  <key>UILaunchScreen</key>
+  <dict>
+    <key>UIColorName</key><string>LaunchGround</string>
+  </dict>
+  <key>UISupportedInterfaceOrientations</key>
+  <array>
+    <string>UIInterfaceOrientationPortrait</string>
+    <string>UIInterfaceOrientationLandscapeLeft</string>
+    <string>UIInterfaceOrientationLandscapeRight</string>
+  </array>
+  <key>UISupportedInterfaceOrientations~ipad</key>
+  <array>
+    <string>UIInterfaceOrientationPortrait</string>
+    <string>UIInterfaceOrientationPortraitUpsideDown</string>
+    <string>UIInterfaceOrientationLandscapeLeft</string>
+    <string>UIInterfaceOrientationLandscapeRight</string>
+  </array>
+  <!-- The vaults kept on the device show in Files as On My iPhone, Onyx,
+       and a note there is opened where it is. -->
+  <key>UIFileSharingEnabled</key><true/>
+  <key>LSSupportsOpeningDocumentsInPlace</key><true/>
+  <!-- Onyx's iCloud container, the Mac's own: a vault made on either is on both. -->
+  <key>NSUbiquitousContainers</key>
+  <dict>
+    <key>iCloud.com.alkalinesoftware.onyx</key>
+    <dict>
+      <key>NSUbiquitousContainerIsDocumentScopePublic</key><true/>
+      <key>NSUbiquitousContainerName</key><string>Onyx</string>
+      <key>NSUbiquitousContainerSupportedFolderLevels</key><string>Any</string>
+    </dict>
+  </dict>
+</dict>
+</plist>

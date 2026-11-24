@@ -365,6 +365,14 @@ upstream revision finds them.
 
 73. `crates/base/src/input/base/state.rs` (`scroll_room`): how far an editor is scrolled down and how far it can go, read from outside it. Onyx fades the source pane's top and bottom edges as its page's, by how much is left to scroll past each.
 
+74. Built against gpui at zed `f8cfc7ed` (2026-11-10), which the pin moved to for its iPhone and iPad backend; upstream at this revision builds against an older one. Not marked line by line, since each is the same few changes: an element's own `impl IntoElement` taken out wherever gpui now gives one to every `Element` (`focus_trap.rs`, `input/base/element.rs`, `positioner.rs`, `resizable/`, `scrollbar.rs`, `text_selection.rs`, `virtual_list.rs`, `accordion.rs`, `dock/dock.rs`, `input/popovers/hover_popover.rs`, `menu/context_menu.rs`, `scroll/scrollable_mask.rs`, `text/inline.rs`, `text/inline_flow.rs`, `text/text_view.rs`, and the `IntoPlot` derive in `crates/macros`); `ScrollWheelEvent` and `on_scroll_wheel` by their new names, `ScrollEvent` and `on_scroll`; `wrap_line`'s new `IndentAdjustment`, `NoIndent`; `Modifiers::secondary(cx)`; and `register_inspector_element`'s factory (`crates/ui/src/inspector.rs`). A newer upstream has these already: when one is taken, this item goes.
+
+75. `crates/base/src/combobox.rs`, `select.rs`, `input/base/state.rs`, `crates/ui/src/list/list.rs`: the binding upstream writes as `secondary-enter` is written as `cmd-enter` on a Mac, an iPhone and an iPad and `ctrl-enter` elsewhere. gpui's `KeyBinding::new` reads no `secondary-` now and panics on one, at launch.
+
+76. `crates/base/src/input/base/state.rs` (`text_length_utf16`): a field says how long its text is. gpui's iPhone and iPad backend asks it before it brings the keyboard out, and a field that answered nothing showed a caret and no keyboard.
+
+77. `crates/ui/src/tooltip.rs` (`managed_tooltip_with_placement`): no tooltip comes after a touch (`Window::last_input_was_touch`). A finger has no pointer to hover with, and gpui leaves the pointer where a tap ended, so the button tapped showed its tooltip and kept it until the next touch. A pointer's hover shows one as before.
+
 ## Updating
 
 Check out the new upstream revision, copy the four crates over these, re-apply

@@ -297,7 +297,7 @@ impl TextWrapper {
             new_text,
             &mut |line_str, wrap_width| {
                 line_wrapper
-                    .wrap_line(&[LineFragment::text(line_str)], wrap_width)
+                    .wrap_line(&[LineFragment::text(line_str)], wrap_width, gpui::IndentAdjustment::NoIndent)
                     .collect()
             },
         );

@@ -1635,7 +1635,7 @@ impl MenuNote {
                     .items_center()
                     .gap(px(10.))
                     .child(Shell::home_figure(&self.home_fig, &theme, cx.entity_id()))
-                    .child(div().text_size(px(26.)).font_family(self.look.text_family.clone()).child(crate::shell::greeting(&self.user_name))),
+                    .child(div().text_size(px(26.)).font(self.look.words()).child(crate::shell::greeting(&self.user_name))),
             )
             .child(
                 // As wide as the widest of them, in any language.
@@ -1741,7 +1741,7 @@ impl MenuNote {
                         .pt(px(20.))
                         .pb(px(32.))
                         .gap(px(22.))
-                        .child(v_flex().items_center().gap(px(10.)).child(Shell::shelf_figure(&self.home_fig, cx.entity_id())).child(div().text_size(px(26.)).font_family(self.look.text_family.clone()).child(words)))
+                        .child(v_flex().items_center().gap(px(10.)).child(Shell::shelf_figure(&self.home_fig, cx.entity_id())).child(div().text_size(px(26.)).font(self.look.words()).child(words)))
                         .child(tile_rows(2).children(tiles)),
                 ),
             )
@@ -2415,7 +2415,7 @@ impl Render for MenuNote {
                 canvas(
                     |_, _, _| (),
                     move |_, _, window, _| {
-                        window.on_mouse_event(move |e: &ScrollWheelEvent, phase, window, cx| {
+                        window.on_mouse_event(move |e: &ScrollEvent, phase, window, cx| {
                             if phase == DispatchPhase::Capture {
                                 match router.update(cx, |s, _| s.scrollers.route(e, false)) {
                                     Ok(crate::scroll::Route::Stop) => {
@@ -2709,7 +2709,7 @@ pub(crate) fn probe(step: &str, cx: &mut App) {
         // A key pressed in the note's window, as the main window's `key=`.
         r if r.starts_with(":key=") => {
             let Some(handle) = note.read(cx).window else { return };
-            if let Ok(keystroke) = Keystroke::parse(&r[":key=".len()..]) {
+            if let Ok(keystroke) = Keystroke::parse_with_os(&r[":key=".len()..], cx.platform_info().os) {
                 let _ = cx.update_window(handle.into(), |_, window, cx| {
                     window.dispatch_event(PlatformInput::KeyDown(KeyDownEvent { keystroke, is_held: false, prefer_character_input: false }), cx);
                 });

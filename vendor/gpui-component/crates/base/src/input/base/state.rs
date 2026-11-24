@@ -7,7 +7,7 @@ use gpui::{
     Action, App, AppContext, Bounds, ClipboardItem, Context, Edges, Entity, EntityInputHandler,
     EventEmitter, FocusHandle, Focusable, InteractiveElement as _, IntoElement, KeyBinding,
     KeyDownEvent, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement as _,
-    Pixels, Point, Render, ScrollHandle, ScrollWheelEvent, SharedString, Styled as _, Subscription,
+    Pixels, Point, Render, ScrollHandle, ScrollEvent, SharedString, Styled as _, Subscription,
     UTF16Selection, Window, actions, div, point, prelude::FluentBuilder as _, px,
 };
 use ropey::{Rope, RopeSlice};
@@ -188,7 +188,8 @@ pub(crate) fn init(cx: &mut App) {
             Some(CONTEXT),
         ),
         KeyBinding::new(
-            "secondary-enter",
+            // (Studio addition.) gpui's `KeyBinding::new` reads no `secondary-` now.
+            if cfg!(any(target_os = "macos", target_os = "ios")) { "cmd-enter" } else { "ctrl-enter" },
             Enter {
                 secondary: true,
                 shift: false,
@@ -985,7 +986,7 @@ impl<M: InputModeKind> InputBaseState<M> {
     /// over the editor and carried off it goes on moving the editor and
     /// nothing else, as the app's scroll router hands it here. (Studio
     /// addition.)
-    pub fn scroll_wheel(&mut self, event: &ScrollWheelEvent, window: &mut Window, cx: &mut Context<Self>) {
+    pub fn scroll_wheel(&mut self, event: &ScrollEvent, window: &mut Window, cx: &mut Context<Self>) {
         self.on_scroll_wheel(event, window, cx);
     }
 
@@ -2143,7 +2144,7 @@ impl<M: InputModeKind> InputBaseState<M> {
 
     pub(super) fn on_scroll_wheel(
         &mut self,
-        event: &ScrollWheelEvent,
+        event: &ScrollEvent,
         window: &mut Window,
         cx: &mut Context<Self>,
     ) {
@@ -3498,6 +3499,13 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
 
         None
     }
+
+    /// (Studio addition.) The text's length, which gpui's iOS backend asks
+    /// before it brings the keyboard out for a field: a handler that says
+    /// none has no document to type in.
+    fn text_length_utf16(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> Option<usize> {
+        Some(self.offset_to_utf16(self.text.len()))
+    }
 }
 
 impl<M: InputModeKind> Focusable for InputBaseState<M> {
@@ -3607,7 +3615,7 @@ impl<M: InputModeKind> Render for InputBaseState<M> {
                 window.listener_for(&entity, InputBaseState::on_mouse_up),
             )
             .on_mouse_move(window.listener_for(&entity, InputBaseState::on_mouse_move))
-            .on_scroll_wheel(window.listener_for(&entity, InputBaseState::on_scroll_wheel))
+            .on_scroll(window.listener_for(&entity, InputBaseState::on_scroll_wheel))
             .when(!self.disabled, |this| this.cursor_text())
             .flex_1()
             .when(self.is_multi_line(), |this| this.h_full())

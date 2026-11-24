@@ -81,13 +81,27 @@ const PILL_LEAD: f32 = PILL_PAD + PILL_HANDLE + TAB_GAP;
 /// of its own, and the gap before it.
 pub const PLUS_W: f32 = TAB_H + 2. * PILL_PAD;
 const PLUS_ROOM: f32 = PLUS_W + PILL_GAP;
+/// A measure of the row as it is drawn: itself, and larger in a compact
+/// window, where the tabs are a hand's size (`widgets::hand_exact`, not
+/// rounded, so a sum of these is the sum drawn and the plate stands
+/// exactly under its tab).
+fn sz(x: f32) -> f32 {
+    crate::widgets::hand_exact(x)
+}
+
+/// The plus's room after the tabs. A compact window has no plus there:
+/// New Note is in the bar at the page's foot, under the thumb.
+fn plus_room() -> f32 {
+    if crate::widgets::in_hand() { 0. } else { sz(PLUS_ROOM) }
+}
+
 /// How long ⌘ (Ctrl elsewhere) is held, alone, before every tab shows
 /// the number that goes to it.
 const HINT_HOLD: Duration = Duration::from_millis(500);
 
 /// What a pill is wide besides its tabs.
 fn pill_chrome(tabs: usize) -> f32 {
-    PILL_LEAD + PILL_PAD + TAB_GAP * (tabs.max(1) as f32 - 1.)
+    sz(PILL_LEAD) + sz(PILL_PAD) + sz(TAB_GAP) * (tabs.max(1) as f32 - 1.)
 }
 
 /// A length of the row on its way from one value to another: a tab's
@@ -168,7 +182,7 @@ struct Ghost(SharedString);
 impl Render for Ghost {
     fn render(&mut self, _: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = cx.theme();
-        div().h(px(30.)).max_w(px(TAB_MAX)).px(px(10.)).flex().items_center().rounded(px(8.)).bg(theme.muted).border_1().border_color(theme.border).text_size(px(TAB_TEXT)).text_color(theme.foreground).truncate().opacity(0.9).child(self.0.clone())
+        div().h(px(30.)).max_w(px(sz(TAB_MAX))).px(px(10.)).flex().items_center().rounded(px(8.)).bg(theme.muted).border_1().border_color(theme.border).text_size(px(sz(TAB_TEXT))).text_color(theme.foreground).truncate().opacity(0.9).child(self.0.clone())
     }
 }
 
@@ -253,8 +267,8 @@ impl Tabs {
         }
         let font = Font { family: cx.theme().font_family.clone(), weight: FontWeight::MEDIUM, ..Default::default() };
         let run = TextRun { len: title.len(), font, color: gpui::black(), background_color: None, underline: None, strikethrough: None };
-        let text = f32::from(window.text_system().shape_line(SharedString::from(title.to_string()), px(TAB_TEXT), &[run], None).width());
-        let w = (text + TAB_ROOM).ceil().clamp(TAB_LEAST, TAB_MAX);
+        let text = f32::from(window.text_system().shape_line(SharedString::from(title.to_string()), px(sz(TAB_TEXT)), &[run], None).width());
+        let w = (text + sz(TAB_ROOM)).ceil().clamp(sz(TAB_LEAST), sz(TAB_MAX));
         self.fit.insert(title.to_string(), w);
         w
     }
@@ -269,13 +283,13 @@ impl Tabs {
         let mut sorted = wanted.to_vec();
         sorted.sort_by(|a, b| a.total_cmp(b));
         let (mut left, mut count) = (room, sorted.len());
-        let mut cap = TAB_MIN;
+        let mut cap = sz(TAB_MIN);
         for w in sorted {
             if w * count as f32 <= left {
                 left -= w;
                 count -= 1;
             } else {
-                cap = (left / count as f32).max(TAB_MIN);
+                cap = (left / count as f32).max(sz(TAB_MIN));
                 break;
             }
         }
@@ -304,7 +318,7 @@ impl Tabs {
         }
         // The key let go while the window was not looking (⌘Tab to
         // another app sends no release here) takes the numbers with it.
-        if self.hint_press.is_some() && !(window.is_window_active() && window.modifiers().secondary()) {
+        if self.hint_press.is_some() && !(window.is_window_active() && window.modifiers().secondary(cx)) {
             self.hint_press = None;
             self.hints = false;
         }
@@ -338,10 +352,10 @@ impl Tabs {
         }
         // The row less the plus square's room, which is always there where
         // there is a plus.
-        let row = (row_w - if self.start { 0. } else { PLUS_ROOM }).max(0.);
+        let row = (row_w - if self.start { 0. } else { plus_room() }).max(0.);
         let n = keys.len();
-        let chrome: f32 = self.groups.iter().map(|(_, keys)| pill_chrome(keys.len())).sum::<f32>() + PILL_GAP * (self.groups.len() as f32 - 1.).max(0.);
-        let wanted: Vec<f32> = keys.iter().map(|k| items.iter().find(|i| i.path == *k).map(|i| self.fit(&i.title, window, cx)).unwrap_or(TAB_MIN)).collect();
+        let chrome: f32 = self.groups.iter().map(|(_, keys)| pill_chrome(keys.len())).sum::<f32>() + sz(PILL_GAP) * (self.groups.len() as f32 - 1.).max(0.);
+        let wanted: Vec<f32> = keys.iter().map(|k| items.iter().find(|i| i.path == *k).map(|i| self.fit(&i.title, window, cx)).unwrap_or(sz(TAB_MIN))).collect();
         let targets = if row <= 0. { wanted.clone() } else { Self::share(&wanted, row - chrome) };
         let lead = if self.start { 0. } else { ((row - chrome - targets.iter().sum::<f32>()) / 2.).max(0.) };
         match &mut self.lead {
@@ -360,19 +374,19 @@ impl Tabs {
             let mut span = None;
             let mut at = 0;
             for (_, keys) in &self.groups {
-                let mut tab_x = x + PILL_LEAD;
+                let mut tab_x = x + sz(PILL_LEAD);
                 for (i, k) in keys.iter().enumerate() {
                     if Some(k) == self.plate.to.as_ref() {
                         // The tab with its pill's mark where both fit, else
                         // the tab alone: a pill wider than the row, brought
                         // in from its mark, left a tab at its end outside.
-                        let right = tab_x + targets[at + i] + PILL_PAD;
-                        let left = if right - x <= row { x } else { tab_x - PILL_PAD };
+                        let right = tab_x + targets[at + i] + sz(PILL_PAD);
+                        let left = if right - x <= row { x } else { tab_x - sz(PILL_PAD) };
                         span = Some((left, right));
                     }
-                    tab_x += targets[at + i] + TAB_GAP;
+                    tab_x += targets[at + i] + sz(TAB_GAP);
                 }
-                x += pill_chrome(keys.len()) + targets[at..at + keys.len()].iter().sum::<f32>() + PILL_GAP;
+                x += pill_chrome(keys.len()) + targets[at..at + keys.len()].iter().sum::<f32>() + sz(PILL_GAP);
                 at += keys.len();
             }
             if let Some((left, right)) = span {
@@ -382,7 +396,7 @@ impl Tabs {
                 let (left, right) = ((left - REVEAL_ROOM).max(0.), right + REVEAL_ROOM);
                 // Never past the row's end, which room past a last tab would
                 // have left empty.
-                let end = (x - PILL_GAP - row).max(0.);
+                let end = (x - sz(PILL_GAP) - row).max(0.);
                 let to = (if left < seen { left } else if right > seen + row { right - row } else { seen }).clamp(0., end);
                 if (to - seen).abs() > 0.5 {
                     self.glide.get_or_insert(Width::at_rest(seen, now)).head(to, now);
@@ -414,7 +428,7 @@ impl Tabs {
 
     /// A tab's settled width.
     fn width_of(&self, key: &Path) -> f32 {
-        self.widths.get(key).map(|w| w.to).unwrap_or(TAB_MIN)
+        self.widths.get(key).map(|w| w.to).unwrap_or(sz(TAB_MIN))
     }
 
     /// Where each pill stands in the row once every width has settled:
@@ -428,7 +442,7 @@ impl Tabs {
             .into_iter()
             .map(|w| {
                 let at = x;
-                x += w + PILL_GAP;
+                x += w + sz(PILL_GAP);
                 (at, w)
             })
             .collect()
@@ -436,11 +450,11 @@ impl Tabs {
 
     /// Where each tab of a pill starts, from the pill's left edge.
     fn tab_lefts(&self, keys: &[PathBuf]) -> Vec<f32> {
-        let mut x = PILL_LEAD;
+        let mut x = sz(PILL_LEAD);
         keys.iter()
             .map(|k| {
                 let at = x;
-                x += self.width_of(k) + TAB_GAP;
+                x += self.width_of(k) + sz(TAB_GAP);
                 at
             })
             .collect()
@@ -521,7 +535,7 @@ impl Tabs {
     /// The wait is a timer from the press, answered only if that press is
     /// still the one held.
     pub fn modifiers_changed<H: TabHost>(&mut self, m: &Modifiers, cx: &mut Context<H>) {
-        let alone = m.secondary() && m.number_of_modifiers() == 1;
+        let alone = m.secondary(cx) && m.number_of_modifiers() == 1;
         if alone == self.hint_press.is_some() {
             return;
         }
@@ -556,7 +570,7 @@ impl Tabs {
         let dark = theme.mode.is_dark();
         let track_bg = if dark { theme.tab_bar_segmented } else { theme.muted };
         let plate_bg = if dark { theme.secondary_active } else { theme.popover };
-        let settled = Width::at_rest(TAB_MIN, Instant::now());
+        let settled = Width::at_rest(sz(TAB_MIN), Instant::now());
         let hints = self.hints;
         // The tabs scroll as they need; the plus stands beside them, never
         // scrolled away (`render`'s end).
@@ -567,7 +581,7 @@ impl Tabs {
             .h_full()
             .pl(px(self.lead.map_or(0., |l| l.now())))
             .items_center()
-            .gap(px(PILL_GAP))
+            .gap(px(sz(PILL_GAP)))
             .overflow_x_scroll()
             .track_scroll(&self.scroll)
             .on_drag_move::<DragTab>(cx.listener(|this, e: &DragMoveEvent<DragTab>, window, cx| {
@@ -600,11 +614,11 @@ impl Tabs {
                 let (o_a, o_b) = (if a.is_some() || !live { 1. } else { 0. }, if b.is_some() { 1. } else { 0. });
                 let widths = widths.clone();
                 let shifts = shifts.clone();
-                div().absolute().top(px(PILL_PAD)).h(px(TAB_H)).rounded(px(7.)).bg(plate_bg).shadow_sm().with_animation(
+                div().absolute().top(px(sz(PILL_PAD))).h(px(sz(TAB_H))).rounded(px(7.)).bg(plate_bg).shadow_sm().with_animation(
                     ElementId::Name(format!("tab-plate-{}-{}", folder.display(), self.plate.serial).into()),
                     Animation::new(TAB_ANIM).with_easing(ease_out_quint()),
                     move |d, t| {
-                        let place = |i: usize| (PILL_LEAD + widths[..i].iter().map(|w| w.now() + TAB_GAP).sum::<f32>() + shifts[i].map(|s| s.now()).unwrap_or(0.), widths[i].now());
+                        let place = |i: usize| (sz(PILL_LEAD) + widths[..i].iter().map(|w| w.now() + sz(TAB_GAP)).sum::<f32>() + shifts[i].map(|s| s.now()).unwrap_or(0.), widths[i].now());
                         let ((xa, wa), (xb, wb)) = (place(ia), place(ib));
                         d.left(px(xa + (xb - xa) * t)).w(px(wa + (wb - wa) * t)).opacity(o_a + (o_b - o_a) * t)
                     },
@@ -622,8 +636,8 @@ impl Tabs {
             let ghost = name.clone();
             let handle = div()
                 .id(ElementId::Name(format!("pill-{}", folder.display()).into()))
-                .w(px(PILL_HANDLE))
-                .h(px(TAB_H))
+                .w(px(sz(PILL_HANDLE)))
+                .h(px(sz(TAB_H)))
                 .flex_shrink_0()
                 .flex()
                 .items_center()
@@ -646,9 +660,9 @@ impl Tabs {
             let mut pill = h_flex()
                 .relative()
                 .flex_shrink_0()
-                .p(px(PILL_PAD))
-                .gap(px(TAB_GAP))
-                .rounded(px(9.))
+                .p(px(sz(PILL_PAD)))
+                .gap(px(sz(TAB_GAP)))
+                .rounded(px(sz(9.)))
                 .bg(track_bg)
                 .when(self.drag_pill.as_deref() == Some(folder.as_path()), |d| d.opacity(0.45))
                 .when_some(self.pill_shift.get(folder), |d, s| d.left(px(s.now())))
@@ -667,11 +681,11 @@ impl Tabs {
                 let tab = h_flex()
                     .id(ElementId::Name(format!("tab-{}", key.display()).into()))
                     .size_full()
-                    .pl(px(10.))
-                    .pr(px(5.))
-                    .gap(px(6.))
+                    .pl(px(sz(10.)))
+                    .pr(px(sz(5.)))
+                    .gap(px(sz(6.)))
                     .items_center()
-                    .rounded(px(7.))
+                    .rounded(px(sz(7.)))
                     // Always there, so nothing moves when it shows: the
                     // outline every tab wears while the numbers are up.
                     .border_1()
@@ -693,15 +707,15 @@ impl Tabs {
                         swallow_click(window, cx);
                         this.tab_show(&open_key, window, cx)
                     }))
-                    .child(div().flex_1().min_w_0().truncate().text_size(px(TAB_TEXT)).font_weight(if active { FontWeight::MEDIUM } else { FontWeight::NORMAL }).text_color(if active { theme.foreground } else { theme.muted_foreground }).child(title))
+                    .child(div().flex_1().min_w_0().truncate().text_size(px(sz(TAB_TEXT))).font_weight(if active { FontWeight::MEDIUM } else { FontWeight::NORMAL }).text_color(if active { theme.foreground } else { theme.muted_foreground }).child(title))
                     // The close button. A note is written on its own
                     // (`Shell::note_changed`), so no dot says it is not.
                     .child(
                         div()
                             .id(ElementId::Name(format!("tab-close-{}", key.display()).into()))
-                            .size(px(18.))
+                            .size(px(sz(18.)))
                             .flex_shrink_0()
-                            .rounded(px(4.))
+                            .rounded(px(sz(4.)))
                             .flex()
                             .items_center()
                             .justify_center()
@@ -723,7 +737,7 @@ impl Tabs {
                 // two never part by a frame; the animation is only there
                 // for that reading, and its id does not change with a
                 // width, or a press on a moving tab would lose its click.
-                let slot = div().relative().h(px(TAB_H)).flex_shrink_0().child(tab).children(plate);
+                let slot = div().relative().h(px(sz(TAB_H))).flex_shrink_0().child(tab).children(plate);
                 pill = pill.child(slot.with_animation(ElementId::Name(format!("tab-w-{}", key.display()).into()), Animation::new(TAB_ANIM).with_easing(ease_out_quint()), move |d, t| {
                     let d = d.w(px(width.now())).left(px(shift.map(|s| s.now()).unwrap_or(0.)));
                     if fresh {
@@ -752,9 +766,9 @@ impl Tabs {
         let hover_bg = plate_bg.opacity(0.5);
         let plus = div()
                 .id("tab-plus")
-                .size(px(PLUS_W))
+                .size(px(sz(PLUS_W)))
                 .flex_shrink_0()
-                .p(px(PILL_PAD))
+                .p(px(sz(PILL_PAD)))
                 .rounded(px(9.))
                 .bg(track_bg)
                 .cursor_pointer()
@@ -766,7 +780,7 @@ impl Tabs {
                 }))
                 .child(
                     div()
-                        .size(px(TAB_H))
+                        .size(px(sz(TAB_H)))
                         .rounded(px(7.))
                         .flex()
                         .items_center()
@@ -787,9 +801,9 @@ impl Tabs {
             // up to what stands after, its window's own gap between.
             .when(!self.start, |d| d.mx(px(STRIP_GAP)))
             .items_center()
-            .gap(px(PILL_GAP))
+            .gap(px(sz(PILL_GAP)))
             .child(tabs)
-            .when(!self.start, |d| d.child(plus))
+            .when(!self.start && !crate::widgets::in_hand(), |d| d.child(plus))
             .into_any_element()
     }
 }
@@ -856,7 +870,7 @@ fn hint_plate(n: usize, theme: &gpui_component::Theme) -> Div {
 #[cfg(test)]
 mod tests {
     // Named, not `super::*`: gpui's glob carries a `test` macro of its own.
-    use super::{Tabs, Width, TAB_ANIM, TAB_MIN};
+    use super::{sz, Tabs, Width, TAB_ANIM, TAB_MIN};
     use std::time::Instant;
 
     /// A new target starts from where the length stands, not from where
@@ -884,6 +898,6 @@ mod tests {
         assert_eq!(cut[1], 120.);
         assert!((cut[2] - 120.).abs() < 0.01);
         let floor = Tabs::share(&[60., 200., 200.], 100.);
-        assert_eq!(floor, vec![60., TAB_MIN, TAB_MIN]);
+        assert_eq!(floor, vec![60., sz(TAB_MIN), sz(TAB_MIN)]);
     }
 }

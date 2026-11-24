@@ -19,7 +19,8 @@ pub(crate) fn init(cx: &mut App) {
         KeyBinding::new("down", SelectDown, Some(CONTEXT)),
         KeyBinding::new("enter", Confirm { secondary: false }, Some(CONTEXT)),
         KeyBinding::new(
-            "secondary-enter",
+            // (Studio addition.) gpui's `KeyBinding::new` reads no `secondary-` now.
+            if cfg!(any(target_os = "macos", target_os = "ios")) { "cmd-enter" } else { "ctrl-enter" },
             Confirm { secondary: true },
             Some(CONTEXT),
         ),

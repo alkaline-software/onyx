@@ -1,6 +1,6 @@
 use gpui::{
     AnyElement, App, Bounds, Element, ElementId, FocusHandle, Global, GlobalElementId,
-    InteractiveElement, Interactivity, IntoElement, LayoutId, ParentElement, Pixels,
+    InteractiveElement, Interactivity, LayoutId, ParentElement, Pixels,
     StatefulInteractiveElement, StyleRefinement, Styled, WeakFocusHandle, Window,
 };
 use std::collections::HashMap;
@@ -126,15 +126,6 @@ impl<E: InteractiveElement + ParentElement + Styled + Element> FocusTrapContaine
     }
 }
 
-impl<E: InteractiveElement + ParentElement + Styled + Element> IntoElement
-    for FocusTrapContainer<E>
-{
-    type Element = Self;
-
-    fn into_element(self) -> Self::Element {
-        self
-    }
-}
 impl<E: InteractiveElement + ParentElement + Styled + Element> ParentElement
     for FocusTrapContainer<E>
 {

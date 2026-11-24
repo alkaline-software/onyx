@@ -123,10 +123,36 @@ pub struct Menus {
     serial: u32,
 }
 
+/// The choices an iPhone and an iPad have no way to answer, by what
+/// answers them, in every menu: there is no file manager to show a file
+/// in, no other app to hand one to but by sharing, no container to
+/// choose, no printing panel, and Export is not made for them yet.
+const NOT_HERE: &[&str] = if cfg!(target_os = "ios") { &["reveal", "open-finder", "file-reveal", "open-app", "file-open-app", "container", "canvas-print", "export-pdf", "canvas-export"] } else { &[] };
+
+/// A menu's lines as this system has them: the choices of `NOT_HERE`
+/// left out, and no line between groups left at an end or doubled.
+fn here(entries: Vec<Entry>) -> Vec<Entry> {
+    if NOT_HERE.is_empty() {
+        return entries;
+    }
+    let mut out: Vec<Entry> = Vec::with_capacity(entries.len());
+    for entry in entries {
+        match &entry {
+            Entry::Choice { id, .. } | Entry::Danger { id, .. } if NOT_HERE.contains(&id.as_ref()) => {}
+            Entry::Rule if out.is_empty() || matches!(out.last(), Some(Entry::Rule)) => {}
+            _ => out.push(entry),
+        }
+    }
+    if matches!(out.last(), Some(Entry::Rule)) {
+        out.pop();
+    }
+    out
+}
+
 impl Menus {
     pub fn show(&mut self, what: &'static str, at: Point<Pixels>, entries: Vec<Entry>) {
         self.serial += 1;
-        self.open = Some(Menu { what, at, corner: Anchor::TopLeft, width: None, entries, serial: self.serial });
+        self.open = Some(Menu { what, at, corner: Anchor::TopLeft, width: None, entries: here(entries), serial: self.serial });
     }
 
     /// The same, the menu's bottom left at `at`, so it rises from there,
@@ -168,10 +194,13 @@ fn card<V: 'static>(m: &Menu, going: Option<Duration>, pick: std::rc::Rc<dyn Fn(
     let theme = cx.theme().clone();
     let dark = theme.mode.is_dark();
     let what = m.what;
+    // In a compact window a row is a finger's: 44 high, its words 16.
+    let in_hand = crate::widgets::in_hand();
+    let hand = crate::widgets::hand;
     let rows = m.entries.iter().map(|e| match e.clone() {
         // The dark palette's border is a shade off the card and cannot be
         // seen on it: a line of the ink, as a hover is.
-        Entry::Rule => div().h(px(9.)).flex().items_center().child(div().h(px(1.)).w_full().mx(px(6.)).bg(if theme.mode.is_dark() { theme.foreground.opacity(0.14) } else { theme.border })).into_any_element(),
+        Entry::Rule => div().h(px(hand(9.))).flex().items_center().child(div().h(px(1.)).w_full().mx(px(6.)).bg(if theme.mode.is_dark() { theme.foreground.opacity(0.14) } else { theme.border })).into_any_element(),
         Entry::Icons { label, items } => {
             let hover = if dark { theme.foreground.opacity(0.11) } else { theme.sidebar_accent };
             let lit = theme.primary.opacity(if dark { 0.24 } else { 0.14 });
@@ -181,15 +210,15 @@ fn card<V: 'static>(m: &Menu, going: Option<Duration>, pick: std::rc::Rc<dyn Fn(
                 let words = tool.label.clone();
                 div()
                     .id(ElementId::Name(format!("menu-{what}-{}", tool.id).into()))
-                    .size(px(26.))
+                    .size(px(if in_hand { 36. } else { 26. }))
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded(px(6.))
+                    .rounded(px(hand(6.)))
                     .cursor_pointer()
                     .when(tool.chosen, |d| d.bg(lit))
                     .when(!tool.chosen, |d| d.hover(|s| s.bg(hover)))
-                    .child(Icon::default().path(tool.icon).with_size(px(15.)).text_color(if tool.chosen { theme.primary } else { theme.muted_foreground }))
+                    .child(Icon::default().path(tool.icon).with_size(px(hand(15.))).text_color(if tool.chosen { theme.primary } else { theme.muted_foreground }))
                     .managed_tooltip(move |window, cx| crate::widgets::tip(words.clone(), window, cx))
                     .when(going.is_none(), |d| {
                         d.on_click(cx.listener(move |this, _, window, cx| {
@@ -199,12 +228,12 @@ fn card<V: 'static>(m: &Menu, going: Option<Duration>, pick: std::rc::Rc<dyn Fn(
                     })
             });
             h_flex()
-                .h(px(32.))
-                .pl(px(10.))
+                .h(px(if in_hand { 44. } else { 32. }))
+                .pl(px(hand(10.)))
                 .pr(px(3.))
                 .gap(px(16.))
                 .items_center()
-                .text_size(px(13.))
+                .text_size(px(hand(13.)))
                 .whitespace_nowrap()
                 .text_color(theme.popover_foreground)
                 .child(div().flex_1().child(label))
@@ -221,26 +250,26 @@ fn card<V: 'static>(m: &Menu, going: Option<Duration>, pick: std::rc::Rc<dyn Fn(
             let id2 = id.clone();
             h_flex()
                 .id(ElementId::Name(format!("menu-{what}-{id}").into()))
-                .h(px(30.))
+                .h(px(if in_hand { 44. } else { 30. }))
                 // An icon's drawing stops short of its box by about two
                 // points a side, so the row is that much tighter at the
                 // left: set the same both sides, the icon stood further
                 // in than the words' end did.
-                .pl(px(8.))
-                .pr(px(10.))
-                .gap(px(9.))
+                .pl(px(hand(8.)))
+                .pr(px(hand(10.)))
+                .gap(px(hand(9.)))
                 .items_center()
-                .rounded(px(6.))
-                .text_size(px(13.))
+                .rounded(px(hand(6.)))
+                .text_size(px(hand(13.)))
                 .whitespace_nowrap()
                 .text_color(if danger { theme.danger } else { theme.popover_foreground })
                 .cursor_pointer()
                 // In the dark appearance the palette's hover is a shade off
                 // the card and cannot be seen: a wash of the ink is.
                 .hover(|s| s.bg(if dark { theme.foreground.opacity(0.11) } else { theme.sidebar_accent }))
-                .map(|d| if picture { d.child(img(icon).w(px(17.)).h(px(12.)).flex_shrink_0()) } else { d.child(Icon::default().path(icon).with_size(px(15.)).text_color(if danger { theme.danger } else { theme.muted_foreground })) })
+                .map(|d| if picture { d.child(img(icon).w(px(hand(17.))).h(px(hand(12.))).flex_shrink_0()) } else { d.child(Icon::default().path(icon).with_size(px(hand(15.))).text_color(if danger { theme.danger } else { theme.muted_foreground })) })
                 .child(div().flex_1().child(label))
-                .when(chosen, |d| d.child(Icon::default().path("icons/check.svg").with_size(px(14.)).text_color(theme.primary)))
+                .when(chosen, |d| d.child(Icon::default().path("icons/check.svg").with_size(px(hand(14.))).text_color(theme.primary)))
                 .when(going.is_none(), |d| {
                     d.on_click(cx.listener(move |this, _, window, cx| {
                         swallow_click(window, cx);
@@ -253,7 +282,7 @@ fn card<V: 'static>(m: &Menu, going: Option<Duration>, pick: std::rc::Rc<dyn Fn(
     let body = v_flex()
         .when_some(m.width, |d, w| d.w(w))
         .p(px(5.))
-        .rounded(px(10.))
+        .rounded(px(hand(10.)))
         .border_1()
         .border_color(theme.border)
         .bg(theme.popover)

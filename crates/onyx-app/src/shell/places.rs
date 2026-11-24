@@ -15,7 +15,7 @@ use gpui_component::{h_flex, v_flex, ActiveTheme as _, Icon, Sizable as _};
 use super::library::{block_grounds, row_tool, vault_badge, vault_list, vault_name, VAULT_BLOCK_H};
 use super::{edge_fade, greeting, Shell, LIST_TOP};
 use crate::i18n::t;
-use crate::widgets::{choice_pill, kbd_hint, swallow_click, Press};
+use crate::widgets::{choice_pill, hand, kbd_hint, swallow_click, Press};
 
 
 /// A vault's tile on the page, and the room between tiles: three to a
@@ -32,9 +32,10 @@ pub(crate) fn vault_tile(id: ElementId, p: &std::path::Path, theme: &gpui_compon
     let badge = vault_badge(p, &name, 28., theme, cx);
     let lit = theme.foreground.opacity(if theme.mode.is_dark() { 0.09 } else { 0.06 });
     tile(id, theme)
+        .text_size(px(14.))
         .hover(move |s| s.bg(lit))
         .child(badge)
-        .child(div().flex_1().min_w_0().truncate().text_size(px(14.)).font_weight(FontWeight::SEMIBOLD).text_color(theme.foreground).child(name))
+        .child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::SEMIBOLD).text_color(theme.foreground).child(name))
 }
 
 /// New Vault…'s tile after the vaults', a plus in an empty tile.
@@ -78,15 +79,18 @@ impl Shell {
     /// page scrolls when the tiles outgrow it.
     pub(crate) fn render_place_page(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
-        let face = self.look.text_family.clone();
         let container = self.container();
+        // In a compact window a tile is a row of its own, as wide as the
+        // page lets it be and at a finger's size.
+        let compact = self.compact;
+        let fit = move |tile: Stateful<Div>, name: f32| if compact { tile.w_full().h(px(TILE_H + 4.)).px(px(14.)).gap(px(12.)).text_size(px(name)) } else { tile };
         let tiles: Vec<AnyElement> = match &container {
             None => Vec::new(),
             Some(dir) => {
                 let mut tiles: Vec<AnyElement> = vault_list(Some(dir), None)
                     .into_iter()
                     .map(|p| {
-                        vault_tile(ElementId::Name(format!("page-vault-{}", p.display()).into()), &p, &theme, cx)
+                        fit(vault_tile(ElementId::Name(format!("page-vault-{}", p.display()).into()), &p, &theme, cx), 16.)
                             .on_mouse_down(MouseButton::Right, cx.listener({
                                 let p = p.clone();
                                 move |this, ev: &MouseDownEvent, window, cx| {
@@ -102,7 +106,7 @@ impl Shell {
                     })
                     .collect();
                 tiles.push(
-                    new_vault_tile("page-new-vault", &theme)
+                    fit(new_vault_tile("page-new-vault", &theme), 15.)
                         .on_click(cx.listener(|this, _, window, cx| {
                             swallow_click(window, cx);
                             this.start_new_vault(window, cx)
@@ -146,9 +150,11 @@ impl Shell {
                         .pt(px(24.))
                         .pb(px(48.))
                         .gap(px(26.))
-                        .child(v_flex().items_center().gap(px(12.)).child(Self::shelf_figure(&self.home_fig, cx.entity_id())).child(div().text_size(px(34.)).font_family(face).child(words)))
-                        .when(!tiles.is_empty(), |d| d.child(tile_rows(3).children(tiles)))
-                        .child(choose),
+                        .child(v_flex().max_w_full().items_center().gap(px(12.)).child(Self::shelf_figure(&self.home_fig, cx.entity_id())).child(self.page_words(words)))
+                        .when(!tiles.is_empty(), |d| d.child(if compact { v_flex().w_full().max_w(px(320.)).gap(px(TILE_GAP)).children(tiles) } else { tile_rows(3).children(tiles) }))
+                        // Where the container is the one place the app has,
+                        // there is none to choose.
+                        .when(crate::sys::fixed_container().is_none(), |d| d.child(choose)),
                 ),
             )
             .vertical_scrollbar(&self.place_page_scroll)
@@ -184,20 +190,20 @@ impl Shell {
             .map(|p| {
                 let name = vault_name(&p);
                 let (block, hover, edge) = block_grounds(ground, theme);
-                let badge = vault_badge(&p, &name, 24., theme, cx);
+                let badge = vault_badge(&p, &name, hand(24.), theme, cx);
                 h_flex()
                     .id(ElementId::Name(format!("place-vault-{}", p.display()).into()))
                     .flex_shrink_0()
-                    .h(px(VAULT_BLOCK_H + 4.))
-                    .pl(px(10.))
+                    .h(px(hand(VAULT_BLOCK_H + 4.)))
+                    .pl(px(hand(10.)))
                     .pr(px(10.))
-                    .gap(px(12.))
+                    .gap(px(hand(12.)))
                     .items_center()
                     .rounded(px(10.))
                     .border_1()
                     .border_color(edge)
                     .bg(block)
-                    .text_size(px(14.))
+                    .text_size(px(hand(14.)))
                     .cursor_pointer()
                     .hover(move |s| s.bg(hover))
                     .on_mouse_down(MouseButton::Right, cx.listener({
@@ -226,13 +232,13 @@ impl Shell {
             .flex_shrink_0()
             .mx(px(8.))
             .mt(px(6.))
-            .h(px(super::TREE_ROW_H))
-            .pl(px(8.))
+            .h(px(super::tree_row_h()))
+            .pl(px(hand(8.)))
             .pr(px(4.))
-            .gap(px(6.))
+            .gap(px(hand(6.)))
             .items_center()
-            .text_size(px(13.))
-            .child(div().w(px(12.)).flex_shrink_0().flex().justify_center().child(Icon::default().path("icons/books.svg").with_size(px(15.)).text_color(muted)))
+            .text_size(px(hand(13.)))
+            .child(div().w(px(hand(12.))).flex_shrink_0().flex().justify_center().child(Icon::default().path("icons/books.svg").with_size(px(hand(15.))).text_color(muted)))
             .child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::SEMIBOLD).text_color(lit).child(t("Vaults")))
             .child(tool);
         let list = div()

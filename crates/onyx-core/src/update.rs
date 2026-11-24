@@ -69,9 +69,10 @@ pub fn asset_name() -> Option<&'static str> {
 /// Whether this copy came from a store that keeps it current itself, and
 /// nothing here updates it: the Microsoft Store (Windows runs a Store
 /// package from its own folder, `WindowsApps`) or the Snap Store (snapd
-/// starts a snap with `SNAP_NAME` set, `in_snap`).
+/// starts a snap with `SNAP_NAME` set, `in_snap`). Every copy on an iPhone
+/// and an iPad is the App Store's.
 pub fn from_store() -> bool {
-    (cfg!(windows) && std::env::current_exe().is_ok_and(|p| p.components().any(|c| c.as_os_str().eq_ignore_ascii_case("WindowsApps")))) || in_snap()
+    cfg!(target_os = "ios") || (cfg!(windows) && std::env::current_exe().is_ok_and(|p| p.components().any(|c| c.as_os_str().eq_ignore_ascii_case("WindowsApps")))) || in_snap()
 }
 
 /// Whether this copy is the snap, started by snapd.

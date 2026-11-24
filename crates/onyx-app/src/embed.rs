@@ -695,7 +695,7 @@ impl Embed {
         }
     }
 
-    fn wheel(&mut self, ev: &ScrollWheelEvent, _: &mut Window, cx: &mut Context<Self>) {
+    fn wheel(&mut self, ev: &ScrollEvent, _: &mut Window, cx: &mut Context<Self>) {
         if ev.modifiers.platform {
             cx.stop_propagation();
             let dy = f32::from(ev.delta.pixel_delta(px(20.)).y);
@@ -1458,7 +1458,7 @@ impl Embed {
                             .on_mouse_down(MouseButton::Left, cx.listener(Self::press))
                             .on_mouse_down(MouseButton::Right, cx.listener(Self::right_press))
                             .on_mouse_move(cx.listener(Self::drag))
-                            .on_scroll_wheel(cx.listener(Self::wheel))
+                            .on_scroll(cx.listener(Self::wheel))
                             .on_pinch(cx.listener(Self::pinch))
                             .child(canvas),
                     ),
@@ -1496,7 +1496,7 @@ impl Embed {
                         .relative()
                         .w(px(cw))
                         .h(px(ch))
-                        .on_scroll_wheel(cx.listener(Self::wheel))
+                        .on_scroll(cx.listener(Self::wheel))
                         .on_pinch(cx.listener(Self::pinch))
                         .on_click(cx.listener(|me, ev: &ClickEvent, _, cx| {
                             if ev.click_count() >= 2 {
@@ -1929,27 +1929,27 @@ pub(crate) fn corners(sheet: Hsla, round: f32) -> impl IntoElement {
 /// in the note's editor, so a key the editor binds would reach the note
 /// through it: every key that changes the note is taken here and does
 /// nothing, and those that move scroll the frame.
-pub(crate) fn key_bindings() -> Vec<KeyBinding> {
+pub(crate) fn key_bindings(cx: &App) -> Vec<KeyBinding> {
     let c = Some(EMBED_CONTEXT);
     let mut keys = vec![
-        KeyBinding::new("secondary-c", gpui_component::input::Copy, c),
-        KeyBinding::new("secondary-a", gpui_component::input::SelectAll, c),
-        KeyBinding::new("escape", Leave, c),
-        KeyBinding::new("up", LineUp, c),
-        KeyBinding::new("down", LineDown, c),
-        KeyBinding::new("pageup", PageUpIn, c),
-        KeyBinding::new("pagedown", PageDownIn, c),
-        KeyBinding::new("space", PageDownIn, c),
-        KeyBinding::new("shift-space", PageUpIn, c),
-        KeyBinding::new("secondary-up", ToStart, c),
-        KeyBinding::new("secondary-down", ToEnd, c),
-        KeyBinding::new("home", ToStart, c),
-        KeyBinding::new("end", ToEnd, c),
+        crate::sys::key("secondary-c", gpui_component::input::Copy, c, cx),
+        crate::sys::key("secondary-a", gpui_component::input::SelectAll, c, cx),
+        crate::sys::key("escape", Leave, c, cx),
+        crate::sys::key("up", LineUp, c, cx),
+        crate::sys::key("down", LineDown, c, cx),
+        crate::sys::key("pageup", PageUpIn, c, cx),
+        crate::sys::key("pagedown", PageDownIn, c, cx),
+        crate::sys::key("space", PageDownIn, c, cx),
+        crate::sys::key("shift-space", PageUpIn, c, cx),
+        crate::sys::key("secondary-up", ToStart, c, cx),
+        crate::sys::key("secondary-down", ToEnd, c, cx),
+        crate::sys::key("home", ToStart, c, cx),
+        crate::sys::key("end", ToEnd, c, cx),
     ];
     for key in [
         "enter", "shift-enter", "tab", "shift-tab", "backspace", "shift-backspace", "delete", "alt-backspace", "secondary-backspace", "left", "right", "shift-left", "shift-right", "shift-up", "shift-down", "alt-left", "alt-right", "alt-shift-left", "alt-shift-right", "secondary-left", "secondary-right", "secondary-shift-left", "secondary-shift-right", "shift-home", "shift-end", "secondary-shift-up", "secondary-shift-down", "secondary-b", "secondary-i", "secondary-enter", "secondary-x", "secondary-v", "secondary-z", "secondary-shift-z",
     ] {
-        keys.push(KeyBinding::new(key, Still, c));
+        keys.push(crate::sys::key(key, Still, c, cx));
     }
     keys
 }
