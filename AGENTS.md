@@ -16,10 +16,11 @@ Onyx is held to the bar of the work that wins Awwwards, the Webbys and the FWA (
 - **Words are few.** A row's name says what it is; a line under it only where the name does not say it all. No sentence explaining a concept and no hint in an empty list.
 - **One file is the one chosen, in either window**, however it came forward (its row, its tab, a tab shown in a closed one's place, the last tab closed, a press in its words): its row is lit, and ⌘⌫, ⌘Z and ⌘⇧Z act on the files while the keyboard is in no words. Anything new that shows a file chooses it through `Shell::choose` or the menu bar note's `chosen` (`docs/window.md`, The file chosen).
 - **The sidebar and the menu bar note's tree are one design.** They differ only in the vault block's size (`BlockSize`) and the tree's ground, lighter in the menu bar note; each tree starts with the vault's row and the Notes tools at its right, and ends with the vault's block, whose list rises from it. Both are built from `shell/library.rs`'s shared parts (`vault_block`, `vault_root_row`, `notes_tools`, `row_tool`). A change to either is made to both (`docs/window.md`).
-- **No square corner inside a round one.** gpui clips to a rectangle: a lit row, a band or a picture at a rounded card's corner rounds its own corners there (`docs/design.md`, Rules).
+- **A press moves nothing.** A press changes what is in its own place and nothing else: no row, card, sheet, pill or the page grows, shrinks or moves by a pixel, in any direction. What it has to say goes in room that is there in every state (the button's own words, a line under the row in every state, a mark before the control, a tooltip, a notice over the page), and a control whose words change is one width in every language, measured with the text system (`docs/design.md`, Rules).
+- **No sharp corners.** A rounded box is round at every corner whatever is drawn in it and however it is scrolled. gpui clips to the rectangle, never the rounded corner: what is drawn at a corner rounds its own corners there, by the box's radius less its inset, and where it cannot (a page scrolled in a frame, a picture past its room) the box lays `widgets::round_corners` last (`docs/design.md`, Rules).
 - **A pass of optimization follows every round of changes** (`docs/optimize.md`, its log first): from the commit the log's last entry names, what is new is looked at for work done for nothing (a disk read or a copy in a frame, a clock that runs while nothing moves or no one sees, a picture decoded whole or kept), measured before and after, and logged. Nothing a person sees or can do is traded for it.
 - **What a person sees is looked at on an iPhone and an iPad too** (`docs/probing.md`, An iPhone and an iPad): a compact window is one column, a finger has no pointer to hover with and no button to hold, the keyboard takes the window's foot, and the system keeps its edges (`docs/window.md`, A compact window). A thing reached only under the pointer or by a drag is not reached there. A measure of the sidebar's or a menu's goes through `widgets::hand`, and a row's height through `tree_row_h`, which make them a hand's size in a compact window. There the note's page is the whole screen: what covers the room (a scrim, a page over the window) carries its ground past it with `widgets::reaches`.
-- **Look before saying it is done:** in both appearances, in a long language, in a narrow window, and in every state the thing can be in, the empty one first (no container, no vault, no notes, nothing chosen): a control built for its usual state shows its empty one only when someone meets it (`docs/probing.md`).
+- **Look before saying it is done:** in both appearances, in a long language, in a narrow window, and in every state the thing can be in, the empty one first (no container, no vault, no notes, nothing chosen): a control built for its usual state shows its empty one only when someone meets it; at each state a press leads to beside the state before it (`scripts/press-diff.R`); and at every rounded box's corners enlarged (`scripts/corners.R`, `docs/probing.md`).
 
 ## Rules that hold everywhere
 
@@ -110,7 +111,7 @@ crates/onyx-app/           the window
   src/lines.rs               a note's text as lines: places, graphemes, edits, undo
   src/markdown.rs            what each line is and every inline span with its marks
   src/settings.rs            the settings window: General, Font, Terminal, Menu Bar, About
-  src/widgets.rs             the shared drawing: choice_pill, key_text, tip, page_in, Motion
+  src/widgets.rs             the shared drawing: choice_pill, key_text, tip, page_in, round_corners, Motion
   src/menu.rs                the app's own menu, in and out in motion
   src/scroll.rs              a gesture stays in the scroller it began in
   src/ambient.rs             the window's clock
@@ -126,7 +127,7 @@ crates/onyx-app/           the window
   macos/ windows/ linux/     what each system's package needs
   ios/                       an iPhone's and an iPad's bundle: Info.plist, the entitlements, the asset catalog (the icon, the launch color)
 vendor/                    the toolkit, the blocks crate and the terminal's screen model (vt100), each with an UPSTREAM.md
-scripts/                   the dev build, a simulator's (ios-app.sh), the icon, the README's picture (make-readme-gif.sh, readme/), Tabler's icons (tabler.py), the release
+scripts/                   the dev build, a simulator's (ios-app.sh), a press's and a corner's checks (press-diff.R, corners.R), the icon, the README's picture (make-readme-gif.sh, readme/), Tabler's icons (tabler.py), the release
 docs/                      how each part works and its traps; release.md; probing.md
 ```
 

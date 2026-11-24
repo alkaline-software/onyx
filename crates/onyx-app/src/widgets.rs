@@ -4,7 +4,8 @@
 //! key is drawn on caps by `key_text`; a hover's label is `tip`; a page's
 //! content comes in by `page_in`; something over the window comes in by
 //! `fade_in`; something small that is there or is not plays its change by
-//! `Motion::presence`.
+//! `Motion::presence`; a rounded box whose content reaches its corners
+//! keeps them round by `round_corners`.
 //!
 //! The timings are the studio's (the standards' `docs/design.md`,
 //! Motion, Timing), and every motion eases with `ease_out_quint`.
@@ -660,4 +661,46 @@ impl Fig {
     pub fn at(&self) -> (f32, f32, f32) {
         (self.wind, self.lift, self.near)
     }
+}
+
+/// A rounded box's corners kept round over what is drawn in it. gpui
+/// clips a box's content to its rectangle and never to its rounded corners
+/// (`overflow_hidden` too), so whatever reaches a corner (a page scrolled
+/// under it, a picture drawn past its room, a strip along an edge) is drawn
+/// square over the curve: a sharp corner. Laid as the box's last child, it
+/// paints the four corners' outsides in `ground`, the box's own ground,
+/// opaque, inside its border and round as the border's inside is
+/// (`round`, the box's radius less its border); the border is drawn after.
+/// It paints only inside the box, so whatever stands behind the box (a
+/// selection, another ground) shows past its corners as it should.
+pub fn round_corners(ground: Hsla, round: f32) -> impl IntoElement {
+    canvas(
+        |_, _, _| (),
+        move |b, _, window, _| {
+            let r = px(round);
+            let (x0, y0, x1, y1) = (b.left(), b.top(), b.right(), b.bottom());
+            // Each corner, and its two neighbors along the edges; the arc
+            // between them is a cubic's quarter circle.
+            const K: f32 = 0.552_284_8;
+            for (c, a, e) in [
+                (point(x0, y0), point(x0 + r, y0), point(x0, y0 + r)),
+                (point(x1, y0), point(x1 - r, y0), point(x1, y0 + r)),
+                (point(x1, y1), point(x1, y1 - r), point(x1 - r, y1)),
+                (point(x0, y1), point(x0, y1 - r), point(x0 + r, y1)),
+            ] {
+                let mut path = PathBuilder::fill();
+                path.move_to(c);
+                path.line_to(a);
+                path.cubic_bezier_to(e, a + (c - a) * K, e + (c - e) * K);
+                path.close();
+                if let Ok(path) = path.build() {
+                    window.paint_path(path, ground);
+                }
+            }
+        },
+    )
+    .absolute()
+    .top_0()
+    .left_0()
+    .size_full()
 }

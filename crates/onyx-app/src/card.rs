@@ -386,7 +386,7 @@ impl Render for Card {
             .child(body)
             // A picture made to cover its room is drawn past it, so its own
             // corners are not the card's: what lies past them is covered.
-            .child(crate::embed::corners(theme.background, CONTROL_ROUND - 1.))
+            .child(crate::widgets::round_corners(theme.background, CONTROL_ROUND - 1.))
     }
 }
 

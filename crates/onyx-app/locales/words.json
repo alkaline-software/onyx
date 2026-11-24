@@ -1916,15 +1916,6 @@
     "de": "Ohne Titel",
     "es": "Sin título"
   },
-  "Up to date.": {
-    "zh-Hans": "已是最新版本。",
-    "zh-Hant": "已是最新版本。",
-    "ja": "最新です。",
-    "ko": "최신 버전입니다.",
-    "fr": "À jour.",
-    "de": "Auf dem neuesten Stand.",
-    "es": "Está al día."
-  },
   "Update to {version}": {
     "zh-Hans": "更新到 {version}",
     "zh-Hant": "更新到 {version}",
@@ -2842,5 +2833,50 @@
     "fr": "Un dossier nommé « {name} » existe déjà.",
     "de": "Es gibt schon einen Ordner namens „{name}“.",
     "es": "Ya hay una carpeta llamada «{name}»."
+  },
+  "Checking…": {
+    "zh-Hans": "正在检查…",
+    "zh-Hant": "正在檢查…",
+    "ja": "確認中…",
+    "ko": "확인 중…",
+    "fr": "Recherche…",
+    "de": "Wird gesucht…",
+    "es": "Buscando…"
+  },
+  "Up to date": {
+    "zh-Hans": "已是最新版本",
+    "zh-Hant": "已是最新版本",
+    "ja": "最新です",
+    "ko": "최신 버전",
+    "fr": "À jour",
+    "de": "Aktuell",
+    "es": "Al día"
+  },
+  "Check failed": {
+    "zh-Hans": "检查失败",
+    "zh-Hant": "檢查失敗",
+    "ja": "確認できませんでした",
+    "ko": "확인 실패",
+    "fr": "Échec de la recherche",
+    "de": "Suche fehlgeschlagen",
+    "es": "Error al buscar"
+  },
+  "Update failed": {
+    "zh-Hans": "更新失败",
+    "zh-Hant": "更新失敗",
+    "ja": "アップデートできませんでした",
+    "ko": "업데이트 실패",
+    "fr": "Échec de la mise à jour",
+    "de": "Update fehlgeschlagen",
+    "es": "Error al actualizar"
+  },
+  "Opens and closes the note from any app.": {
+    "zh-Hans": "在任何应用中打开和关闭这条笔记。",
+    "zh-Hant": "在任何應用程式中打開和關閉這則筆記。",
+    "ja": "どのアプリからでもノートを開閉します。",
+    "ko": "어떤 앱에서든 노트를 열고 닫습니다.",
+    "fr": "Ouvre et ferme la note depuis n’importe quelle app.",
+    "de": "Öffnet und schließt die Notiz aus jeder App.",
+    "es": "Abre y cierra la nota desde cualquier app."
   }
 }

@@ -388,6 +388,9 @@ pub struct Shell {
     /// the system as the section shows.
     pub(crate) recording: bool,
     pub(crate) record_said: Option<SharedString>,
+    /// Why the system would not put Onyx in Login Items, at the last try:
+    /// a mark before the switch, the reason in its tooltip.
+    pub(crate) login_said: Option<SharedString>,
     pub(crate) at_login: bool,
     /// The list of the system's faces a Custom tile opens (Settings,
     /// Fonts): its search field, made with the settings window; which
@@ -412,14 +415,25 @@ pub struct Shell {
     pub(crate) update: UpdateRow,
 }
 
-/// What the Updates row says and does.
+/// What the Updates row says and does. Every state is said on the one
+/// button, in its fixed width: nothing is added under the row.
 #[derive(Default, Clone)]
 pub(crate) struct UpdateRow {
     pub checking: bool,
     pub found: Option<String>,
     /// While a download runs: how far, from 0 to 100.
     pub downloading: Option<u32>,
-    pub said: Option<String>,
+    /// How the last check or install ended, until the next press.
+    pub outcome: Option<Outcome>,
+}
+
+/// How a check or an install ended: the button's label, and on a failure
+/// the reason, in its tooltip.
+#[derive(Clone)]
+pub(crate) enum Outcome {
+    UpToDate,
+    CheckFailed(String),
+    InstallFailed(String),
 }
 
 /// How much of a compact window its sidebar takes: the rest is the
@@ -671,6 +685,7 @@ impl Shell {
             settings_section: crate::settings::section_named(ui.settings_section.as_deref().unwrap_or("general")),
             recording: false,
             record_said: None,
+            login_said: None,
             at_login: false,
             font_query: None,
             font_list: None,
@@ -3448,24 +3463,31 @@ impl Shell {
         }))
     }
 
-    /// The line under the strip: it opens and goes over a moment, in the
-    /// danger's ink, or quiet when it is news (an icon before it) or says
-    /// something is done (a press from the file).
+    /// A notice: a pill hung under the strip, over the page, coming and
+    /// going over a moment, in the danger's ink, or quiet when it is news
+    /// (an icon before it) or says something is done (a press from the
+    /// file). It takes no room: the page under it never moves, as a line
+    /// opened under the strip moved the whole note down.
     fn render_notice(&self, theme: &gpui_component::Theme, cx: &mut Context<Self>) -> Option<AnyElement> {
         const NOTICE_H: f32 = 30.;
         let moving = self.motion.presence("notice", self.notice.is_some(), cx);
         let n = self.notice.clone().or_else(|| moving.and_then(|_| self.last_notice.clone()))?;
         let done = n.done.clone();
         let quiet = done.is_some() || n.icon.is_some();
-        let line = div()
+        let pill = h_flex()
             .id("notice")
+            .occlude()
             .h(px(NOTICE_H))
+            .max_w(relative(0.9))
             .flex_shrink_0()
-            .overflow_hidden()
-            .flex()
             .items_center()
             .gap(px(7.))
-            .px(px(16.))
+            .px(px(14.))
+            .rounded_full()
+            .bg(theme.popover)
+            .border_1()
+            .border_color(theme.border)
+            .shadow(crate::widgets::float_shadow(theme))
             .text_size(px(12.5))
             .text_color(if quiet { theme.muted_foreground } else { theme.danger })
             .when_some(n.icon, |d, icon| d.child(Icon::default().path(icon).with_size(px(14.)).text_color(theme.muted_foreground)))
@@ -3476,13 +3498,14 @@ impl Shell {
                     crate::sys::reveal(&file);
                 })
             })
-            .child(n.words);
+            .child(div().min_w_0().truncate().child(n.words));
+        let hung = div().absolute().top(px(8.)).left_0().right_0().flex().justify_center().child(pill);
         Some(match moving {
-            Some((coming, serial)) => line.with_animation(ElementId::NamedInteger("notice".into(), serial as u64), Animation::new(FOLD_ANIM).with_easing(ease_out_quint()), move |d, t| {
+            Some((coming, serial)) => hung.with_animation(ElementId::NamedInteger("notice".into(), serial as u64), Animation::new(FOLD_ANIM).with_easing(ease_out_quint()), move |d, t| {
                 let k = if coming { t } else { 1. - t };
-                d.h(px(NOTICE_H * k)).opacity(k)
+                d.top(px(8. - 6. * (1. - k))).opacity(k)
             }).into_any_element(),
-            None => line.into_any_element(),
+            None => hung.into_any_element(),
         })
     }
 
@@ -4721,7 +4744,7 @@ impl Shell {
     /// Ask for the newest version, off the main thread.
     pub(crate) fn check_updates(&mut self, cx: &mut Context<Self>) {
         self.update.checking = true;
-        self.update.said = None;
+        self.update.outcome = None;
         cx.notify();
         let task = cx.background_executor().spawn(async { update::latest() });
         cx.spawn(async move |this, cx| {
@@ -4736,10 +4759,10 @@ impl Shell {
                             this.update.found = Some(latest);
                         } else {
                             this.update.found = None;
-                            this.update.said = Some(t("Up to date.").into());
+                            this.update.outcome = Some(Outcome::UpToDate);
                         }
                     }
-                    Err(e) => this.update.said = Some(tf("The check did not go through: {why}", &[("why", &e)])),
+                    Err(e) => this.update.outcome = Some(Outcome::CheckFailed(tf("The check did not go through: {why}", &[("why", &e)]))),
                 }
                 cx.notify();
             });
@@ -4752,6 +4775,7 @@ impl Shell {
     pub(crate) fn install_update(&mut self, cx: &mut Context<Self>) {
         let Some(version) = self.update.found.clone() else { return };
         self.update.downloading = Some(0);
+        self.update.outcome = None;
         cx.notify();
         let (tx, rx) = std::sync::mpsc::channel::<u32>();
         let task = cx.background_executor().spawn(async move {
@@ -4785,7 +4809,7 @@ impl Shell {
                         this.save_all(cx);
                         cx.quit()
                     }
-                    Err(e) => this.update.said = Some(tf("The update did not go through: {e}", &[("e", &e)])),
+                    Err(e) => this.update.outcome = Some(Outcome::InstallFailed(tf("The update did not go through: {e}", &[("e", &e)]))),
                 }
                 cx.notify();
             });
@@ -5110,7 +5134,6 @@ impl Render for Shell {
                     // to the screen's foot, with no sheet laid on a page.
                     .bg(foot_ground)
                     .children(path_bar)
-                    .children(notice)
                     .child(
                         // The source at the left, the note beside it.
                         h_flex()
@@ -5122,7 +5145,8 @@ impl Render for Shell {
                             .child(v_flex().flex_1().min_w_0().h_full().children(find_bar).child(div().relative().flex_1().min_h_0().child(page)))
                             .children(terminal)
                             .children(source_grip)
-                            .children(term_grip),
+                            .children(term_grip)
+                            .children(notice),
                     ),
             );
         let pick = Rc::new(|this: &mut Self, what: &'static str, id: SharedString, window: &mut Window, cx: &mut Context<Self>| this.menu_pick(what, id, window, cx));
@@ -5940,6 +5964,26 @@ impl Shell {
                 // A newer version waits, as a check finding one says: the
                 // gear's and About's dots. Nothing is fetched.
                 "updatefound" => self.update.found = Some("9.9.9".into()),
+                // Each state the Updates button comes to, drawn with nothing
+                // fetched; `check` is the button's own press, fetched.
+                "check" => self.check_updates(cx),
+                "checking" => self.update.checking = true,
+                "uptodate" => self.update.outcome = Some(Outcome::UpToDate),
+                "checkfailed" => self.update.outcome = Some(Outcome::CheckFailed(tf("The check did not go through: {why}", &[("why", &"GitHub answered 404")]))),
+                "downloading" => {
+                    self.update.found = Some("9.9.9".into());
+                    self.update.downloading = Some(100);
+                }
+                "installfailed" => {
+                    self.update.found = Some("9.9.9".into());
+                    self.update.outcome = Some(Outcome::InstallFailed(tf("The update did not go through: {e}", &[("e", &"the disk image could not be opened")])));
+                }
+                // Open at login refused by the system, and a shortcut's
+                // keys refused, as their presses leave them.
+                "loginrefused" => self.login_said = Some("Operation not permitted".into()),
+                // A notice, as a failure says one: over the page, moving nothing.
+                "notice" => self.say(tf("The note could not be written: {why}", &[("why", &"Permission denied (os error 13)")]), cx),
+                "shortcutwrong" => self.record_said = Some(t(onyx_core::shortcut::Invalid::NoModifier.said()).into()),
                 "hints" => self.tabs_row.hints = true,
                 "end" => {
                     if let Some(e) = self.shown_editor() {

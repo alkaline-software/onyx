@@ -38,6 +38,13 @@ const SIDE_W: f32 = 352.;
 /// The room round the page, and the row under it.
 const PAGE_PAD: f32 = 28.;
 const PAGER_H: f32 = 44.;
+/// A pill that drops a menu (the paper, a face), and the pager's words,
+/// each one width, the longest of its words in every language, measured
+/// with the text system: a choice or a turn of the page changes the words,
+/// never the edges of what is beside them. The pill holds Spanish's "As
+/// in the note" (140), the pager Chinese's "Page 188 of 188" (120).
+const EXPORT_PILL_W: Pixels = px(168.);
+const PAGER_W: Pixels = px(132.);
 /// A run of presses is one layout.
 const SETTLE: Duration = Duration::from_millis(40);
 
@@ -459,7 +466,9 @@ impl Shell {
         h_flex()
             .id(id)
             .h(crate::settings::CONTROL_H)
-            .max_w(px(168.))
+            // One width whatever is chosen, so a choice moves nothing.
+            .w(EXPORT_PILL_W)
+            .justify_between()
             .px(px(12.))
             .gap(px(7.))
             .items_center()
@@ -525,22 +534,20 @@ impl Shell {
             row(t("Line spacing").into(), self.export_choice("pdf-spacing", vec![("tight", "", t("Tight").into()), ("normal", "", t("Normal").into()), ("loose", "", t("Loose").into())], &o.spacing, |o, k| o.spacing = k.into(), cx)),
         ];
         let format = o.format.as_str();
-        let mut include = vec![row(t("Note's name").into(), self.export_switch("pdf-name", o.name, |o, on| o.name = on, cx))];
-        if matches!(format, "pdf" | "word") {
-            include.push(row(t("Page numbers").into(), self.export_switch("pdf-numbers", o.numbers, |o, on| o.numbers = on, cx)));
-        }
-        include.push(row(t("Contents").into(), self.export_switch("pdf-contents", o.contents, |o, on| o.contents = on, cx)));
-        include.push(row(t("Color").into(), self.export_switch("pdf-color", o.color, |o, on| o.color = on, cx)));
-        if format == "pdf" {
-            include.push(row(t("New page for each top heading").into(), self.export_switch("pdf-breaks", o.breaks, |o, on| o.breaks = on, cx)));
-        }
-        include.push(row(t("Linked files").into(), self.export_switch("pdf-attached", o.attached, |o, on| o.attached = on, cx)));
+        // Every row is there in every format, so choosing one moves
+        // nothing: what a format has no use for is dimmed and takes no
+        // press, as a row was taken out and the rest moved up.
+        let only = |applies: bool, el: AnyElement| div().when(!applies, |d| d.opacity(0.45).occlude()).child(el).into_any_element();
+        let include = vec![
+            row(t("Note's name").into(), self.export_switch("pdf-name", o.name, |o, on| o.name = on, cx)),
+            only(matches!(format, "pdf" | "word"), row(t("Page numbers").into(), self.export_switch("pdf-numbers", o.numbers, |o, on| o.numbers = on, cx))),
+            row(t("Contents").into(), self.export_switch("pdf-contents", o.contents, |o, on| o.contents = on, cx)),
+            row(t("Color").into(), self.export_switch("pdf-color", o.color, |o, on| o.color = on, cx)),
+            only(format == "pdf", row(t("New page for each top heading").into(), self.export_switch("pdf-breaks", o.breaks, |o, on| o.breaks = on, cx))),
+            row(t("Linked files").into(), self.export_switch("pdf-attached", o.attached, |o, on| o.attached = on, cx)),
+        ];
         // A web page has no paper: the reader's window is its width.
-        let mut groups = Vec::new();
-        if format != "html" {
-            groups.push(group(Some(t("Page").into()), None, page, &theme));
-        }
-        groups.push(group(Some(t("Text").into()), None, kind, &theme));
+        let mut groups = vec![only(format != "html", group(Some(t("Page").into()), None, page, &theme)), group(Some(t("Text").into()), None, kind, &theme)];
         let include_title = if format == "pdf" || format == "word" { t("On the page") } else { t("Include") };
         groups.push(group(Some(include_title.into()), None, include, &theme));
         groups
@@ -613,7 +620,7 @@ impl Shell {
             .items_center()
             .justify_center()
             .child(turn("pdf-prev", "icons/chevron-left.svg", -1, sheet.page > 0, cx))
-            .child(div().min_w(px(92.)).text_center().text_size(px(12.5)).text_color(theme.muted_foreground).child(tf("Page {page} of {pages}", &[("page", &(sheet.page + 1).to_string()), ("pages", &pages.to_string())])))
+            .child(div().w(PAGER_W).flex_shrink_0().text_center().text_size(px(12.5)).text_color(theme.muted_foreground).child(tf("Page {page} of {pages}", &[("page", &(sheet.page + 1).to_string()), ("pages", &pages.to_string())])))
             .child(turn("pdf-next", "icons/chevron-right.svg", 1, sheet.page + 1 < pages, cx))
             .into_any_element()
     }

@@ -30,7 +30,7 @@ use onyx_core::update;
 
 use crate::i18n::{phrase, t, tf, weave};
 use crate::menu::Entry;
-use crate::shell::{Escape, OpenSettings, Shell};
+use crate::shell::{Escape, OpenSettings, Outcome, Shell};
 use crate::widgets::{choice_pill, hand, page_in, small_pill, swallow_click, tip, wordmark, Press};
 
 /// A row of the list of the system's faces.
@@ -50,8 +50,7 @@ const CJK_SAMPLE_PX: f32 = 16.;
 /// never narrower than it opens: the rows are laid out for that width,
 /// and narrower, names broke mid-word; it is the width a row of five
 /// font tiles needs to show each face's name whole. The studio's one
-/// size: General, the longest page, fits it with a container's path on
-/// three lines. Shorter, the page scrolls.
+/// size: General, the longest page, fits it. Shorter, the page scrolls.
 pub const SETTINGS_W: Pixels = px(860.);
 pub const SETTINGS_H: Pixels = px(600.);
 const SETTINGS_MIN: Size<Pixels> = Size { width: SETTINGS_W, height: px(460.) };
@@ -69,6 +68,16 @@ fn control_h() -> Pixels {
     if crate::widgets::in_hand() { px(36.) } else { CONTROL_H }
 }
 const CARD_R: Pixels = px(12.);
+/// The widths of the controls whose words change with their state, each
+/// the longest of its words in every language with room to spare,
+/// measured with the text system: a press changes the words, never the
+/// control's edges or anything beside it. The Updates button holds
+/// Japanese's "Update failed", the longest (201); the window's language
+/// pill French's "System" (120); the writing language's pill French's
+/// "English (UK)" (204).
+const UPDATE_W: Pixels = px(216.);
+const LANG_W: Pixels = px(128.);
+const WRITING_W: Pixels = px(212.);
 pub const SETTINGS_CONTEXT: &str = "Settings";
 
 /// The sections in the rail's order: key, name, icon. About is last.
@@ -242,13 +251,20 @@ fn card_ground(theme: &gpui_component::Theme) -> Hsla {
 /// not say it all, and its control at the right. Every row is made here,
 /// never laid out by hand.
 fn line(title: SharedString, detail: Option<SharedString>, control: AnyElement, theme: &gpui_component::Theme) -> AnyElement {
+    let detail = detail.map(|d| div().text_size(px(hand(11.5))).line_height(px(hand(15.))).text_color(theme.muted_foreground).child(d).into_any_element());
+    line_of(title, detail, control)
+}
+
+/// A row whose line is drawn by its maker: one that holds one line in
+/// every state, whatever its words say.
+fn line_of(title: SharedString, detail: Option<AnyElement>, control: AnyElement) -> AnyElement {
     // In a compact window the control stands under the name, at the row's left.
     if NARROW.get().is_some() {
         return v_flex()
             .px(px(14.))
             .py(px(10.))
             .gap(px(8.))
-            .child(v_flex().gap(px(1.)).child(div().text_size(px(hand(13.))).child(title)).children(detail.map(|d| div().text_size(px(hand(11.5))).line_height(px(hand(15.))).text_color(theme.muted_foreground).child(d))))
+            .child(v_flex().gap(px(1.)).child(div().text_size(px(hand(13.))).child(title)).children(detail))
             .child(control)
             .into_any_element();
     }
@@ -258,7 +274,7 @@ fn line(title: SharedString, detail: Option<SharedString>, control: AnyElement, 
         .py(px(8.))
         .gap(px(16.))
         .items_center()
-        .child(v_flex().flex_1().min_w_0().gap(px(1.)).child(div().text_size(px(hand(13.))).child(title)).children(detail.map(|d| div().text_size(px(hand(11.5))).line_height(px(hand(15.))).text_color(theme.muted_foreground).child(d))))
+        .child(v_flex().flex_1().min_w_0().gap(px(1.)).child(div().text_size(px(hand(13.))).child(title)).children(detail))
         .child(div().flex_shrink_0().child(control))
         .into_any_element()
 }
@@ -617,7 +633,12 @@ impl Shell {
             .items_center()
             .child(self.avatar(28., &theme).id("settings-avatar").cursor_pointer().hover(|s| s.opacity(0.85)).on_click(cx.listener(|this, _, _, cx| this.pick_avatar(cx))))
             .child(small_pill("avatar-choose", "icons/image.svg", t("Choose…"), Press::Quiet, false, &theme).h(control_h()).on_click(cx.listener(|this, _, _, cx| this.pick_avatar(cx))))
-            .when(!self.cfg.app.avatar.is_empty(), |d| d.child(small_pill("avatar-remove", "icons/trash.svg", t("Remove"), Press::Danger, false, &theme).h(control_h()).on_click(cx.listener(|this, _, _, cx| this.set_avatar(String::new(), cx)))))
+            // Remove is there with no picture too, paler and taking no
+            // press, so choosing one or removing it moves nothing beside it.
+            .child({
+                let none = self.cfg.app.avatar.is_empty();
+                small_pill("avatar-remove", "icons/trash.svg", t("Remove"), Press::Danger, none, &theme).h(control_h()).when(!none, |d| d.on_click(cx.listener(|this, _, _, cx| this.set_avatar(String::new(), cx))))
+            })
             .into_any_element();
         let text = vec![self.size_row(cx), self.spelling_row(cx)];
         vec![
@@ -668,14 +689,22 @@ impl Shell {
         };
         let shown = crate::sys::short_path(&dir);
         let icon = if shown.starts_with("iCloud Drive") { "icons/cloud.svg" } else { "icons/folder.svg" };
+        // The path on one line in every state, cut at its start where it
+        // is long, so the end (the container's own name) stays in sight
+        // and choosing another never changes the row's height. The
+        // separators are lighter than the names.
         let sep = std::path::MAIN_SEPARATOR;
-        let mut parts: Vec<AnyElement> = Vec::new();
+        let mut text = String::new();
+        let mut light = Vec::new();
         for (i, part) in shown.split(sep).enumerate() {
             if i > 0 {
-                parts.push(div().px(px(3.)).text_color(theme.muted_foreground.opacity(0.7)).child(sep.to_string()).into_any_element());
+                let at = text.len();
+                text.push_str(&format!(" {sep} "));
+                light.push((at..text.len(), HighlightStyle { color: Some(theme.muted_foreground.opacity(0.7)), ..Default::default() }));
             }
-            parts.push(div().child(part.to_string()).into_any_element());
+            text.push_str(part);
         }
+        let path_words = |mono: SharedString| div().flex_1().min_w_0().whitespace_nowrap().overflow_hidden().text_ellipsis_start().font_family(mono).text_size(px(hand(12.5))).text_color(theme.foreground).child(StyledText::new(text.clone()).with_highlights(light.clone()));
         // An iPhone's and an iPad's is the one place the app has: said,
         // with nothing to choose, close or show.
         if crate::sys::fixed_container().is_some() {
@@ -686,7 +715,7 @@ impl Shell {
                 .gap(px(9.))
                 .items_center()
                 .child(Icon::default().path(icon).with_size(px(hand(15.))).text_color(theme.primary))
-                .child(h_flex().flex_1().flex_wrap().min_w_0().font_family(self.look.mono_family.clone()).text_size(px(hand(12.5))).text_color(theme.foreground).children(parts))
+                .child(path_words(self.look.mono_family.clone()))
                 .into_any_element();
         }
         let path = {
@@ -729,7 +758,7 @@ impl Shell {
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(move |_, _, _| crate::sys::reveal(&dir))
                 .child(Icon::default().path(icon).with_size(px(hand(15.))).text_color(theme.primary))
-                .child(h_flex().flex_1().flex_wrap().min_w_0().font_family(self.look.mono_family.clone()).text_size(px(hand(12.5))).text_color(theme.foreground).children(parts))
+                .child(path_words(self.look.mono_family.clone()))
                 .child(close)
                 .into_any_element()
         };
@@ -1322,8 +1351,10 @@ impl Shell {
         let shown = sizes != TextSizes::MEDIUM;
         let id = "size-reset";
         let moving = self.motion.presence(id, shown, cx);
+        // Its place is kept while it is away, so the sizes beside it never
+        // move as it comes and goes.
         if !shown && moving.is_none() {
-            return None;
+            return Some(div().size(px(hand(26.))).flex_shrink_0().into_any_element());
         }
         let theme = cx.theme().clone();
         let hover = theme.foreground.opacity(0.07);
@@ -1475,13 +1506,23 @@ impl Shell {
             .child(small_pill("about-source", "icons/github.svg", "GitHub", Press::Quiet, false, &theme).h(px(hand(28.))).on_click(|_, _, _| crate::sys::open(&update::repo_page())))
             .child(small_pill("about-notes", "icons/file-text.svg", t("Release Notes"), Press::Quiet, false, &theme).h(px(hand(28.))).on_click(|_, _, _| crate::sys::open(&update::release_page(update::current_version()))));
         let u = self.update.clone();
-        let (icon, words, kind) = match (&u.found, u.downloading) {
-            (_, Some(p)) => ("icons/download.svg", tf("Downloading… {percent}%", &[("percent", &p)]), Press::Primary),
-            (Some(v), None) => ("icons/download.svg", tf("Update to {version}", &[("version", v)]), Press::Primary),
-            (None, None) => ("icons/refresh.svg", t("Check for updates").to_string(), Press::Quiet),
+        // Every state on the one button, at one width: a check's answer
+        // is the button's words, a failure's reason its tooltip.
+        let (icon, words, kind) = match (&u.found, u.downloading, u.checking, &u.outcome) {
+            (_, Some(p), _, _) => ("icons/download.svg", tf("Downloading… {percent}%", &[("percent", &p)]), Press::Primary),
+            (_, None, true, _) => ("icons/refresh.svg", t("Checking…").to_string(), Press::Quiet),
+            (Some(_), None, false, Some(Outcome::InstallFailed(_))) => ("icons/triangle-alert.svg", t("Update failed").to_string(), Press::Primary),
+            (Some(v), None, false, _) => ("icons/download.svg", tf("Update to {version}", &[("version", v)]), Press::Primary),
+            (None, None, false, Some(Outcome::UpToDate)) => ("icons/check.svg", t("Up to date").to_string(), Press::Quiet),
+            (None, None, false, Some(Outcome::CheckFailed(_))) => ("icons/triangle-alert.svg", t("Check failed").to_string(), Press::Quiet),
+            (None, None, false, _) => ("icons/refresh.svg", t("Check for updates").to_string(), Press::Quiet),
+        };
+        let reason = match &u.outcome {
+            Some(Outcome::CheckFailed(why) | Outcome::InstallFailed(why)) if !u.checking && u.downloading.is_none() => Some(SharedString::from(why.clone())),
+            _ => None,
         };
         let busy = u.checking || u.downloading.is_some();
-        let button = small_pill("update", icon, words, kind, busy, &theme).h(control_h()).min_w(px(190.)).justify_center().when(!busy, |d| {
+        let button = small_pill("update", icon, words, kind, busy, &theme).h(control_h()).w(UPDATE_W).justify_center().when_some(reason, |d, why| d.managed_tooltip(move |window, cx| tip(why.clone(), window, cx))).when(!busy, |d| {
             d.on_click(cx.listener(|this, _, _, cx| {
                 if this.update.found.is_some() {
                     this.install_update(cx);
@@ -1490,7 +1531,6 @@ impl Shell {
                 }
             }))
         });
-        let said = u.said.clone().map(SharedString::from);
         let check = self.motion.switch(
             "check-updates",
             self.cfg.app.check_updates,
@@ -1503,7 +1543,7 @@ impl Shell {
         );
         let mut rows = vec![group(None, None, vec![title.into_any_element()], &theme), pills.into_any_element()];
         if !update::from_store() {
-            rows.push(div().w_full().pt(px(12.)).child(group(None, None, vec![line(t("Updates").into(), said, button.into_any_element(), &theme), line(t("Check automatically").into(), None, check, &theme)], &theme)).into_any_element());
+            rows.push(div().w_full().pt(px(12.)).child(group(None, None, vec![line(t("Updates").into(), None, button.into_any_element(), &theme), line(t("Check automatically").into(), None, check, &theme)], &theme)).into_any_element());
         }
         rows
     }
@@ -1521,6 +1561,8 @@ impl Shell {
         h_flex()
             .id("language-pill")
             .h(control_h())
+            .w(LANG_W)
+            .justify_center()
             .px(px(12.))
             .gap(px(7.))
             .items_center()
@@ -1569,6 +1611,8 @@ impl Shell {
         let pill = h_flex()
             .id("writing-pill")
             .h(control_h())
+            .w(WRITING_W)
+            .justify_center()
             .px(px(12.))
             .gap(px(7.))
             .items_center()
@@ -1655,10 +1699,27 @@ impl Shell {
             cx.notify();
         }), cx);
         let login = self.motion.switch("bar-login", self.at_login, Rc::new(|this: &mut Self, on, _, cx| this.set_at_login(on, cx)), cx);
-        // A line under Shortcut only while there is something to say: a
-        // shortcut another app holds, or keys that cannot be one.
-        let said = self.record_said.clone();
-        vec![group(None, None, vec![line(t("Show in menu bar").into(), None, shown, &theme), line(t("Shortcut").into(), said, self.shortcut_field(cx), &theme), line(t("Open at login").into(), None, login, &theme)], &theme)]
+        // Refused by the system, a mark in the room before the switch,
+        // the reason in its tooltip: nothing is added under the row.
+        let refused = self.login_said.clone().map(|why| {
+            div()
+                .id("bar-login-refused")
+                .flex()
+                .items_center()
+                .managed_tooltip(move |window, cx| tip(why.clone(), window, cx))
+                .child(Icon::default().path("icons/triangle-alert.svg").with_size(px(hand(15.))).text_color(theme.warning))
+                .with_animation("bar-login-refused-in", Animation::new(crate::widgets::FOLD_ANIM).with_easing(ease_out_quint()), |d, t| d.opacity(t))
+        });
+        let login = h_flex().gap(px(10.)).items_center().children(refused).child(login).into_any_element();
+        // Shortcut's line is there in every state, one line: what the
+        // shortcut does, or, in the danger's ink, why keys were refused.
+        let (words, ink): (SharedString, Hsla) = match self.record_said.clone() {
+            Some(why) => (why, theme.danger),
+            None => (t("Opens and closes the note from any app.").into(), theme.muted_foreground),
+        };
+        let shortcut_line = div().h(px(hand(15.))).text_size(px(hand(11.5))).line_height(px(hand(15.))).text_color(ink).whitespace_nowrap().overflow_hidden().text_ellipsis().child(words);
+        let shortcut = line_of(t("Shortcut").into(), Some(shortcut_line.into_any_element()), self.shortcut_field(cx));
+        vec![group(None, None, vec![line(t("Show in menu bar").into(), None, shown, &theme), shortcut, line(t("Open at login").into(), None, login, &theme)], &theme)]
     }
 
     /// Login Items as the system has it, asked off the window's thread:
@@ -1682,6 +1743,7 @@ impl Shell {
     /// the system's answer, off the window's thread, has the last word.
     fn set_at_login(&mut self, on: bool, cx: &mut Context<Self>) {
         self.at_login = on;
+        self.login_said = None;
         cx.notify();
         let done = cx.background_spawn(async move { crate::sys::set_launch_at_login(on).map(|()| crate::sys::launches_at_login()) });
         cx.spawn(async move |this, cx| {
@@ -1691,7 +1753,7 @@ impl Shell {
                     Ok(now) => this.at_login = now,
                     Err(e) => {
                         this.at_login = !on;
-                        this.say(tf("Login Items did not take Onyx: {why}", &[("why", &e)]), cx);
+                        this.login_said = Some(tf("Login Items did not take Onyx: {why}", &[("why", &e)]).into());
                     }
                 }
                 cx.notify();

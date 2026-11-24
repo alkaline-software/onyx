@@ -1883,46 +1883,9 @@ impl Render for Embed {
             .when(tab, |d| d.child(self.sizer(cx)))
             .child(div().size_full().child(body))
             .children(head.map(|head| div().absolute().top_0().left_0().w_full().opacity(alpha).child(head)))
-            .child(corners(theme.background, CONTROL_ROUND - 1.))
+            .child(crate::widgets::round_corners(theme.background, CONTROL_ROUND - 1.))
             .into_any_element()
     }
-}
-
-/// What stands outside a frame's round corners, in the sheet's color: a
-/// view clips its children to a square, so a page that reaches the frame's
-/// edge would show past its corners. It stands inside the border, round
-/// as the border's inside is (`round`), and the border is drawn after.
-/// A card's picture is the same (`card.rs`).
-pub(crate) fn corners(sheet: Hsla, round: f32) -> impl IntoElement {
-    canvas(
-        |_, _, _| (),
-        move |b, _, window, _| {
-            let r = px(round);
-            let (x0, y0, x1, y1) = (b.left(), b.top(), b.right(), b.bottom());
-            // Each corner, and its two neighbors along the edges; the arc
-            // between them is a cubic's quarter circle.
-            const K: f32 = 0.552_284_8;
-            for (c, a, e) in [
-                (point(x0, y0), point(x0 + r, y0), point(x0, y0 + r)),
-                (point(x1, y0), point(x1 - r, y0), point(x1, y0 + r)),
-                (point(x1, y1), point(x1, y1 - r), point(x1 - r, y1)),
-                (point(x0, y1), point(x0, y1 - r), point(x0 + r, y1)),
-            ] {
-                let mut path = PathBuilder::fill();
-                path.move_to(c);
-                path.line_to(a);
-                path.cubic_bezier_to(e, a + (c - a) * K, e + (c - e) * K);
-                path.close();
-                if let Ok(path) = path.build() {
-                    window.paint_path(path, sheet);
-                }
-            }
-        },
-    )
-    .absolute()
-    .top_0()
-    .left_0()
-    .size_full()
 }
 
 /// The keys a frame takes while the keyboard is in it. A frame stands

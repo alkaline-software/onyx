@@ -2415,6 +2415,10 @@ impl Render for TermPanel {
             .min_h_0()
             .relative()
             .overflow_hidden()
+            // Its ground meets the sheet's two lower corners: rounded there
+            // as the sheet is less its border, or it stood square past the
+            // curve (a clip is a rectangle).
+            .rounded_b(px(SHEET_R - 1.))
             .bg(hsla(ground))
             .cursor(pointer)
             // Files dragged in from the Finder are typed as their paths,
