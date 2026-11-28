@@ -38,6 +38,33 @@ About keeping Onyx fast and light: how an optimization pass is done, the rules p
 
 Newest first. Each entry: the version and date, the commits covered, what was looked at, what was found and done with numbers, what was looked at and left as it is, and what was left for later.
 
+### v0.6.1, 2026-11-28
+
+Covers `cb612cf` to the commit that adds this entry. The entries since v0.6.0 had looked at all that `cb612cf` holds, so this pass took up what they left for later, and the one change since: the source pane put away with the keyboard in it, which handed the caret back to the note and moved it.
+
+| The system's keyboard asking the editor for a place (`Doc::utf16_of`, `pos_of_utf16`, `utf16_len`), the Mac's release build | Before | This pass |
+|---|---|---|
+| A note of 28 KB, 142 lines | 13.4 µs an ask | 0.42 µs |
+| A note of 1 MB, 4,037 lines | 419 µs an ask | 0.97 µs |
+
+| On the Mac, the sample vault (`ios/store/vault/Notebook`), idle from 10 seconds on, over 20 seconds | Before | This pass |
+|---|---|---|
+| A vault open, nothing open | 0.50% of a core, 136 MB, 1 wakeup | 0.35% of a core, 134 MB, 3 wakeups |
+| A note open (Ideas.md) | 0.30% of a core, 241 MB, 0 wakeups | 0.15% of a core, 240 MB, 0 wakeups |
+
+The same within what two runs of one build differ by: nothing changed runs at rest.
+
+Found and fixed:
+- Each ask of the system's keyboard (the text around the caret, the selection, the note's length, many a key and more for a Chinese one) counted the note in UTF-16 from its first line, encoding every line again. Each line's count is kept with the lines (`Doc::units`), made as the text is read and changed with it in the one place lines change (`Doc::splice`), so an ask sums numbers. A test holds every place's offset to the text's own count through edits, a change in many places, undo and redo; typing and the keyboard's corrections were checked in the simulator.
+- Not of speed: the note scrolled when the source pane went with the keyboard in it, a scroll figured while the note was still laid out narrow (`docs/window.md`, The source pane). Put away with the caret on a tall picture, a window 640 points high moved the note 46 points; now nothing, and a caret out of sight is still scrolled to.
+
+Looked at and left as they are:
+- The counts cost a pass over the new lines' bytes at each change, which `splice` already copies.
+
+Left for later:
+- Idle CPU and memory on the device itself: Instruments, with the person.
+- An iPad itself.
+
 ### The system's text under a finger, glass that answers a tap, 2026-11-28
 
 Covers what came after the entry below, in the same range: words selected as the system's text views select them (the hold and its loupe, the handles, the edit menu), the keyboard's corrections and capitals, Return in a field, the glass answering from a finger's landing, and the viewer side to side on a phone.

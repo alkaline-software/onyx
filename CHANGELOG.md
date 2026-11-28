@@ -1,5 +1,17 @@
 # Changelog
 
+## v0.6.1
+
+1. **Assets in Onyx's folder.** A vault's pictures and files move from `.assets` into `.onyx/assets` the first time it opens, and every link to them moves with them.
+2. **Tables of data.** A CSV, a TSV or a workbook shown whole in a note is its table, at the page's width.
+3. **iPhone and iPad.** Text is selected with the system's handles, loupe and Copy and Paste menu, the bars stand on Liquid Glass, and the keyboard corrects and capitalizes as in the system's own apps.
+
+**Fixes**
+
+- Putting the source pane away with the keyboard in it no longer moves the note.
+- A file opened from a note closes back to that note.
+- A PDF in a narrow frame keeps its sidebar.
+
 ## v0.6.0
 
 1. **Nothing moves at a press.** A press changes only what is in its own place: a control that does not apply stays where it is, dimmed, and one whose words change keeps one width, in Settings and in Export.

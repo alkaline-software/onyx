@@ -1,6 +1,6 @@
 Five days in April, when the hills behind the city turn pink and the evenings are still cool enough for a coat.
 
-![The hills at dusk](../assets/hills.png)
+![The hills at dusk](../.onyx/assets/hills.png)
 
 ## Before we go
 

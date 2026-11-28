@@ -5,7 +5,7 @@ members = ["crates/onyx-core", "crates/onyx-app"]
 exclude = ["vendor"]
 
 [workspace.package]
-version = "0.6.0"
+version = "0.6.1"
 edition = "2021"
 license = "MIT"
 

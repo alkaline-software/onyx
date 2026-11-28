@@ -395,6 +395,11 @@ pub struct Editor {
     /// the press became a selection, so a selection can begin on a link.
     pressed_link: Option<Target>,
     want_scroll: bool,
+    /// The scroll asked moves the note only when the caret is out of
+    /// sight: the keyboard handed back from the source pane as it goes,
+    /// whose first frames lay the note out still narrow, and a tall
+    /// picture under the caret moved the note at each closing.
+    scroll_if_hidden: bool,
     /// The column ↑ and ↓ keep to, in pixels from the words' left.
     preferred_x: Option<f32>,
     /// Where the element was last painted, for an input method's windows.
@@ -526,6 +531,7 @@ impl Editor {
             drag: None,
             pressed_link: None,
             want_scroll: false,
+            scroll_if_hidden: false,
             preferred_x: None,
             origin: Point::default(),
             foot: None,
@@ -972,6 +978,7 @@ impl Editor {
         self.editing = None;
         self.hold_objects();
         self.want_scroll = true;
+        self.scroll_if_hidden = true;
         window.focus(&self.focus, cx);
         cx.notify();
     }
@@ -2191,12 +2198,16 @@ impl Editor {
     /// Whether the scroller was moved.
     fn scroll_to_caret(&mut self, bounds: Bounds<Pixels>, window: &Window) -> bool {
         self.want_scroll = false;
+        let if_hidden = std::mem::take(&mut self.scroll_if_hidden);
         let spot = self.want_spot.take().and_then(|(line, y, h)| self.cache.borrow().tops.get(line).map(|top| (top + y, h)));
         let Some((y, h)) = spot.or_else(|| self.caret_at(self.sel.head).map(|at| (at.y, at.h))) else { return false };
         let view = window.content_mask().bounds;
         let caret_top = f32::from(bounds.top()) + y;
         let caret_bottom = caret_top + h;
         let (vt, vb) = (f32::from(view.top()), f32::from(view.bottom()));
+        if if_hidden && caret_bottom > vt && caret_top < vb - self.covered {
+            return false;
+        }
         let offset = self.scroll.offset();
         let mut dy = 0.;
         if caret_top < vt + SCROLL_MARGIN {

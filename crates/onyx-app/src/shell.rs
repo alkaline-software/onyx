@@ -7273,7 +7273,16 @@ impl Shell {
                         state.update(cx, |s, cx| gpui::EntityInputHandler::replace_text_in_range(s, None, &words, window, cx));
                     }
                 }
-                "source" => self.toggle_source(window, cx),
+                // In its turn, so a probe can put it away after keys.
+                "source" => {
+                    let wait = later;
+                    later += GO_STEP;
+                    cx.spawn_in(window, async move |this, cx| {
+                        cx.background_executor().timer(Duration::from_millis(wait)).await;
+                        let _ = this.update_in(cx, |s, window, cx| s.toggle_source(window, cx));
+                    })
+                    .detach();
+                }
                 // A right click in the source pane at a point of the
                 // window, as the mouse makes one.
                 s if s.starts_with("srcmenu=") => {

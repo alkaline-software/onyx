@@ -985,10 +985,10 @@ mod tests {
     #[test]
     fn a_picture_line_is_read_as_it_is_written() {
         use super::{picture_line, picture_markup, Across, Width};
-        let line = picture_markup("../.assets/a b.png", "A \"cat\"", Some(Width::Px(480)), Across::Center, false);
-        assert_eq!(line, "<p align=\"center\"><img src=\"../.assets/a%20b.png\" alt=\"A &quot;cat&quot;\" width=\"480\"></p>");
+        let line = picture_markup("../.onyx/assets/a b.png", "A \"cat\"", Some(Width::Px(480)), Across::Center, false);
+        assert_eq!(line, "<p align=\"center\"><img src=\"../.onyx/assets/a%20b.png\" alt=\"A &quot;cat&quot;\" width=\"480\"></p>");
         let p = picture_line(&line).unwrap();
-        assert_eq!((p.src.as_str(), p.width, p.across, p.embed), ("../.assets/a%20b.png", Some(Width::Px(480)), Some(Across::Center), false));
+        assert_eq!((p.src.as_str(), p.width, p.across, p.embed), ("../.onyx/assets/a%20b.png", Some(Width::Px(480)), Some(Across::Center), false));
         assert_eq!(&line[p.alt.clone()], "A &quot;cat&quot;");
         let right = picture_markup("x.pdf", "Plan", None, Across::End, true);
         assert_eq!(right, "<p align=\"right\"><embed src=\"x.pdf\" title=\"Plan\"></p>");
