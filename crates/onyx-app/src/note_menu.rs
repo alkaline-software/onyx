@@ -94,8 +94,12 @@ impl NoteMenu {
                 items.push(Entry::choice("pic-view", "icons/maximize.svg", t("View")));
                 items.push(Entry::Rule);
             }
-            rows.push(Entry::Icons { label: t("Size").into(), items: vec![Tool::new("pic-auto", "icons/image.svg", t("Original Size"), asked.is_none()), Tool::new("pic-full", "icons/picture-full.svg", t("Full Width"), full)] });
-            if !full {
+            // On a phone what a note shows is the page's width whatever the line asks (`widgets::full_width`): nothing to size or place.
+            let phone = crate::widgets::full_width();
+            if !phone {
+                rows.push(Entry::Icons { label: t("Size").into(), items: vec![Tool::new("pic-auto", "icons/image.svg", t("Original Size"), asked.is_none()), Tool::new("pic-full", "icons/picture-full.svg", t("Full Width"), full)] });
+            }
+            if !full && !phone {
                 rows.push(Entry::Icons { label: t("Align").into(), items: vec![Tool::new("pic-left", "icons/align-left.svg", t("Align Left"), across == Across::Start), Tool::new("pic-center", "icons/align-center.svg", t("Align Center"), across == Across::Center), Tool::new("pic-right", "icons/align-right.svg", t("Align Right"), across == Across::End)] });
             }
         }
@@ -275,13 +279,17 @@ pub(crate) fn layout_entries(l: &LayoutAt) -> Vec<Entry> {
     if l.preview {
         tools.push(Tool::new("layout-preview", "icons/card-preview.svg", t("Preview"), l.now == Layout::Preview));
     }
-    tools.push(Tool::new("layout-large", "icons/card-large.svg", t("Large Card"), l.now == Layout::Card(CardSize::Large)));
-    tools.push(Tool::new("layout-medium", "icons/card-medium.svg", t("Medium Card"), l.now == Layout::Card(CardSize::Medium)));
+    // A table of data shows as its table, a small card or a link: a large
+    // card's and a medium one's picture of it said nothing.
+    if !l.sheet {
+        tools.push(Tool::new("layout-large", "icons/card-large.svg", t("Large Card"), l.now == Layout::Card(CardSize::Large)));
+        tools.push(Tool::new("layout-medium", "icons/card-medium.svg", t("Medium Card"), l.now == Layout::Card(CardSize::Medium)));
+    }
     tools.push(Tool::new("layout-small", "icons/card-small.svg", t("Small Card"), l.now == Layout::Card(CardSize::Small)));
     tools.push(Tool::new("layout-link", "icons/link.svg", t("Link"), l.now == Layout::Link));
     let mut items = vec![Entry::Icons { label: t("Show As").into(), items: tools }];
     // A large card, narrower than the words, stands where it is placed.
-    if let Some(across) = l.across {
+    if let Some(across) = l.across.filter(|_| !crate::widgets::full_width()) {
         use onyx_core::html::Across;
         items.push(Entry::Icons { label: t("Align").into(), items: vec![Tool::new("layout-left", "icons/align-left.svg", t("Align Left"), across == Across::Start), Tool::new("layout-center", "icons/align-center.svg", t("Align Center"), across == Across::Center), Tool::new("layout-right", "icons/align-right.svg", t("Align Right"), across == Across::End)] });
     }

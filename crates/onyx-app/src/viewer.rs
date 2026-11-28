@@ -8,7 +8,7 @@ use std::time::{Duration, Instant};
 
 use gpui::prelude::FluentBuilder as _;
 use gpui::*;
-use gpui_component::{h_flex, ActiveTheme as _, Icon, Sizable as _};
+use gpui_component::{h_flex, ActiveTheme as _};
 
 use crate::editor::{Seen, Viewing};
 use crate::shell::Shell;
@@ -106,12 +106,17 @@ impl Shell {
         }
         let seen = v.pictures.get(v.at)?;
         // As large as the window lets it, and never past its own pixels.
+        // The viewer stands over the whole window, what the system keeps
+        // of it too; on a phone the picture spans the screen side to side
+        // between what the system keeps at the top and the foot, as the
+        // system's Photos has it, the buttons standing over it.
         let view = window.viewport_size();
         let (vw, vh) = (f32::from(view.width), f32::from(view.height));
+        let (clear, top, foot) = if crate::widgets::full_width() { (0., f32::from(self.safe.top), f32::from(self.safe.bottom)) } else { (CLEAR, CLEAR_TOP, CLEAR) };
         let (pw, ph) = (seen.size.0.max(1) as f32, seen.size.1.max(1) as f32);
-        let k = ((vw - CLEAR * 2.) / pw).min((vh - CLEAR_TOP - CLEAR) / ph).min(1.).max(0.01);
+        let k = ((vw - clear * 2.) / pw).min((vh - top - foot) / ph).min(1.).max(0.01);
         let (tw, th) = (pw * k, ph * k);
-        let (tx, ty) = ((vw - tw) / 2., CLEAR_TOP + (vh - CLEAR_TOP - CLEAR - th) / 2.);
+        let (tx, ty) = ((vw - tw) / 2., top + (vh - top - foot - th) / 2.);
         // The picture it opened on grows from the canvas and goes back
         // there; one stepped to fades in and out where it stands.
         let from_canvas = v.at == v.first;
@@ -129,20 +134,26 @@ impl Shell {
         let count = v.pictures.len();
         let at = v.at;
         let white = gpui::white();
-        let round = |id: &'static str, icon: &'static str| {
+        let controls = shown * if v.closing.is_some() { 1. } else { open };
+        // On an iPhone and an iPad each is a finger's size on dark glass
+        // (`glass.rs`), which the viewer's own fade is told to.
+        let glass = crate::glass::on();
+        let round = |id: &'static str, icon: &'static str, dim: bool| {
+            crate::glass::show(id, controls);
             div()
                 .id(id)
-                .size(px(34.))
+                .relative()
+                .size(px(if glass { 44. } else { 34. }))
                 .rounded_full()
                 .flex()
                 .items_center()
                 .justify_center()
-                .bg(white.opacity(0.12))
                 .cursor_pointer()
-                .hover(|s| s.bg(white.opacity(0.22)))
-                .child(Icon::default().path(icon).with_size(px(16.)).text_color(white))
+                .when(!glass, |d| d.bg(white.opacity(0.12)).hover(|s| s.bg(white.opacity(0.22))).when(dim, |d| d.opacity(0.35)))
+                .children(crate::glass::plate_as(id, 999., Some(true)))
+                .children(crate::widgets::press_light(999.))
+                .child(crate::glass::icon(icon, if glass { 19. } else { 16. }, white.opacity(if dim && glass { 0.35 } else { 1. })))
         };
-        let controls = shown * if v.closing.is_some() { 1. } else { open };
         Some(
             div()
                 .id("viewer")
@@ -156,6 +167,8 @@ impl Shell {
                 .inset_0()
                 .occlude()
                 .bg(black().opacity(0.86 * shown))
+                .children(crate::widgets::reaches(black().opacity(0.86 * shown)))
+                .children(crate::glass::cover_by("viewer", shown))
                 .on_click(cx.listener(|this, _, window, cx| this.close_viewer(window, cx)))
                 .child(
                     img(source)
@@ -169,7 +182,7 @@ impl Shell {
                         .object_fit(ObjectFit::Fill),
                 )
                 .child(
-                    div().absolute().top(px(14.)).right(px(16.)).opacity(controls).child(round("viewer-close", "icons/close.svg").on_click(cx.listener(|this, _, window, cx| {
+                    div().absolute().top(px(if glass { 5. } else { 14. })).right(px(if glass { 12. } else { 16. })).opacity(controls).child(round("viewer-close", "icons/close.svg", false).on_click(cx.listener(|this, _, window, cx| {
                         swallow_click(window, cx);
                         this.close_viewer(window, cx);
                     }))),
@@ -185,12 +198,12 @@ impl Shell {
                             .gap(px(14.))
                             .items_center()
                             .opacity(controls)
-                            .child(round("viewer-prev", "icons/chevron-left.svg").when(at == 0, |d| d.opacity(0.35)).on_click(cx.listener(|this, _, window, cx| {
+                            .child(round("viewer-prev", "icons/chevron-left.svg", at == 0).on_click(cx.listener(|this, _, window, cx| {
                                 swallow_click(window, cx);
                                 this.step_viewer(-1, cx);
                             })))
                             .child(div().min_w(px(56.)).text_center().text_size(px(12.5)).text_color(white.opacity(0.8)).child(format!("{} / {count}", at + 1)))
-                            .child(round("viewer-next", "icons/chevron-right.svg").when(at + 1 >= count, |d| d.opacity(0.35)).on_click(cx.listener(|this, _, window, cx| {
+                            .child(round("viewer-next", "icons/chevron-right.svg", at + 1 >= count).on_click(cx.listener(|this, _, window, cx| {
                                 swallow_click(window, cx);
                                 this.step_viewer(1, cx);
                             }))),

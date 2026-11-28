@@ -214,10 +214,10 @@ fn card<V: 'static>(m: &Menu, going: Option<Duration>, pick: std::rc::Rc<dyn Fn(
                     .flex()
                     .items_center()
                     .justify_center()
-                    .rounded(px(hand(6.)))
+                    .rounded(px(if crate::glass::on() && in_hand { 13. } else { hand(6.) }))
                     .cursor_pointer()
                     .when(tool.chosen, |d| d.bg(lit))
-                    .when(!tool.chosen, |d| d.hover(|s| s.bg(hover)))
+                    .when(!tool.chosen, |d| d.hover(|s| s.bg(hover)).children(crate::widgets::press_light(hand(6.))))
                     .child(Icon::default().path(tool.icon).with_size(px(hand(15.))).text_color(if tool.chosen { theme.primary } else { theme.muted_foreground }))
                     .managed_tooltip(move |window, cx| crate::widgets::tip(words.clone(), window, cx))
                     .when(going.is_none(), |d| {
@@ -259,7 +259,7 @@ fn card<V: 'static>(m: &Menu, going: Option<Duration>, pick: std::rc::Rc<dyn Fn(
                 .pr(px(hand(10.)))
                 .gap(px(hand(9.)))
                 .items_center()
-                .rounded(px(hand(6.)))
+                .rounded(px(if crate::glass::on() && in_hand { 13. } else { hand(6.) }))
                 .text_size(px(hand(13.)))
                 .whitespace_nowrap()
                 .text_color(if danger { theme.danger } else { theme.popover_foreground })
@@ -267,6 +267,7 @@ fn card<V: 'static>(m: &Menu, going: Option<Duration>, pick: std::rc::Rc<dyn Fn(
                 // In the dark appearance the palette's hover is a shade off
                 // the card and cannot be seen: a wash of the ink is.
                 .hover(|s| s.bg(if dark { theme.foreground.opacity(0.11) } else { theme.sidebar_accent }))
+                .children(crate::widgets::press_light(hand(6.)))
                 .map(|d| if picture { d.child(img(icon).w(px(hand(17.))).h(px(hand(12.))).flex_shrink_0()) } else { d.child(Icon::default().path(icon).with_size(px(hand(15.))).text_color(if danger { theme.danger } else { theme.muted_foreground })) })
                 .child(div().flex_1().child(label))
                 .when(chosen, |d| d.child(Icon::default().path("icons/check.svg").with_size(px(hand(14.))).text_color(theme.primary)))
@@ -282,12 +283,13 @@ fn card<V: 'static>(m: &Menu, going: Option<Duration>, pick: std::rc::Rc<dyn Fn(
     let body = v_flex()
         .when_some(m.width, |d, w| d.w(w))
         .p(px(5.))
-        .rounded(px(hand(10.)))
+        .rounded(px(if crate::glass::on() && in_hand { 18. } else { hand(10.) }))
         .border_1()
         .border_color(theme.border)
         .bg(theme.popover)
         .shadow(float_shadow(&theme))
         .occlude()
+        .children(crate::glass::cover("menu"))
         .children(rows);
     let body = match going {
         // It comes in from the side it opens toward: down, or up when it rises.
@@ -328,6 +330,6 @@ fn card<V: 'static>(m: &Menu, going: Option<Duration>, pick: std::rc::Rc<dyn Fn(
         .inset_0()
         .child(sheet)
         // Kept inside the window, so the room at its right is the room at its left.
-        .child(anchored().position(m.at).anchor(m.corner).snap_to_window_with_margin(px(8.)).child(body))
+        .child(anchored().position(m.at).anchor(m.corner).snap_to_window_with_margin(crate::widgets::float_margin(8.)).child(body))
         .into_any_element()
 }

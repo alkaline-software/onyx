@@ -63,6 +63,9 @@ pub struct UiState {
     /// Whether the menu bar note's vault was closed (Close Vault): its
     /// tree lists the vaults until one is chosen.
     pub menu_closed: bool,
+    /// Whether notes are read and not written on an iPhone and an iPad
+    /// (`Shell::reading`): every note, until it is turned off.
+    pub reading: bool,
     /// Which card the sidebar has open: `notes` or `assets`.
     #[serde(default)]
     pub side_view: Option<String>,

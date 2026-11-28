@@ -1,0 +1,8 @@
+{
+  ".": { "icon": "notebook", "color": "#3E63DD" },
+  "Journal": { "icon": "feather", "color": "#7C5CDB" },
+  "Projects": { "icon": "hammer", "color": "#EC6A2C" },
+  "Reading": { "icon": "books", "color": "#12A594" },
+  "Recipes": { "icon": "chef-hat", "color": "#D9A21B" },
+  "Travel": { "icon": "mountain", "color": "#46A758" }
+}

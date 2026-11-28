@@ -38,6 +38,11 @@ impl AssetSource for Assets {
         if let Some(f) = Own::get(path) {
             return Ok(Some(f.data));
         }
+        // A file icon at a size of its own (`file_icons::picture`).
+        if let Some((base, points)) = path.rsplit_once('@').filter(|(b, _)| b.starts_with(crate::file_icons::PREFIX)) {
+            let sized = points.parse().ok().zip(Own::get(base)).and_then(|(points, f)| crate::file_icons::sized_svg(&f.data, points));
+            return Ok(sized.map(Cow::Owned));
+        }
         gpui_component_assets::Assets.load(path)
     }
 

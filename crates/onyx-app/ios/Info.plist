@@ -39,6 +39,9 @@
   <dict>
     <key>UIColorName</key><string>LaunchGround</string>
   </dict>
+  <!-- An iPhone's screen at its own pace, 120 frames a second where it has
+       them: without this the system holds an app's frames to 60. -->
+  <key>CADisableMinimumFrameDurationOnPhone</key><true/>
   <key>UISupportedInterfaceOrientations</key>
   <array>
     <string>UIInterfaceOrientationPortrait</string>

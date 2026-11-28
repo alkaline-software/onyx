@@ -34,6 +34,7 @@ pub(crate) fn vault_tile(id: ElementId, p: &std::path::Path, theme: &gpui_compon
     tile(id, theme)
         .text_size(px(14.))
         .hover(move |s| s.bg(lit))
+        .children(crate::widgets::press_light(12.))
         .child(badge)
         .child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::SEMIBOLD).text_color(theme.foreground).child(name))
 }
@@ -43,6 +44,7 @@ pub(crate) fn new_vault_tile(id: &'static str, theme: &gpui_component::Theme) ->
     let lit = theme.foreground.opacity(if theme.mode.is_dark() { 0.09 } else { 0.06 });
     tile(id.into(), theme)
         .hover(move |s| s.bg(lit))
+        .children(crate::widgets::press_light(12.))
         .child(div().size(px(28.)).flex_shrink_0().rounded(px(8.4)).bg(theme.foreground.opacity(0.06)).flex().items_center().justify_center().child(Icon::default().path("icons/plus.svg").with_size(px(15.)).text_color(theme.muted_foreground)))
         .child(div().flex_1().min_w_0().truncate().text_color(theme.muted_foreground).child(t("New Vault…")))
 }
@@ -141,7 +143,7 @@ impl Shell {
             .relative()
             .size_full()
             .child(
-                div().id("place-page").size_full().overflow_y_scroll().track_scroll(&self.place_page_scroll).child(
+                div().id("place-page").size_full().relative().top(self.scrollers.stretch_of(&self.place_page_scroll)).overflow_y_scroll().track_scroll(&self.place_page_scroll).child(
                     v_flex()
                         .min_h_full()
                         .items_center()
@@ -206,6 +208,7 @@ impl Shell {
                     .text_size(px(hand(14.)))
                     .cursor_pointer()
                     .hover(move |s| s.bg(hover))
+                    .children(crate::widgets::press_light(10.))
                     .on_mouse_down(MouseButton::Right, cx.listener({
                         let p = p.clone();
                         move |this, ev: &MouseDownEvent, window, cx| {
@@ -245,7 +248,7 @@ impl Shell {
             .relative()
             .flex_1()
             .min_h_0()
-            .child(v_flex().id("place-list").size_full().px(px(8.)).pt(px(LIST_TOP)).pb(px(12.)).gap(px(6.)).overflow_y_scroll().track_scroll(&self.place_scroll).children(rows))
+            .child(v_flex().id("place-list").size_full().px(px(8.)).pt(px(LIST_TOP)).pb(px(12.)).gap(px(6.)).relative().top(self.scrollers.stretch_of(&self.place_scroll)).overflow_y_scroll().track_scroll(&self.place_scroll).children(rows))
             .child(edge_fade(&self.place_scroll, ground, true, px(0.)))
             .child(edge_fade(&self.place_scroll, ground, false, px(9.)))
             .vertical_scrollbar(&self.place_scroll);

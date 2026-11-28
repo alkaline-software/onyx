@@ -257,9 +257,9 @@ mod tests {
     #[test]
     fn a_path_goes_to_the_view_and_back_the_same() {
         let file = if cfg!(target_os = "windows") {
-            Path::new(r"C:\Users\a\Vault\.assets\旅行 video (1).mp4")
+            Path::new(r"C:\Users\a\Vault\.onyx\assets\旅行 video (1).mp4")
         } else {
-            Path::new("/Users/a/Vault/.assets/旅行 video (1).mp4")
+            Path::new("/Users/a/Vault/.onyx/assets/旅行 video (1).mp4")
         };
         let url = url_of(file);
         let path = url.split("localhost").nth(1).unwrap();

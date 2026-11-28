@@ -9,6 +9,8 @@ About keeping Onyx fast and light: how an optimization pass is done, the rules p
 - **Measured before and after,** the same way both times, and the numbers go in the log. A release build of the commit before the pass is kept beside the new one, and both run on the same scratch vault (`docs/probing.md`). The first guess is often wrong: this pass's first measure blamed the layout for a note idling at 23% CPU, and it was the first grammar check of that note.
 - **Incremental.** A pass starts from the log's last entry and looks only at what changed since the commit that entry names (`git diff <commit>..`), plus what an entry left for later. A pass that is not logged did not happen as far as the next one knows.
 - **Nothing slow is asked while a frame is built,** and that includes what a row asks for: a row's call runs once a row a frame, and the window is drawn at every frame of a motion, every key and every blink of a caret. No disk read, `Config::load`, `read_dir`, `is_dir`, JSON parse or copy of a list or of a note's text in `render` or in a row.
+- **A frame's time is taken to the window's thread free, not to its paint's end** (`stamp … turn ends` after `shell render begins`, `docs/probing.md`): on an iPhone a frame whose work took 1.5 ms slept another 6.5 waiting for its drawable, and only the turn's end showed it. The window is paced by a link that brings the drawable with the frame (`vendor/gpui_ios/UPSTREAM.md`).
+- **Nothing on the window's thread reads a file whose contents are not on the device** (`vault::at_hand`, one `lstat`). A file in iCloud may be here by its name alone, and its first read waits for the network: a second and more on an iPhone for a note of a few lines. A vault is asked for whole as it is shown (`sys::bring_vault`), and what is pressed or laid out before it has come is waited for off the thread (`Shell::await_note`, `Pictures::waiting`). A Mac keeps its files, so only a device shows it (`docs/platform.md`, On a device).
 - **A lookup made at every frame is answered from memory,** looked at on the disk again no more often than every half second for another process's write, and at once after Onyx's own: the container's vaults (`library::vault_list`, `container_now`, cleared by `forget_vaults`), a vault's folder looks (`folder_look::ensure`, `LOOK_AGAIN`), the person's picture (`Shell::avatar_files`), the folder sheet's own colors (`Picker::own_colors`).
 - **A layout asked for again is answered from what it was.** gpui asks for the editor's layout several times a frame, and once with no width. The editor keeps the key of everything its layout reads (`Editor::layout_inputs`: the text's revision, which no other text in the run has had, its reading, the look, the theme's inks, the width, the mode, the selection while its marks show, the check's marks, the drags, the pictures and frames known) and returns at once when it is unchanged; asked with no width, the last width answers. A line's row is keyed by what it is made of in its own bytes, never by the whole text's offsets, and where lines came or went its row and a code block's colors are found by key, not by index. One layout is kept, so the editor is asked for one width a frame: a box that holds it is given a width within its room (`Shell::sheet_w`), never one over it for `max_w_full` to cut, which lays what is in the box out at the width asked and again at the width cut to, each layout taking the other's place.
 - **A picture is read at the size it is drawn,** by the system where it can (`sys::picture_at_most`: ImageIO on a Mac, which reads a JPEG or HEIC from its smaller scales of itself), and two at a time (`layout::DECODING`). A photo of 6000 × 6000 decoded whole is 145 MB, and the allocator keeps what it freed: a vault's assets read at once at launch held 2.1 GB for as long as the app ran. A thumbnail is made only while it can be seen (the Assets card open).
@@ -26,7 +28,7 @@ About keeping Onyx fast and light: how an optimization pass is done, the rules p
 1. Read the log's last entry: the commit it covers to, and what it left.
 2. List what is new since (`git log`, `git diff` from that commit): the files, and the parts of the window they draw.
 3. Find the hot paths in what is new: what `render` and each row call (a disk read, a system call, a lock, a copy of a list or a text, a parse, text shaped); clocks and timers (does anything wake while nothing moves, or while the window is behind another app's or closed); the main thread (does it wait); loops off it (how often they turn, what each turn costs); what grows with use (memory, pictures on the GPU, a list drawn whole, maps never pruned).
-4. Time each suspect as it is now, in a release build on a scratch vault: CPU over 20 seconds from the process's CPU time (`ps -o time=`), memory from `footprint`, wakeups from `top -stats idlew`; a frame's parts with `ONYX_TRACE=1`; where the time goes with `sample` on the dev build, which keeps its symbols.
+4. Time each suspect as it is now, in a release build on a scratch vault (on an iPhone, the release build put on the device with `ONYX_TRACE=1` and `--log`, its steps sent by `ONYX_GO`, `docs/probing.md`: a simulator runs on the Mac's processor and the Mac's files and says nothing of either): CPU over 20 seconds from the process's CPU time (`ps -o time=`), memory from `footprint`, wakeups from `top -stats idlew`; a frame's parts with `ONYX_TRACE=1`; where the time goes with `sample` on the dev build, which keeps its symbols.
 5. Fix the cause, in the place every caller goes through.
 6. Time it again, the same way.
 7. Check that nothing is lost: `cargo test -p onyx-core -p onyx-app`, and a probe copy of each part changed, in each state it has (`docs/probing.md`).
@@ -35,6 +37,148 @@ About keeping Onyx fast and light: how an optimization pass is done, the rules p
 ## Log
 
 Newest first. Each entry: the version and date, the commits covered, what was looked at, what was found and done with numbers, what was looked at and left as it is, and what was left for later.
+
+### The system's text under a finger, glass that answers a tap, 2026-11-28
+
+Covers what came after the entry below, in the same range: words selected as the system's text views select them (the hold and its loupe, the handles, the edit menu), the keyboard's corrections and capitals, Return in a field, the glass answering from a finger's landing, and the viewer side to side on a phone.
+
+| On the Mac, the scratch vault's long note open | This pass |
+|---|---|
+| Idle, over 20 seconds | 0.25% of a core, 326 MB |
+
+Nothing of this runs on a Mac: the editor's finger, its handles and its menu are behind `cfg!(target_os = "ios")`, the glass is not drawn there, and the toolkit's keyboard aids are read only by gpui's iPhone and iPad backend. The figure is for the next pass to compare with; the note is not the one the entry below measured.
+
+Looked at and left as they are:
+- At each frame an editor with the keyboard asks where its menu stands (`settle_menu`): nothing while no menu is asked for or showing, and two of the caret's places, already laid out, while one is; UIKit is told only when the place moved.
+- The handles are drawn from the same two places, only while there is a selection in the words that have the keyboard.
+- The finger's two listeners are laid with the editor's others at each paint and do nothing until a hold or a landing on a handle.
+- A plate and the icon under a finger are told to UIKit once as the press begins and once as it ends.
+- The keyboard leaving with a phone's search or find bar: the field is told to let it go once, as its plate goes, a message to UIKit and no clock.
+
+### One Onyx folder, a table of data as its table, find on a phone's page, 2026-11-28
+
+Covers what came after the entry below, in the same range (`523e55e` to the commit that adds it): the assets moved into `.onyx/assets` with every link, a table of data shown as its table, the bar's pencil gone, a PDF's sidebar in a narrow frame, a file icon drawn at its size, the phone's find and search over the page, an asset that closes back to its note, and the sidebar's button freed of a pull left set.
+
+| On the Mac | The entry below | This pass |
+|---|---|---|
+| A vault open, nothing open | 0.20% of a core, 133 MB | 0.20% of a core, 133 MB |
+| A note open | 0.30% of a core, 259 MB | 0.20% of a core, 257 MB |
+
+The entry below's build was run beside this one; the two are the same within what two runs differ by.
+
+Looked at and left as they are:
+- The move into `.onyx/assets` runs only where `.assets` is (one look at the folder as a vault opens, and a prefix test of each path the watcher sends); off the window's thread, it reads only the notes on the device whose words name `.assets`, and writes only those whose links change.
+- A table of data's frame lays its words out again only when its width or the room changes: at the room once, to learn its width, and at its own where that differs. `Editor::widest_table` is one pass over the rows then.
+- A file icon drawn at its size is a path with the size after it (`file_icons::picture`); gpui reads and keeps each once, as it kept the one size before, now one for each step of 8 points an icon is drawn at (16, 24 and 72 in use). The file is rewritten as it is read, once.
+- The find's layer over the page is one element with a press listener while the find shows; the search's ground is drawn only once words are typed.
+
+Left for later:
+- What the entry below left: the keyboard's asks on a long note, idle CPU and memory on the device, an iPad itself.
+
+### Safari's bars, glass in motion, a table past its room, 2026-11-28
+
+Covers what came after the entry below, in the same range (`523e55e` to the commit that adds it): a phone's search and find on glass with the system's own field, the glass's motion and its stacking, a pull past a scroller's end, a link's sheet, Settings on a phone and its picture and name, a close button on the title row, the page under the keyboard, what a note embeds at the page's width on a phone, a table's columns and a table wider than its room, and a note changed on another device followed while it is open. On the iPhone 17 Pro the test note of pieces was scrolled with five pans; the Mac idled as before.
+
+| On the iPhone | The entry below | This pass |
+|---|---|---|
+| A frame of the note of pieces scrolling, from the window's render to its thread free | 1.8 to 2.6 ms | 1.8 ms, 2.4 ms at the 90th frame in a hundred, 3.6 ms at the 99th, 6.6 ms at most (1,268 frames) |
+| Frames a second while it scrolls | 120 | 110 to 120 |
+
+| On the Mac | The entry below | This pass |
+|---|---|---|
+| A vault open, nothing open | 0.30% of a core, 132 MB | 0.25% of a core, 133 MB |
+| A note open | 0.20% of a core, 255 MB | 0.25% of a core, 257 MB |
+
+The same within what two runs of one build differ by (the entry below's build, run beside this one: 0.30% and 0.25%).
+
+Found and fixed:
+- The glass's views are stacked as gpui painted their plates (`STACK`); the order is compared with the last one told without making a list at each frame, and told only when it changes.
+
+Looked at and left as they are:
+- A plate lays a hitbox and reads it at paint for a press (`glass::plate_as`), as `press_light` does; the system is told only when a plate's press changes, and its spring is UIKit's own.
+- A scroller's stretch is one lookup a frame for each scroller that can stretch (`Scrollers::stretch_of`), by its size and left; frames are asked only while a stretch comes back.
+- A table wider than its room names itself to the router once a frame while it is in view, a rectangle and a small closure, and lays two gradients at most; its move sets one number (`Grid::shift`) and lays nothing out again.
+- A table's columns ask nothing new of the text system: the leasts are the same measures, kept with the grid, made again only when what the grid is keyed by changes (now with `full_width` among it).
+- iCloud's query runs while the app runs and wakes only on a change of the container, at most every half second (`setNotificationBatchingInterval`); its first answer is a walk of the container's items once (74 in the test vaults), on the main thread, within a millisecond of the trace. A file landed has the vault listed again once (`vault::look_again`), as coming back to the front does.
+- The name shared with the phone is written on a thread of its own at launch and when it changes, only when it differs; the phone reads it once at launch on the container's thread.
+- The system's field of a search sends its words over a channel at each change; the search itself is what it was.
+
+Left for later:
+- What the entry below left: the keyboard's asks on a long note, idle CPU and memory on the device, an iPad itself.
+
+### Under a finger, 2026-11-28
+
+Covers what came after the entry below, in the same range (`523e55e` to the commit that adds both): a press that rolls or lands on a fling, the system's viewer for a file, a file's bar and a frame's scroll under a finger, Liquid Glass for what floats (`glass.rs`), and where the keyboard goes. On the iPhone 17 Pro, the release build with `ONYX_TRACE=1` and its log, four flicks sent by `ONYX_GO` over a note of every kind of piece (four pictures, two PDFs in frames, a Word file and a table in frames, eight cards; `open=` finds it) and over the vault's largest note of words alone (16 KB). On the Mac, the release build of the entry below against this pass's, each a probe copy with a scratch home on the sample vault, idle from 10 seconds on, over 20 seconds.
+
+| On the iPhone | Before | This pass |
+|---|---|---|
+| A frame of the note of pieces scrolling, from the window's render to its thread free | 8.1 ms of the frame's 8.3 in two launches of three, every frame of the run; 1.5 to 2.1 ms in the third | 1.8 to 2.6 ms in two launches of two |
+| The same, the note of words alone | 1.4 ms, and 8.3 ms at the 90th frame in a hundred in the entry below's runs | 1.8 ms, 2.5 ms at the 90th in a hundred, 3.4 ms at the 99th |
+| The frames of a launch | up to 8.1 ms each | 0.5 ms |
+| Frames a second while a note scrolls, and at rest | 120, 0 | 120, 0 |
+
+| On the Mac | The entry below | This pass |
+|---|---|---|
+| A vault open, nothing open | 0.30% of a core, 133 MB | 0.30% of a core, 132 MB |
+| A note open | 0.30% of a core, 257 MB | 0.20% of a core, 255 MB |
+| Idle wakeups in 20 seconds: the vault, the note | 0, 1 | 2, 4 |
+
+The same within what two runs of one build differ by.
+
+Found and fixed:
+- A frame slept on the window's thread for the rest of its interval once one frame had fallen behind, and from the first frame of some launches: gpui's backend took each frame's drawable from the layer (`nextDrawable`), which waits for the compositor to let one go, so a frame that took 1.5 ms held the thread for 8.1 and a finger's touch waited as long to be heard. It was there in the entry below's runs too (its 90th frame in a hundred), read then as the probe's own steps. Each window has a `CAMetalDisplayLink` of its own, which brings the drawable with the frame and pauses while nothing is drawn (`vendor/gpui_ios/UPSTREAM.md`, 5). The first guess was the new glass, then the note's pictures: a stamp each side of the frame's end (`glass flush`) showed the wait was between the note's paint and the frame's end, inside the draw, and a plain note in the same state showed the same.
+
+Looked at and left as they are:
+- The glass's plates are told to the system once a frame, after it is drawn (`glass::flush`): four plates in a note's page at most, each compared with what it was told last, so a frame in which none moved tells UIKit nothing; 0.1 ms in the trace between `glass flush` and `glass told`. An icon is drawn to a picture once and kept. Off an iPhone and an iPad nothing is named and nothing flushed.
+- Where a finger's presses can land is kept for a frame (`widgets::pressed_at`): a list cleared as the frame begins and a rectangle pushed by each `press_light`, on an iPhone and an iPad alone.
+- A finger's pan is followed by one small struct, at its events (`Shell::finger_pan`); the router's fixed places are two rectangles asked when a gesture begins.
+- Where the keyboard was (`note_keys`) asks the shown note's two focus handles once a frame.
+- A frame's bar kept in sight under a finger is one subtraction a frame for each frame laid out (`frames_in_view`).
+- The system's viewer is made when a file is opened and let go by the system when it is closed.
+
+Left for later:
+- What the entry below left: the keyboard's asks on a long note, idle CPU and memory on the device, an iPad itself.
+- The display link's own pauses and wakes on the device, counted (`setPaused`): read from the code, one of each for a stretch of frames.
+
+### An iPhone in the hand, 2026-11-27
+
+Covers `523e55e` (v0.6.0) to the commit that adds this entry: the first pass measured on a device, an iPhone 17 Pro with the release build (`scripts/ios-app.sh --device`), `ONYX_TRACE=1` and its log, the steps sent by `ONYX_GO` on the test vault kept in Onyx's iCloud container (28 notes, 43 files, the largest note 28 KB). The person had found the app slow in the hand. On the Mac, release builds of v0.6.0 and of this pass, each a probe copy with a scratch home on the sample vault, idle from 10 seconds on, over 20 seconds.
+
+| On the iPhone | Before | This pass |
+|---|---|---|
+| A note not opened on that phone before, from the press to its words | 1.0 to 1.6 s for the read alone, five notes in a row; 2.3 s for one of 270 bytes | 4 ms the read, the page drawn in the next frame |
+| A note that embeds two PDFs, laid out the first time | 2.3 s (1.3 s and 1.0 s, a line each) | the files were at hand by then: under 20 ms |
+| A note scrolling, the gap between frames | 16.7 ms (60 a second) | 8.3 ms (120 a second) |
+| A frame of that scroll, from the window's render to its thread free | 1.0 ms | 1.0 to 1.4 ms |
+| A key typed, to the text changed | 0.1 to 0.2 ms | the same |
+| A press on a list flicked to its end | nothing for as long as the fling's count ran, a second and more | at once |
+
+| On the Mac | v0.6.0 | This pass |
+|---|---|---|
+| A vault open, nothing open | 0.45% of a core, 134 MB | 0.45% of a core, 134 MB |
+| A note open | 0.45% of a core, 258 MB | 0.45% of a core, 258 MB |
+| Idle wakeups in 20 seconds: the vault, the note | 2, 1 | 0, 1 |
+
+Found and fixed:
+- Every file of a vault made on the Mac was on the phone by its name alone until it was first read, and each first read waited for iCloud on the window's thread: the note pressed (`vault::read` in `open_note`), and in the layout a PDF's sizes and a picture's header (`Pictures::size_of`). The whole window stood still for each. 23 of the vault's 43 files were so at that launch. A vault is asked of iCloud whole as it is shown and as the app comes forward (`sys::bring_vault`); a note not at hand is read on a thread of its own and opens when it has come (`Shell::await_note`); a size is not read until the file is here (`Pictures::waiting`, looked at twice a second while any is waited for); a vault's folder looks the same (`folder_look::ensure`). The first measure blamed the layout's fonts, since the two stalls were a second each and a second run of the same note took 3 ms: the file had come by then.
+- gpui's display link asked for 60 frames a second on a screen that draws 120 (`vendor/gpui_ios/UPSTREAM.md`). `CADisableMinimumFrameDurationOnPhone` alone changed nothing; the link's own range did.
+- A fling that reached its scroller's end went on counting, and the touch after it was read as stopping the fling, not as a tap (`Shell::end_fling`, `Scrollers::spent`).
+- Nothing under a finger answered until the finger lifted (`widgets::press_light`): not time lost, but what made every press feel late.
+- The edge swipe's steps after the first were lost and the window took no press after (`docs/window.md`, A compact window): a bug, found by the person, which a probe that sent the steps in one frame did not show.
+
+Looked at and left as they are:
+- `sys::bring_vault` walks the vault with a `lstat` a file each time the app comes to the front, on a thread of its own, one walk at a time: 43 files here, and nothing asked of the network when all are at hand.
+- `vault::at_hand` at a note's opening and at a picture's first sizing: one `lstat` each, at an event and not at a frame; `folder_look::ensure` asks it only when the file's date has changed.
+- The light under a finger is one canvas and one hitbox in each thing a finger presses, on an iPhone and an iPad only (`press_light` gives nothing elsewhere); the rest of a press is a flag of the thread set a frame.
+- A finger's scroll sends the pointer off the window at each of its events (`finger_done`): one hit test, deferred.
+- The bar over the keyboard is built only while the keyboard is in a note's words; whether it is asks the note's editor two things a frame.
+- The first frame of the drawer coming out is 50 ms on the phone (its rows' words and icons drawn for the first time), once a launch. Drawing it out of sight at launch would move the cost to where nobody waits; not done.
+- The display link fires at the screen's pace whether or not a frame is wanted, as upstream's did at 60: gpui draws nothing on a tick with nothing changed.
+
+Left for later:
+- What the system's keyboard asks of the editor (`text_for_range`, `selected_text_range`, `text_length_utf16`) walks the note from its start at each ask (`Doc::utf16_of`, `pos_of_utf16`, `utf16_len`): some tens of microseconds for a note of 28 KB, and a keyboard asks many times a key, a Chinese one more. Counted by `trace asks`, not yet timed with a real keyboard on a long note; a count of UTF-16 units a line, kept with the text, would answer in the line's own length.
+- Idle CPU and memory on the device itself, which `ps` and `footprint` do not reach: Instruments, with the person.
+- An iPad itself.
 
 ### v0.6.0, 2026-11-24
 

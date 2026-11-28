@@ -2878,5 +2878,77 @@
     "fr": "Ouvre et ferme la note depuis n’importe quelle app.",
     "de": "Öffnet und schließt die Notiz aus jeder App.",
     "es": "Abre y cierra la nota desde cualquier app."
+  },
+  "Reading Mode": {
+    "zh-Hans": "阅读模式",
+    "zh-Hant": "閱讀模式",
+    "ja": "閲覧モード",
+    "ko": "읽기 모드",
+    "fr": "Mode lecture",
+    "de": "Lesemodus",
+    "es": "Modo de lectura"
+  },
+  "Save": {
+    "zh-Hans": "保存",
+    "zh-Hant": "儲存",
+    "ja": "保存",
+    "ko": "저장",
+    "fr": "Enregistrer",
+    "de": "Sichern",
+    "es": "Guardar"
+  },
+  "Add Link": {
+    "zh-Hans": "添加链接",
+    "zh-Hant": "加入連結",
+    "ja": "リンクを追加",
+    "ko": "링크 추가",
+    "fr": "Ajouter un lien",
+    "de": "Link hinzufügen",
+    "es": "Añadir enlace"
+  },
+  "↩ to save, Esc to cancel": {
+    "zh-Hans": "↩ 保存，Esc 取消",
+    "zh-Hant": "↩ 儲存，Esc 取消",
+    "ja": "↩ で保存、Esc でキャンセル",
+    "ko": "↩ 저장, Esc 취소",
+    "fr": "↩ pour enregistrer, Échap pour annuler",
+    "de": "↩ zum Sichern, Esc zum Abbrechen",
+    "es": "↩ para guardar, Esc para cancelar"
+  },
+  "Display Text": {
+    "zh-Hans": "显示文本",
+    "zh-Hant": "顯示文字",
+    "ja": "表示テキスト",
+    "ko": "표시 텍스트",
+    "fr": "Texte affiché",
+    "de": "Angezeigter Text",
+    "es": "Texto visible"
+  },
+  "The assets could not be moved into .onyx: {why}": {
+    "zh-Hans": "<e8><b5><84><e6><ba><90><e6><9c><aa><e8><83><bd><e7><a7><bb><e5><85><a5> .onyx<ef><bc><9a>{why}",
+    "zh-Hant": "<e8><b3><87><e6><ba><90><e6><9c><aa><e8><83><bd><e7><a7><bb><e5><85><a5> .onyx<ef><bc><9a>{why}",
+    "ja": "<e3><82><a2><e3><82><bb><e3><83><83><e3><83><88><e3><82><92> .onyx <e3><81><ab><e7><a7><bb><e5><8b><95><e3><81><a7><e3><81><8d><e3><81><be><e3><81><9b><e3><82><93><e3><81><a7><e3><81><97><e3><81><9f>: {why}",
+    "ko": "<ec><97><90><ec><85><8b><ec><9d><84> .onyx<eb><a1><9c> <ec><98><ae><ea><b8><b0><ec><a7><80> <eb><aa><bb><ed><96><88><ec><8a><b5><eb><8b><88><eb><8b><a4>: {why}",
+    "fr": "Les ressources n<e2><80><99>ont pas pu <c3><aa>tre d<c3><a9>plac<c3><a9>es dans .onyx : {why}",
+    "de": "Die Assets konnten nicht nach .onyx verschoben werden: {why}",
+    "es": "No se pudieron mover los recursos a .onyx: {why}"
+  },
+  "Select": {
+    "zh-Hans": "<e9><80><89><e6><8b><a9>",
+    "zh-Hant": "<e9><81><b8><e5><8f><96>",
+    "ja": "<e9><81><b8><e6><8a><9e>",
+    "ko": "<ec><84><a0><ed><83><9d>",
+    "fr": "S<c3><a9>lectionner",
+    "de": "Ausw<c3><a4>hlen",
+    "es": "Seleccionar"
+  },
+  "Close": {
+    "zh-Hans": "<e5><85><b3><e9><97><ad>",
+    "zh-Hant": "<e9><97><9c><e9><96><89>",
+    "ja": "<e9><96><89><e3><81><98><e3><82><8b>",
+    "ko": "<eb><8b><ab><ea><b8><b0>",
+    "fr": "Fermer",
+    "de": "Schlie<c3><9f>en",
+    "es": "Cerrar"
   }
 }

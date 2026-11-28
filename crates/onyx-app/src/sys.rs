@@ -10,10 +10,94 @@ mod hotkeys;
 mod keys;
 #[cfg(target_os = "macos")]
 mod status_item;
+#[cfg(target_os = "ios")]
+mod text_touch;
+
+/// A choice of the edit menu a finger's selection brings (`edit_menu`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum EditChoice {
+    Cut,
+    Copy,
+    Paste,
+    Select,
+    SelectAll,
+}
+
+impl EditChoice {
+    #[cfg_attr(not(target_os = "ios"), allow(dead_code))]
+    pub fn word(self) -> &'static str {
+        match self {
+            EditChoice::Cut => phrase("Cut"),
+            EditChoice::Copy => phrase("Copy"),
+            EditChoice::Paste => phrase("Paste"),
+            EditChoice::Select => phrase("Select"),
+            EditChoice::SelectAll => phrase("Select All"),
+        }
+    }
+}
+
+/// The system's edit menu over a selection or a caret on an iPhone and an
+/// iPad, as its own text views have it (`sys/text_touch.rs`): shown over
+/// `at` with these choices, which come back through `listen_edit_menu`.
+/// Nowhere else, where a right click has the app's own menu.
+#[cfg(target_os = "ios")]
+pub fn edit_menu(window: &gpui::Window, at: gpui::Bounds<gpui::Pixels>, choices: Vec<EditChoice>) {
+    text_touch::show(window, at, choices);
+}
+#[cfg(not(target_os = "ios"))]
+pub fn edit_menu(_: &gpui::Window, _: gpui::Bounds<gpui::Pixels>, _: Vec<EditChoice>) {}
+
+/// The edit menu, while it shows, stands over `at` now (a scroll moved
+/// what it was over).
+#[cfg(target_os = "ios")]
+pub fn edit_menu_follow(at: gpui::Bounds<gpui::Pixels>) {
+    text_touch::follow(at);
+}
+#[cfg(not(target_os = "ios"))]
+pub fn edit_menu_follow(_: gpui::Bounds<gpui::Pixels>) {}
+
+/// The edit menu put away.
+#[cfg(target_os = "ios")]
+pub fn edit_menu_hide() {
+    text_touch::hide();
+}
+#[cfg(not(target_os = "ios"))]
+pub fn edit_menu_hide() {}
+
+/// Whether the edit menu shows.
+#[cfg(target_os = "ios")]
+pub fn edit_menu_shown() -> bool {
+    text_touch::shown()
+}
+#[cfg(not(target_os = "ios"))]
+pub fn edit_menu_shown() -> bool {
+    false
+}
+
+/// Where the edit menu's choices go: one listener, the main window's.
+#[cfg(target_os = "ios")]
+pub fn listen_edit_menu() -> Option<futures::channel::mpsc::UnboundedReceiver<EditChoice>> {
+    Some(text_touch::listen())
+}
+#[cfg(not(target_os = "ios"))]
+pub fn listen_edit_menu() -> Option<futures::channel::mpsc::UnboundedReceiver<EditChoice>> {
+    None
+}
+
+/// The system's loupe over a finger moving the caret or an end of the
+/// selection: at the finger, over the caret's place, or put away (`None`).
+#[cfg(target_os = "ios")]
+pub fn loupe(window: &gpui::Window, at: Option<(gpui::Point<gpui::Pixels>, gpui::Bounds<gpui::Pixels>)>) {
+    text_touch::loupe(window, at);
+}
+#[cfg(not(target_os = "ios"))]
+pub fn loupe(_: &gpui::Window, _: Option<(gpui::Point<gpui::Pixels>, gpui::Bounds<gpui::Pixels>)>) {}
 
 /// Open a file or a link with the app the system gives it. On an iPhone
-/// and an iPad only an address opens, in its app (a page in Safari): a
-/// file there is another app's only when the person shares it.
+/// and an iPad an address opens in its app (a page in Safari), and a file
+/// in the system's own viewer over the whole window (`look::show`, Quick
+/// Look: a PDF, a document, a picture, a sound), which has the way to
+/// share it with another app.
 #[cfg(not(target_os = "ios"))]
 pub fn open(target: &str) {
     let _ = opener::open(target);
@@ -23,12 +107,685 @@ pub fn open(target: &str) {
     use objc2::MainThreadMarker;
     use objc2_foundation::{NSDictionary, NSString, NSURL};
     let Some(mtm) = MainThreadMarker::new() else { return };
+    if !target.contains("://") && !target.starts_with("mailto:") {
+        look::show(std::path::Path::new(target), mtm);
+        return;
+    }
     let Some(url) = NSURL::URLWithString(&NSString::from_str(target)) else { return };
     if url.scheme().is_none() {
         return;
     }
     // SAFETY: a URL and an empty dictionary of options, on the main thread.
     unsafe { objc2_ui_kit::UIApplication::sharedApplication(mtm).openURL_options_completionHandler(&url, &NSDictionary::new(), None) };
+}
+
+/// The system's viewer for a file on an iPhone and an iPad.
+#[cfg(target_os = "ios")]
+mod look {
+    use objc2::rc::Retained;
+    use objc2::runtime::{AnyClass, AnyObject, NSObject, NSObjectProtocol};
+    use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadMarker, MainThreadOnly};
+    use objc2_foundation::{NSString, NSURL};
+
+    #[link(name = "QuickLook", kind = "framework")]
+    unsafe extern "C" {}
+
+    define_class!(
+        // What the viewer asks for its one file.
+        #[unsafe(super = NSObject)]
+        #[thread_kind = MainThreadOnly]
+        #[name = "OnyxLookSource"]
+        #[ivars = Retained<NSURL>]
+        struct Source;
+
+        unsafe impl NSObjectProtocol for Source {}
+
+        impl Source {
+            #[unsafe(method(numberOfPreviewItemsInPreviewController:))]
+            fn count(&self, _viewer: &AnyObject) -> isize {
+                1
+            }
+
+            #[unsafe(method_id(previewController:previewItemAtIndex:))]
+            fn item(&self, _viewer: &AnyObject, _at: isize) -> Retained<NSURL> {
+                self.ivars().clone()
+            }
+        }
+    );
+
+    thread_local! {
+        /// The viewer keeps its source weakly: the last one is kept here.
+        static KEPT: std::cell::RefCell<Option<Retained<Source>>> = const { std::cell::RefCell::new(None) };
+    }
+
+    /// The controller on top of the window that has the keyboard.
+    pub(super) fn top(mtm: MainThreadMarker) -> Option<Retained<AnyObject>> {
+        let app = objc2_ui_kit::UIApplication::sharedApplication(mtm);
+        // SAFETY: UIKit's own objects asked for what each has, on the main thread; a scene is asked for its key window only when it answers it (a window scene does).
+        unsafe {
+            let scenes: Retained<AnyObject> = msg_send![&*app, connectedScenes];
+            let scenes: Retained<AnyObject> = msg_send![&*scenes, allObjects];
+            let count: usize = msg_send![&*scenes, count];
+            let mut window: Option<Retained<AnyObject>> = None;
+            for i in 0..count {
+                let scene: Retained<AnyObject> = msg_send![&*scenes, objectAtIndex: i];
+                let answers: bool = msg_send![&*scene, respondsToSelector: sel!(keyWindow)];
+                if answers {
+                    window = msg_send![&*scene, keyWindow];
+                    if window.is_some() {
+                        break;
+                    }
+                }
+            }
+            let mut top: Retained<AnyObject> = msg_send![&*window?, rootViewController];
+            loop {
+                let over: Option<Retained<AnyObject>> = msg_send![&*top, presentedViewController];
+                match over {
+                    Some(over) => top = over,
+                    None => return Some(top),
+                }
+            }
+        }
+    }
+
+    pub(super) fn show(path: &std::path::Path, mtm: MainThreadMarker) {
+        let (Some(viewer), Some(top)) = (AnyClass::get(c"QLPreviewController"), top(mtm)) else { return };
+        let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+        let source = Source::alloc(mtm).set_ivars(url);
+        // SAFETY: NSObject's own init; the viewer is made, given its source (kept alive in `KEPT`), told to take the whole screen (UIModalPresentationFullScreen is 0) and shown by the controller on top, all on the main thread.
+        unsafe {
+            let source: Retained<Source> = msg_send![super(source), init];
+            let viewer: Retained<AnyObject> = msg_send![viewer, new];
+            let _: () = msg_send![&*viewer, setDataSource: &*source];
+            let _: () = msg_send![&*viewer, setModalPresentationStyle: 0isize];
+            KEPT.with(|k| *k.borrow_mut() = Some(source));
+            let _: () = msg_send![&*top, presentViewController: &*viewer, animated: true, completion: std::ptr::null::<AnyObject>()];
+        }
+    }
+}
+
+/// A picture chosen in the system's own picker of the photos, written to
+/// a file of its own (a PNG, turned as it is seen, its short side at most
+/// 1024 points): the answer is that file, or nothing when the picker is
+/// let go. The picker needs no leave to read the library: it hands over
+/// the one picture chosen. An iPhone's and an iPad's; elsewhere nothing.
+#[cfg(target_os = "ios")]
+pub fn pick_picture(to: std::path::PathBuf) -> futures::channel::oneshot::Receiver<Option<std::path::PathBuf>> {
+    let (tx, rx) = futures::channel::oneshot::channel();
+    if let Some(mtm) = objc2::MainThreadMarker::new() {
+        photos::show(to, tx, mtm);
+    }
+    rx
+}
+
+#[cfg(target_os = "ios")]
+mod photos {
+    use std::cell::RefCell;
+    use std::path::PathBuf;
+    use std::sync::Mutex;
+
+    use block2::RcBlock;
+    use futures::channel::oneshot::Sender;
+    use objc2::rc::Retained;
+    use objc2::runtime::{AnyClass, AnyObject, NSObject, NSObjectProtocol};
+    use objc2::{define_class, msg_send, DefinedClass, MainThreadMarker, MainThreadOnly};
+    use objc2_core_foundation::CGSize;
+    use objc2_foundation::{NSArray, NSError};
+    use objc2_ui_kit::UIImage;
+
+    #[link(name = "PhotosUI", kind = "framework")]
+    unsafe extern "C" {}
+
+    type Answer = (PathBuf, Sender<Option<PathBuf>>);
+
+    define_class!(
+        // Told what the picker chose.
+        #[unsafe(super = NSObject)]
+        #[thread_kind = MainThreadOnly]
+        #[name = "OnyxPhotoPicker"]
+        #[ivars = RefCell<Option<Answer>>]
+        struct Picker;
+
+        unsafe impl NSObjectProtocol for Picker {}
+
+        impl Picker {
+            #[unsafe(method(picker:didFinishPicking:))]
+            fn picked(&self, picker: &AnyObject, results: &NSArray) {
+                // SAFETY: the picker is a view controller, let go on the main thread.
+                let _: () = unsafe { msg_send![picker, dismissViewControllerAnimated: true, completion: std::ptr::null::<AnyObject>()] };
+                let Some((to, tx)) = self.ivars().borrow_mut().take() else { return };
+                let Some(first) = results.firstObject() else {
+                    let _ = tx.send(None);
+                    return;
+                };
+                let Some(image_class) = AnyClass::get(c"UIImage") else {
+                    let _ = tx.send(None);
+                    return;
+                };
+                // The answer goes once, from whichever queue the provider answers on.
+                let answer = Mutex::new(Some((to, tx)));
+                let done = RcBlock::new(move |object: *mut AnyObject, _error: *mut NSError| {
+                    let Some((to, tx)) = answer.lock().ok().and_then(|mut a| a.take()) else { return };
+                    // SAFETY: the provider hands a UIImage, as it was asked for one, or nothing.
+                    let image = unsafe { object.as_ref() }.and_then(|o| o.downcast_ref::<UIImage>());
+                    let _ = tx.send(image.is_some_and(|image| keep(image, &to)).then_some(to));
+                });
+                // SAFETY: a picker's result has an item provider, asked for a UIImage with a block that lives as long as the call needs it.
+                unsafe {
+                    let provider: Retained<AnyObject> = msg_send![&*first, itemProvider];
+                    let _: Retained<AnyObject> = msg_send![&*provider, loadObjectOfClass: image_class, completionHandler: &*done];
+                }
+            }
+        }
+    );
+
+    thread_local! {
+        static KEPT: RefCell<Option<Retained<Picker>>> = const { RefCell::new(None) };
+    }
+
+    /// The picture drawn as it is seen, its short side at most 1024
+    /// points, written as a PNG.
+    fn keep(image: &UIImage, to: &std::path::Path) -> bool {
+        // SAFETY: a picture's size, read where it was handed over.
+        let size = unsafe { image.size() };
+        let short = size.width.min(size.height).max(1.);
+        let k = (1024. / short).min(1.);
+        // SAFETY: UIKit's own drawing of a picture at a size, safe off the main thread since iOS 15.
+        let small: Option<Retained<UIImage>> = unsafe { msg_send![image, imageByPreparingThumbnailOfSize: CGSize::new(size.width * k, size.height * k)] };
+        let Some(png) = small.as_deref().unwrap_or(image).png_representation() else { return false };
+        std::fs::write(to, png.to_vec()).is_ok()
+    }
+
+    pub(super) fn show(to: PathBuf, tx: Sender<Option<PathBuf>>, mtm: MainThreadMarker) {
+        let (Some(config_class), Some(filter_class), Some(picker_class), Some(top)) = (AnyClass::get(c"PHPickerConfiguration"), AnyClass::get(c"PHPickerFilter"), AnyClass::get(c"PHPickerViewController"), super::look::top(mtm)) else {
+            let _ = tx.send(None);
+            return;
+        };
+        let delegate = Picker::alloc(mtm).set_ivars(RefCell::new(Some((to, tx))));
+        // SAFETY: PhotosUI's own classes made and set as its header has them, on the main thread; the delegate is kept in `KEPT`, as the picker keeps it weakly.
+        unsafe {
+            let delegate: Retained<Picker> = msg_send![super(delegate), init];
+            let config: Retained<AnyObject> = msg_send![config_class, new];
+            let filter: Retained<AnyObject> = msg_send![filter_class, imagesFilter];
+            let _: () = msg_send![&*config, setFilter: &*filter];
+            let _: () = msg_send![&*config, setSelectionLimit: 1isize];
+            let picker: Retained<AnyObject> = msg_send![msg_send![picker_class, alloc], initWithConfiguration: &*config];
+            let _: () = msg_send![&*picker, setDelegate: &*delegate];
+            KEPT.with(|k| *k.borrow_mut() = Some(delegate));
+            let _: () = msg_send![&*top, presentViewController: &*picker, animated: true, completion: std::ptr::null::<AnyObject>()];
+        }
+    }
+}
+
+/// The frame's plates of glass (`glass.rs`) laid over gpui's view as
+/// views of UIKit's, each with its icons: made as a plate is first named,
+/// moved and faded as the frame says, and taken away once no frame names
+/// it. On iOS 26 and later the plate is Liquid Glass (`UIGlassEffect`);
+/// before it, the system's thin material, which blurs as glass did then.
+/// Nothing elsewhere.
+#[cfg(not(target_os = "ios"))]
+pub fn glass(_window: &gpui::Window, _cx: &gpui::App, _dark: bool, _plates: &[crate::glass::Plate]) {}
+#[cfg(target_os = "ios")]
+pub fn glass(window: &gpui::Window, cx: &gpui::App, dark: bool, plates: &[crate::glass::Plate]) {
+    panes::lay(window, cx, dark, plates);
+}
+
+#[cfg(target_os = "ios")]
+mod panes {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+
+    use gpui::{Bounds, Hsla, Pixels, Point, SharedString};
+    use objc2::rc::Retained;
+    use objc2::runtime::{AnyClass, AnyObject, Bool, NSObject, NSObjectProtocol};
+    use objc2::{define_class, msg_send, sel, DefinedClass, MainThreadMarker, MainThreadOnly};
+    use objc2_core_foundation::{CGPoint, CGRect, CGSize};
+    use objc2_foundation::{NSData, NSString};
+    use objc2_ui_kit::{UIBlurEffect, UIBlurEffectStyle, UIColor, UICornerConfiguration, UICornerRadius, UIGlassEffect, UIGlassEffectStyle, UIImage, UIImageRenderingMode, UIImageView, UIUserInterfaceStyle, UIView, UIViewContentMode, UIVisualEffect, UIVisualEffectView};
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+
+    use crate::glass::{FieldEvent, Mark, Plate};
+
+    define_class!(
+        // What a field on a plate says, told to the window (`glass::field_says`).
+        #[unsafe(super = NSObject)]
+        #[thread_kind = MainThreadOnly]
+        #[name = "OnyxGlassField"]
+        #[ivars = &'static str]
+        struct FieldTarget;
+
+        unsafe impl NSObjectProtocol for FieldTarget {}
+
+        impl FieldTarget {
+            #[unsafe(method(changed:))]
+            fn changed(&self, field: &AnyObject) {
+                // SAFETY: the sender is the UITextField this target was added to.
+                let words: Option<Retained<NSString>> = unsafe { msg_send![field, text] };
+                crate::glass::field_says(FieldEvent::Changed(self.ivars(), words.map(|w| w.to_string()).unwrap_or_default()));
+            }
+
+            #[unsafe(method(textFieldShouldReturn:))]
+            fn returned(&self, _field: &AnyObject) -> Bool {
+                crate::glass::field_says(FieldEvent::Return(self.ivars()));
+                Bool::NO
+            }
+
+            #[unsafe(method(textFieldDidBeginEditing:))]
+            fn began(&self, _field: &AnyObject) {
+                crate::glass::field_says(FieldEvent::Focus(self.ivars(), true));
+            }
+
+            #[unsafe(method(textFieldDidEndEditing:))]
+            fn ended(&self, _field: &AnyObject) {
+                crate::glass::field_says(FieldEvent::Focus(self.ivars(), false));
+            }
+        }
+    );
+
+    /// A text field's input trait set: UIKit forwards these to an object of
+    /// its own, so the field itself has no method of the name for objc2's
+    /// check of a message, and the message is sent bare.
+    ///
+    /// # Safety
+    /// `view` is a UITextField and `sel` one of its traits' setters of an `NSInteger`.
+    unsafe fn trait_to(view: &UIView, sel: objc2::runtime::Sel, value: isize) {
+        let send: unsafe extern "C-unwind" fn(*const UIView, objc2::runtime::Sel, isize) = unsafe { std::mem::transmute(objc2::ffi::objc_msgSend as *const ()) };
+        unsafe { send(view, sel, value) };
+    }
+
+    /// What kind of view a sign is.
+    #[derive(PartialEq, Clone, Copy)]
+    enum Kind {
+        Picture,
+        Field,
+        Label,
+    }
+
+    fn kind_of(m: &Mark) -> Kind {
+        if m.field.is_some() {
+            Kind::Field
+        } else if m.label.is_some() {
+            Kind::Label
+        } else {
+            Kind::Picture
+        }
+    }
+
+    /// A plate's view and what it was last told, so a frame that says
+    /// the same tells the system nothing.
+    struct Pane {
+        view: Retained<UIVisualEffectView>,
+        marks: Vec<Sign>,
+        at: Option<CGRect>,
+        round: f32,
+        show: f32,
+        dark: Option<bool>,
+        pressed: bool,
+        /// When the press began, so a tap's swell is seen before it goes.
+        pressed_at: Option<std::time::Instant>,
+    }
+
+    struct Sign {
+        view: Retained<UIView>,
+        kind: Kind,
+        picture: Option<Retained<UIImageView>>,
+        target: Option<Retained<FieldTarget>>,
+        set: u64,
+        focus: u64,
+        words: Option<SharedString>,
+        icon: Option<SharedString>,
+        at: Option<CGRect>,
+        ink: Option<Hsla>,
+        round: f32,
+        show: f32,
+        pressed: bool,
+        pressed_at: Option<std::time::Instant>,
+    }
+
+    thread_local! {
+        static PANES: RefCell<HashMap<&'static str, Pane>> = RefCell::new(HashMap::new());
+        /// The plates in the order they were last stacked, as gpui painted them.
+        static STACK: RefCell<Vec<&'static str>> = const { RefCell::new(Vec::new()) };
+        /// Each icon as the system draws it, read once from its file.
+        static ICONS: RefCell<HashMap<SharedString, Option<Retained<UIImage>>>> = RefCell::new(HashMap::new());
+    }
+
+    fn rect(b: Bounds<Pixels>, from: Point<Pixels>) -> CGRect {
+        CGRect::new(CGPoint::new(f64::from(f32::from(b.origin.x - from.x)), f64::from(f32::from(b.origin.y - from.y))), CGSize::new(f64::from(f32::from(b.size.width)), f64::from(f32::from(b.size.height))))
+    }
+
+    fn color(ink: Hsla) -> Retained<UIColor> {
+        let c = gpui::Rgba::from(ink);
+        UIColor::colorWithRed_green_blue_alpha(c.r as f64, c.g as f64, c.b as f64, c.a as f64)
+    }
+
+    /// An icon of the app's as a picture the system inks itself: its
+    /// shape alone, drawn large enough for any screen.
+    fn icon(path: &SharedString, cx: &gpui::App) -> Option<Retained<UIImage>> {
+        ICONS.with(|icons| {
+            icons
+                .borrow_mut()
+                .entry(path.clone())
+                .or_insert_with(|| {
+                    let bytes = cx.asset_source().load(path).ok()??;
+                    let drawn = cx.svg_renderer().render_single_frame(&bytes, 3.).ok()?;
+                    let size = drawn.size(0);
+                    let (w, h) = (size.width.0 as u32, size.height.0 as u32);
+                    let shape: Vec<u8> = drawn.as_bytes(0)?.chunks_exact(4).flat_map(|p| [0, 0, 0, p[3]]).collect();
+                    let mut png = std::io::Cursor::new(Vec::new());
+                    image::RgbaImage::from_raw(w, h, shape)?.write_to(&mut png, image::ImageFormat::Png).ok()?;
+                    let picture = UIImage::imageWithData(&NSData::with_bytes(png.get_ref()))?;
+                    Some(picture.imageWithRenderingMode(UIImageRenderingMode::AlwaysTemplate))
+                })
+                .clone()
+        })
+    }
+
+    fn effect(mtm: MainThreadMarker, liquid: bool) -> Retained<UIVisualEffect> {
+        if liquid {
+            // The system's own glass answers a finger as its buttons' does: it
+            // swells and lights under a press, a tap as much as a hold.
+            let glass = UIGlassEffect::effectWithStyle(UIGlassEffectStyle::Regular, mtm);
+            glass.setInteractive(true);
+            Retained::into_super(glass)
+        } else {
+            Retained::into_super(UIBlurEffect::effectWithStyle(UIBlurEffectStyle::SystemThinMaterial, mtm))
+        }
+    }
+
+    /// How long a press's swell takes to come whole, in seconds: a tap's
+    /// lift waits for it.
+    const SWELL: f64 = 0.16;
+
+    /// UIKit's animation of what `change` does to views, with a spring.
+    fn spring(seconds: f64, damping: f64, change: impl Fn() + 'static, done: Option<Box<dyn Fn()>>) {
+        spring_after(0., seconds, damping, change, done);
+    }
+
+    /// `spring`, begun after `delay` seconds.
+    fn spring_after(delay: f64, seconds: f64, damping: f64, change: impl Fn() + 'static, done: Option<Box<dyn Fn()>>) {
+        let change = block2::RcBlock::new(change);
+        let done = block2::RcBlock::new(move |_: Bool| {
+            if let Some(done) = done.as_ref() {
+                done();
+            }
+        });
+        // SAFETY: UIView's class method with two blocks that live through the call (UIKit copies them); allowing presses (1 << 1) as the views move and going on from where a view is (1 << 2), on the main thread.
+        unsafe {
+            let _: () = msg_send![<UIView as objc2::ClassType>::class(), animateWithDuration: seconds, delay: delay, usingSpringWithDamping: damping, initialSpringVelocity: 0.0f64, options: 6usize, animations: &*change, completion: &*done];
+        }
+    }
+
+    fn make(host: &UIView, mtm: MainThreadMarker, liquid: bool) -> Pane {
+        // Liquid Glass comes as the system's own glass does, condensing out
+        // of nothing (its effect set in an animation); the material before
+        // it is simply there.
+        let material = (!liquid).then(|| effect(mtm, false));
+        let view = UIVisualEffectView::initWithEffect(UIVisualEffectView::alloc(mtm), material.as_deref());
+        if liquid {
+            let (glass, view) = (effect(mtm, true), view.clone());
+            spring(0.45, 0.82, move || view.setEffect(Some(&glass)), None);
+        }
+        // Presses are gpui's: the element under the plate takes them. Liquid
+        // Glass is let feel the finger, for its own swell and light; UIKit
+        // sends on a touch a view does not use to the next responder, its
+        // superview, gpui's view, so the press still reaches the element.
+        view.setUserInteractionEnabled(liquid);
+        view.contentView().setClipsToBounds(true);
+        if !liquid {
+            view.setClipsToBounds(true);
+        }
+        host.addSubview(&view);
+        Pane { view, marks: Vec::new(), at: None, round: -1., show: -1., dark: None, pressed: false, pressed_at: None }
+    }
+
+    fn sign(pane: &Pane, m: &Mark, mtm: MainThreadMarker) -> Sign {
+        let kind = kind_of(m);
+        let (view, picture, target): (Retained<UIView>, _, _) = match (kind, &m.field) {
+            (Kind::Field, Some(f)) => {
+                let target = FieldTarget::alloc(mtm).set_ivars(f.key);
+                // SAFETY: NSObject's own init, and a UITextField made and set as UIKit's header has it, on the main thread: the return key Search (6), no correction (1), no capitals (0), no spelling (1), the clear button while editing (1), its words told on each change (UIControlEventEditingChanged, 1 << 17); the target is kept with the sign.
+                unsafe {
+                    let target: Retained<FieldTarget> = msg_send![super(target), init];
+                    let class = AnyClass::get(c"UITextField").expect("UIKit's text field");
+                    let field: Retained<UIView> = msg_send![msg_send![class, alloc], initWithFrame: CGRect::ZERO];
+                    let font: Retained<AnyObject> = msg_send![AnyClass::get(c"UIFont").expect("UIKit's font"), systemFontOfSize: 17.0f64];
+                    let _: () = msg_send![&*field, setFont: &*font];
+                    trait_to(&field, sel!(setReturnKeyType:), 6);
+                    trait_to(&field, sel!(setAutocorrectionType:), 1);
+                    trait_to(&field, sel!(setAutocapitalizationType:), 0);
+                    trait_to(&field, sel!(setSpellCheckingType:), 1);
+                    let _: () = msg_send![&*field, setClearButtonMode: 1isize];
+                    let _: () = msg_send![&*field, addTarget: &*target, action: sel!(changed:), forControlEvents: 1usize << 17];
+                    let _: () = msg_send![&*field, setDelegate: &*target];
+                    (field, None, Some(target))
+                }
+            }
+            (Kind::Label, _) => {
+                // SAFETY: a UILabel made and set on the main thread, its words at the right (NSTextAlignmentRight, 2).
+                unsafe {
+                    let class = AnyClass::get(c"UILabel").expect("UIKit's label");
+                    let label: Retained<UIView> = msg_send![msg_send![class, alloc], initWithFrame: CGRect::ZERO];
+                    let font: Retained<AnyObject> = msg_send![AnyClass::get(c"UIFont").expect("UIKit's font"), monospacedDigitSystemFontOfSize: 15.0f64, weight: 0.0f64];
+                    let _: () = msg_send![&*label, setFont: &*font];
+                    let _: () = msg_send![&*label, setTextAlignment: 2isize];
+                    label.setUserInteractionEnabled(false);
+                    (label, None, None)
+                }
+            }
+            _ => {
+                let picture = UIImageView::initWithFrame(UIImageView::alloc(mtm), CGRect::ZERO);
+                picture.setContentMode(UIViewContentMode::ScaleAspectFit);
+                picture.setUserInteractionEnabled(false);
+                (Retained::into_super(picture.clone()), Some(picture), None)
+            }
+        };
+        pane.view.contentView().addSubview(&view);
+        Sign { view, kind, picture, target, set: u64::MAX, focus: 0, words: None, icon: None, at: None, ink: None, round: -1., show: -1., pressed: false, pressed_at: None }
+    }
+
+    fn tell(s: &mut Sign, m: &Mark, from: Point<Pixels>, cx: &gpui::App) {
+        let at = rect(m.at, from);
+        if s.at != Some(at) {
+            // By its bounds and center, which hold under a press's scale.
+            s.view.setBounds(CGRect::new(CGPoint::ZERO, at.size));
+            s.view.setCenter(CGPoint::new(at.origin.x + at.size.width / 2., at.origin.y + at.size.height / 2.));
+            s.at = Some(at);
+        }
+        // The icon under a finger rises a little in the glass, at once, and
+        // settles back on a spring once it has come whole.
+        if s.pressed != m.pressed {
+            s.pressed = m.pressed;
+            let held = s.pressed_at.map_or(1., |t| t.elapsed().as_secs_f64());
+            s.pressed_at = m.pressed.then(std::time::Instant::now);
+            let delay = if m.pressed { 0. } else { (SWELL - held).max(0.) };
+            let grow = if m.pressed { 1.2 } else { 1. };
+            let view = s.view.clone();
+            spring_after(delay, if m.pressed { 0.22 } else { 0.5 }, if m.pressed { 0.85 } else { 0.5 }, move || {
+                // SAFETY: a view's transform set to a scale, in UIKit's animation, on the main thread.
+                let _: () = unsafe { msg_send![&*view, setTransform: objc2_core_foundation::CGAffineTransform { a: grow, b: 0., c: 0., d: grow, tx: 0., ty: 0. }] };
+            }, None);
+        }
+        match s.kind {
+            Kind::Picture => {
+                if let Some(picture) = s.picture.as_ref().filter(|_| s.icon != m.icon || s.ink != Some(m.ink)) {
+                    match &m.icon {
+                        Some(path) => {
+                            picture.setImage(icon(path, cx).as_deref());
+                            // SAFETY: a view's own ink set to a color, on the main thread.
+                            unsafe { picture.setTintColor(Some(&color(m.ink))) };
+                            picture.setBackgroundColor(None);
+                        }
+                        None => {
+                            picture.setImage(None);
+                            picture.setBackgroundColor(Some(&color(m.ink)));
+                        }
+                    }
+                    (s.icon, s.ink) = (m.icon.clone(), Some(m.ink));
+                }
+            }
+            Kind::Field => {
+                let Some(f) = m.field.as_ref() else { return };
+                // SAFETY: the sign's view is a UITextField, told on the main thread.
+                unsafe {
+                    if s.ink != Some(m.ink) {
+                        let _: () = msg_send![&*s.view, setTextColor: &*color(m.ink)];
+                        let _: () = msg_send![&*s.view, setPlaceholder: &*NSString::from_str(&f.placeholder)];
+                        s.ink = Some(m.ink);
+                    }
+                    if s.set != f.set.0 {
+                        let _: () = msg_send![&*s.view, setText: &*NSString::from_str(&f.set.1)];
+                        s.set = f.set.0;
+                    }
+                    if s.focus != f.focus.0 {
+                        s.focus = f.focus.0;
+                        if f.focus.1 {
+                            let _: Bool = msg_send![&*s.view, becomeFirstResponder];
+                        } else {
+                            let _: Bool = msg_send![&*s.view, resignFirstResponder];
+                        }
+                    }
+                }
+            }
+            Kind::Label => {
+                if s.words != m.label || s.ink != Some(m.ink) {
+                    // SAFETY: the sign's view is a UILabel, told on the main thread.
+                    unsafe {
+                        let _: () = msg_send![&*s.view, setText: &*NSString::from_str(m.label.as_deref().unwrap_or(""))];
+                        let _: () = msg_send![&*s.view, setTextColor: &*color(m.ink)];
+                    }
+                    (s.words, s.ink) = (m.label.clone(), Some(m.ink));
+                }
+            }
+        }
+        if s.round != m.round {
+            s.view.layer().setCornerRadius(f64::from(m.round.min(f32::from(m.at.size.height) / 2.)));
+            s.view.setClipsToBounds(m.round > 0.);
+            s.round = m.round;
+        }
+        if s.show != m.show {
+            s.view.setAlpha(f64::from(m.show));
+            s.show = m.show;
+        }
+    }
+
+    pub(super) fn lay(window: &gpui::Window, cx: &gpui::App, dark: bool, plates: &[Plate]) {
+        let Some(mtm) = MainThreadMarker::new() else { return };
+        let Ok(handle) = HasWindowHandle::window_handle(window) else { return };
+        let RawWindowHandle::UiKit(handle) = handle.as_raw() else { return };
+        // SAFETY: the handle's view is the window's own UIView, alive while the window is, and this is the main thread.
+        let host: &UIView = unsafe { handle.ui_view.cast().as_ref() };
+        let liquid = AnyClass::get(c"UIGlassEffect").is_some();
+        let shown = |p: &&Plate| p.show > 0.004 && p.at.size.width > gpui::px(1.);
+        PANES.with(|panes| {
+            let mut panes = panes.borrow_mut();
+            panes.retain(|key, pane| {
+                let keep = plates.iter().filter(shown).any(|p| p.key == *key);
+                if !keep {
+                    // A field on it lets the keyboard go now, as the plate
+                    // starts to go, not when the melt below has ended.
+                    for s in pane.marks.iter().filter(|s| s.kind == Kind::Field) {
+                        // SAFETY: the sign's view is a UITextField, told on the main thread.
+                        let _: Bool = unsafe { msg_send![&*s.view, resignFirstResponder] };
+                    }
+                    // A plate that goes while it shows melts back into what
+                    // is behind it, as the system's glass does; one that had
+                    // faded out goes now.
+                    if liquid && pane.show > 0.5 {
+                        let (view, gone) = (pane.view.clone(), pane.view.clone());
+                        for s in &pane.marks {
+                            let mark = s.view.clone();
+                            spring(0.3, 1.0, move || mark.setAlpha(0.), None);
+                        }
+                        spring(0.35, 1.0, move || view.setEffect(None), Some(Box::new(move || gone.removeFromSuperview())));
+                    } else {
+                        pane.view.removeFromSuperview();
+                    }
+                }
+                keep
+            });
+            for p in plates.iter().filter(shown) {
+                let pane = panes.entry(p.key).or_insert_with(|| make(host, mtm, liquid));
+                let at = rect(p.at, Point::default());
+                if pane.at != Some(at) {
+                    // By its bounds and center, which hold under a press's
+                    // scale; a frame does not.
+                    pane.view.setBounds(CGRect::new(CGPoint::ZERO, at.size));
+                    pane.view.setCenter(CGPoint::new(at.origin.x + at.size.width / 2., at.origin.y + at.size.height / 2.));
+                    pane.at = Some(at);
+                }
+                if pane.round != p.round {
+                    let round = f64::from(p.round.min(f32::from(p.at.size.height) / 2.));
+                    if liquid {
+                        pane.view.setCornerConfiguration(&UICornerConfiguration::configurationWithRadius(&UICornerRadius::fixedRadius(round)));
+                    } else {
+                        pane.view.layer().setCornerRadius(round);
+                    }
+                    pane.view.contentView().layer().setCornerRadius(round);
+                    pane.round = p.round;
+                }
+                if pane.show != p.show {
+                    pane.view.setAlpha(f64::from(p.show));
+                    pane.show = p.show;
+                }
+                // A press swells the plate, more for a small one, and lets it
+                // back on a spring as the finger lifts. A tap's lift comes
+                // a few frames after its landing, so the plate is let swell
+                // whole first, as the system's buttons do under a tap.
+                if pane.pressed != p.pressed {
+                    pane.pressed = p.pressed;
+                    let held = pane.pressed_at.map_or(1., |t| t.elapsed().as_secs_f64());
+                    pane.pressed_at = p.pressed.then(std::time::Instant::now);
+                    let delay = if p.pressed { 0. } else { (SWELL - held).max(0.) };
+                    if crate::editor::tracing() {
+                        eprintln!("trace glass pressed {} {}", p.key, p.pressed);
+                    }
+                    let grow = if p.pressed { 1. + (6. / f64::from(f32::from(p.at.size.width).max(1.))).min(0.12) } else { 1. };
+                    let view = pane.view.clone();
+                    spring_after(delay, if p.pressed { 0.25 } else { 0.5 }, if p.pressed { 0.9 } else { 0.55 }, move || {
+                        // SAFETY: a view's transform set to a scale, in UIKit's animation, on the main thread.
+                        let _: () = unsafe { msg_send![&*view, setTransform: objc2_core_foundation::CGAffineTransform { a: grow, b: 0., c: 0., d: grow, tx: 0., ty: 0. }] };
+                    }, None);
+                }
+                let dark = p.dark.unwrap_or(dark);
+                if pane.dark != Some(dark) {
+                    pane.view.setOverrideUserInterfaceStyle(if dark { UIUserInterfaceStyle::Dark } else { UIUserInterfaceStyle::Light });
+                    pane.dark = Some(dark);
+                }
+                // A sign of another kind in a mark's place is made again.
+                let same = pane.marks.iter().zip(&p.marks).take_while(|(s, m)| s.kind == kind_of(m) && s.target.as_ref().map(|t| *t.ivars()) == m.field.as_ref().map(|f| f.key)).count();
+                while pane.marks.len() > same {
+                    if let Some(gone) = pane.marks.pop() {
+                        gone.view.removeFromSuperview();
+                    }
+                }
+                while pane.marks.len() < p.marks.len() {
+                    let made = sign(pane, &p.marks[pane.marks.len()], mtm);
+                    pane.marks.push(made);
+                }
+                // A plate with a field takes the finger: the field is pressed
+                // where it is, and a touch on the rest of the plate goes on
+                // to gpui's view, the next responder.
+                pane.view.setUserInteractionEnabled(liquid || p.marks.iter().any(|m| m.field.is_some()));
+                for (s, m) in pane.marks.iter_mut().zip(&p.marks) {
+                    tell(s, m, p.at.origin, cx);
+                }
+            }
+            // The views stack as gpui painted their plates, a plate painted
+            // later over one painted before; told only when that changes.
+            STACK.with(|stack| {
+                if !stack.borrow().iter().copied().eq(plates.iter().filter(shown).map(|p| p.key)) {
+                    let order: Vec<&'static str> = plates.iter().filter(shown).map(|p| p.key).collect();
+                    for key in &order {
+                        if let Some(pane) = panes.get(key) {
+                            host.bringSubviewToFront(&pane.view);
+                        }
+                    }
+                    *stack.borrow_mut() = order;
+                }
+            });
+        });
+    }
 }
 
 /// Show `path` selected in the file manager. macOS and Windows can select
@@ -110,8 +867,68 @@ pub fn warm_icloud() {
         .name("icloud".into())
         .spawn(|| {
             let _ = ICLOUD.set(icloud_container_now());
+            #[cfg(target_os = "ios")]
+            read_shared_name();
         })
         .ok();
+}
+
+/// The file in Onyx's iCloud container that holds the name a Mac's Onyx
+/// greets its person by, for an iPhone's and an iPad's to greet them by
+/// too: outside the container's Documents, so iCloud Drive does not show
+/// it, and carried to every device as the rest of the container is. A
+/// Mac's path is the container's folder, there whether this build has
+/// the iCloud entitlements or not.
+fn shared_name_file() -> Option<std::path::PathBuf> {
+    let container = if cfg!(target_os = "ios") {
+        icloud_container()?.parent()?.to_path_buf()
+    } else {
+        onyx_core::paths::home().join("Library").join("Mobile Documents").join("iCloud~com~alkalinesoftware~onyx")
+    };
+    container.is_dir().then(|| container.join("Profile").join("name.txt"))
+}
+
+/// A Mac's Onyx writes the name it greets by into the container, when it
+/// is not there already: at launch and when the name is changed. Off the
+/// window's thread; nothing elsewhere.
+pub fn share_name(name: String) {
+    if !cfg!(target_os = "macos") || name.trim().is_empty() {
+        return;
+    }
+    std::thread::Builder::new()
+        .name("share-name".into())
+        .spawn(move || {
+            let Some(file) = shared_name_file() else { return };
+            if std::fs::read_to_string(&file).is_ok_and(|now| now.trim() == name.trim()) {
+                return;
+            }
+            let _ = file.parent().map(std::fs::create_dir_all);
+            let _ = onyx_core::paths::write_atomic(&file, name.trim().as_bytes());
+        })
+        .ok();
+}
+
+/// The name a Mac shared, as an iPhone and an iPad have it: asked of
+/// iCloud and waited for on the container's thread, a few seconds at most.
+#[cfg(target_os = "ios")]
+static SHARED_NAME: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
+#[cfg(target_os = "ios")]
+fn read_shared_name() {
+    let Some(file) = shared_name_file() else { return };
+    let until = std::time::Instant::now() + std::time::Duration::from_secs(8);
+    if !onyx_core::vault::at_hand(&file) {
+        bring(&file);
+        while !onyx_core::vault::at_hand(&file) && std::time::Instant::now() < until {
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+    if let Ok(name) = std::fs::read_to_string(&file) {
+        let name = name.trim().chars().take(64).collect::<String>();
+        if !name.is_empty() {
+            let _ = SHARED_NAME.set(name);
+        }
+    }
 }
 
 #[cfg(any(target_os = "macos", target_os = "ios"))]
@@ -153,6 +970,202 @@ pub fn fixed_container() -> Option<std::path::PathBuf> {
 #[cfg(not(target_os = "ios"))]
 pub fn fixed_container() -> Option<std::path::PathBuf> {
     None
+}
+
+/// Ask the system to bring a file's contents to this device, when they
+/// are in iCloud and not here (`vault::at_hand`). It answers at once and
+/// the file comes in its own time; nothing waits for it. Nothing where
+/// no file is kept that way.
+pub fn bring(path: &std::path::Path) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    {
+        use objc2_foundation::{NSFileManager, NSString, NSURL};
+        let url = NSURL::fileURLWithPath(&NSString::from_str(&path.to_string_lossy()));
+        // Refused for a file no iCloud keeps (another provider's): such a
+        // file comes when it is read, off the window's thread.
+        let _ = NSFileManager::defaultManager().startDownloadingUbiquitousItemAtURL_error(&url);
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    let _ = path;
+}
+
+/// What another device writes to Onyx's iCloud container, followed while
+/// the app runs: on an iPhone and an iPad iCloud tells the device a file
+/// changed elsewhere and leaves the old copy in place until it is asked
+/// for, so a note edited on the Mac never came while it stayed open. A
+/// query of the container's (`NSMetadataQuery`) hears each change, and
+/// every file of it that is not the newest is asked for, unless it is
+/// coming already (a running query has iCloud bring what changes); it
+/// lands in place, which no folder's event tells, so once it is the
+/// newest the window has the vault looked over (`icloud_landed`) and the
+/// open note takes it as it takes any write from outside. Started once,
+/// on the main thread; nothing on a Mac, whose iCloud brings every change
+/// itself.
+#[cfg(target_os = "ios")]
+pub fn follow_icloud() {
+    follow::start();
+}
+#[cfg(not(target_os = "ios"))]
+pub fn follow_icloud() {}
+
+/// Told each time a file iCloud was bringing has come: it lands in place,
+/// which no folder's event tells (`onyx_core::watch`), so the window has
+/// the vault looked over again. One listener, the window's.
+pub fn icloud_landed() -> futures::channel::mpsc::UnboundedReceiver<()> {
+    let (tx, rx) = futures::channel::mpsc::unbounded();
+    LANDED.with(|l| *l.borrow_mut() = Some(tx));
+    rx
+}
+
+thread_local! {
+    static LANDED: std::cell::RefCell<Option<futures::channel::mpsc::UnboundedSender<()>>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(target_os = "ios")]
+mod follow {
+    use std::cell::RefCell;
+
+    use objc2::rc::Retained;
+    use objc2::runtime::{AnyObject, NSObject, NSObjectProtocol};
+    use objc2::{define_class, msg_send, sel, MainThreadMarker, MainThreadOnly};
+    use objc2_foundation::{NSArray, NSMetadataItem, NSMetadataItemPathKey, NSMetadataQuery, NSMetadataQueryDidFinishGatheringNotification, NSMetadataQueryDidUpdateNotification, NSMetadataQueryUbiquitousDocumentsScope, NSMetadataQueryUpdateChangedItemsKey, NSMetadataUbiquitousItemDownloadingStatusCurrent, NSMetadataUbiquitousItemDownloadingStatusKey, NSMetadataUbiquitousItemIsDownloadingKey, NSNotification, NSNotificationCenter, NSNumber, NSPredicate, NSString};
+
+    define_class!(
+        // Told each time the query's results change.
+        #[unsafe(super = NSObject)]
+        #[thread_kind = MainThreadOnly]
+        #[name = "OnyxCloudFollower"]
+        struct Follower;
+
+        unsafe impl NSObjectProtocol for Follower {}
+
+        impl Follower {
+            #[unsafe(method(gathered:))]
+            fn gathered(&self, note: &NSNotification) {
+                // Every file the container holds: each one older here than
+                // in iCloud is asked for.
+                let Some(query) = note.object().and_then(|o| o.downcast::<NSMetadataQuery>().ok()) else { return };
+                if crate::editor::tracing() {
+                    eprintln!("trace icloud gathered {}", query.resultCount());
+                }
+                query.disableUpdates();
+                for i in 0..query.resultCount() {
+                    if let Ok(item) = query.resultAtIndex(i).downcast::<NSMetadataItem>() {
+                        bring_if_old(&item);
+                    }
+                }
+                query.enableUpdates();
+            }
+
+            #[unsafe(method(updated:))]
+            fn updated(&self, note: &NSNotification) {
+                let Some(info) = note.userInfo() else { return };
+                // SAFETY: the key is Foundation's own, its value an array of the query's items.
+                let Some(changed) = (unsafe { info.objectForKey(NSMetadataQueryUpdateChangedItemsKey) }) else { return };
+                let Ok(changed) = changed.downcast::<NSArray>() else { return };
+                if crate::editor::tracing() {
+                    eprintln!("trace icloud changed {}", changed.count());
+                }
+                for item in changed.iter() {
+                    if let Ok(item) = item.downcast::<NSMetadataItem>() {
+                        bring_if_old(&item);
+                    }
+                }
+            }
+        }
+    );
+
+    thread_local! {
+        static KEPT: RefCell<Option<(Retained<NSMetadataQuery>, Retained<Follower>)>> = const { RefCell::new(None) };
+        /// The files seen older here than in iCloud, waited for.
+        static AWAITED: RefCell<std::collections::HashSet<String>> = RefCell::new(std::collections::HashSet::new());
+    }
+
+    /// A file whose newest copy is in iCloud and not here, asked for.
+    fn bring_if_old(item: &NSMetadataItem) {
+        // SAFETY: the keys are Foundation's own constants.
+        let (status, path, coming) = unsafe { (item.valueForAttribute(NSMetadataUbiquitousItemDownloadingStatusKey), item.valueForAttribute(NSMetadataItemPathKey), item.valueForAttribute(NSMetadataUbiquitousItemIsDownloadingKey)) };
+        let current = status.and_then(|s| s.downcast::<NSString>().ok()).is_some_and(|s| &*s == unsafe { NSMetadataUbiquitousItemDownloadingStatusCurrent });
+        let coming = coming.and_then(|c| c.downcast::<NSNumber>().ok()).is_some_and(|c| c.boolValue());
+        let Some(path) = path.and_then(|p| p.downcast::<NSString>().ok()).map(|p| p.to_string()) else { return };
+        if current {
+            // Come: the window looks the vault over for it.
+            if AWAITED.with(|a| a.borrow_mut().remove(&path)) {
+                if crate::editor::tracing() {
+                    eprintln!("trace icloud landed {}", path.rsplit('/').next().unwrap_or_default());
+                }
+                super::LANDED.with(|l| {
+                    if let Some(tx) = l.borrow().as_ref() {
+                        let _ = tx.unbounded_send(());
+                    }
+                });
+            }
+            return;
+        }
+        AWAITED.with(|a| a.borrow_mut().insert(path.clone()));
+        // Being brought already (the query's own running asks for it), or asked for now.
+        if !coming {
+            if crate::editor::tracing() {
+                eprintln!("trace icloud newer {}", path.rsplit('/').next().unwrap_or_default());
+            }
+            super::bring(std::path::Path::new(&path));
+        }
+    }
+
+    pub(super) fn start() {
+        let Some(mtm) = MainThreadMarker::new() else { return };
+        if KEPT.with(|k| k.borrow().is_some()) {
+            return;
+        }
+        let query = NSMetadataQuery::new();
+        // SAFETY: the scope is Foundation's own constant, in an array of strings.
+        let scopes = NSArray::from_slice(&[unsafe { NSMetadataQueryUbiquitousDocumentsScope }]);
+        // SAFETY: an array of strings is an array of objects.
+        unsafe { query.setSearchScopes(Retained::cast_unchecked::<NSArray>(scopes).as_ref()) };
+        query.setPredicate(Some(&NSPredicate::predicateWithValue(true)));
+        query.setNotificationBatchingInterval(0.5);
+        let follower: Retained<Follower> = unsafe { msg_send![Follower::alloc(mtm), init] };
+        let center = NSNotificationCenter::defaultCenter();
+        // SAFETY: the follower answers both selectors and is kept, with the query, for as long as the app runs.
+        unsafe {
+            let object: &AnyObject = &query;
+            center.addObserver_selector_name_object(&follower, sel!(gathered:), Some(NSMetadataQueryDidFinishGatheringNotification), Some(object));
+            center.addObserver_selector_name_object(&follower, sel!(updated:), Some(NSMetadataQueryDidUpdateNotification), Some(object));
+        }
+        if query.startQuery() {
+            KEPT.with(|k| *k.borrow_mut() = Some((query, follower)));
+        }
+    }
+}
+
+/// A vault brought to this device whole, on a thread of its own: every
+/// file of it not at hand is asked for, so a note is here before it is
+/// pressed and a picture before its note is shown. On an iPhone a vault
+/// made on the Mac is names alone at first, and each file read where it
+/// was not waited a second and more for the network. One walk at a time,
+/// a `lstat` a file; nothing where no file is kept that way.
+pub fn bring_vault(root: &std::path::Path) {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    {
+        static WALKING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+        if WALKING.swap(true, std::sync::atomic::Ordering::AcqRel) {
+            return;
+        }
+        let root = root.to_path_buf();
+        let walk = std::thread::Builder::new().name("bring".into()).spawn(move || {
+            let away: Vec<_> = onyx_core::vault::every_file(&root).into_iter().filter(|f| !onyx_core::vault::at_hand(f)).collect();
+            if crate::editor::tracing() {
+                eprintln!("trace bring {} files not at hand", away.len());
+            }
+            away.iter().for_each(|f| bring(f));
+            WALKING.store(false, std::sync::atomic::Ordering::Release);
+        });
+        if walk.is_err() {
+            WALKING.store(false, std::sync::atomic::Ordering::Release);
+        }
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    let _ = root;
 }
 
 /// The iCloud container's answer waited for, as long as `most`: on an
@@ -962,17 +1975,21 @@ pub fn keep_on_top(_window: &gpui::Window) {}
 /// The account's first name, else the login name, capitalized: whom the
 /// vault's page greets. The same crate asks every system.
 pub fn user_first_name() -> String {
-    // An iPhone tells an app no name: the greeting has none until the
-    // person gives one in the settings.
-    if cfg!(target_os = "ios") {
-        return String::new();
+    // An iPhone tells an app no name: it is the one a Mac's Onyx shared
+    // through iCloud (`share_name`), else none until the person gives one.
+    #[cfg(target_os = "ios")]
+    {
+        SHARED_NAME.get().cloned().unwrap_or_default()
     }
-    let full = whoami::fallible::realname().unwrap_or_default();
-    let name = full.split_whitespace().next().map(str::to_string).filter(|s| !s.is_empty()).or_else(|| whoami::fallible::username().ok()).unwrap_or_default();
-    let mut chars = name.chars();
-    match chars.next() {
-        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
-        None => String::new(),
+    #[cfg(not(target_os = "ios"))]
+    {
+        let full = whoami::fallible::realname().unwrap_or_default();
+        let name = full.split_whitespace().next().map(str::to_string).filter(|s| !s.is_empty()).or_else(|| whoami::fallible::username().ok()).unwrap_or_default();
+        let mut chars = name.chars();
+        match chars.next() {
+            Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+            None => String::new(),
+        }
     }
 }
 

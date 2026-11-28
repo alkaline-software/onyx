@@ -32,6 +32,7 @@ mod cards;
 mod cells;
 mod pages;
 mod picture;
+mod touch;
 mod writing;
 
 pub use cards::{Layout, LayoutAt};
@@ -41,7 +42,7 @@ pub use writing::{MenuIssue, Words};
 
 actions!(
     editor,
-    [Enter, NewLine, Tab, Outdent, Backspace, Delete, DeleteWordBack, DeleteLineBack, Left, Right, Up, Down, SelectLeft, SelectRight, SelectUp, SelectDown, WordLeft, WordRight, SelectWordLeft, SelectWordRight, LineStart, LineEnd, SelectLineStart, SelectLineEnd, DocStart, DocEnd, SelectDocStart, SelectDocEnd, PageUp, PageDown, Bold, Italic, ToggleTask]
+    [Enter, NewLine, Tab, Outdent, Backspace, Delete, DeleteWordBack, DeleteLineBack, Left, Right, Up, Down, SelectLeft, SelectRight, SelectUp, SelectDown, WordLeft, WordRight, SelectWordLeft, SelectWordRight, LineStart, LineEnd, SelectLineStart, SelectLineEnd, DocStart, DocEnd, SelectDocStart, SelectDocEnd, PageUp, PageDown, Bold, Italic, ToggleTask, MakeHeading, MakeStrike, MakeCode, MakeLink, MakeBullets, MakeNumbers, MakeQuote, MakeIndent, SelectWord, SelectEverything]
 );
 
 /// The key context of a note being written in.
@@ -222,6 +223,43 @@ pub enum EditorEvent {
     Rename(PathBuf, String),
     /// A press in the words: the note is being worked in.
     Pressed,
+    /// The link button: a link to be made or changed, asked of the window
+    /// as a sheet of its words and its address (`LinkAsk`).
+    AskLink(LinkAsk),
+}
+
+/// A link asked for: the part of a line it takes the place of (a link
+/// already there, the selection, or the caret alone), with the words and
+/// the address it begins with. `put_link` writes the answer.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LinkAsk {
+    pub from: Pos,
+    pub to: Pos,
+    /// What the line held there, so an answer to a line changed since
+    /// is put at the caret instead.
+    pub was: String,
+    pub words: String,
+    pub href: String,
+    /// A link was there already.
+    pub editing: bool,
+}
+
+/// A link's words as markdown writes them: a bracket that would end them
+/// early is escaped.
+fn link_words(words: &str) -> String {
+    words.replace('[', "\\[").replace(']', "\\]")
+}
+
+/// A link's address as markdown writes it: one with a space or a bracket
+/// that would end it early goes in `<` and `>`.
+fn link_href(href: &str) -> String {
+    let open = href.matches('(').count();
+    let shut = href.matches(')').count();
+    if href.contains(char::is_whitespace) || open != shut || href.contains('<') {
+        format!("<{}>", href.replace('<', "%3C").replace('>', "%3E"))
+    } else {
+        href.to_string()
+    }
 }
 
 /// The faces and size a note is set in, from the settings.
@@ -266,7 +304,7 @@ const BLINK: Duration = Duration::from_millis(530);
 const SCROLL_MARGIN: f32 = 28.;
 
 /// `ONYX_TRACE=1` prints what each layout and paint costs, for a probe.
-fn tracing() -> bool {
+pub(crate) fn tracing() -> bool {
     static ON: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("ONYX_TRACE").is_some())
 }
@@ -286,8 +324,48 @@ pub(crate) fn stamp(what: &str) {
     }
 }
 
+/// What the system's keyboard asks of the editor between two frames, for
+/// a probe: how many asks, and how long they took together. On an iPhone
+/// the keyboard asks through gpui's text view, many times a key.
+pub(crate) struct Asked(Option<Instant>);
+
+static ASKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static ASK_NS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) fn asked() -> Asked {
+    Asked(tracing().then(Instant::now))
+}
+
+impl Drop for Asked {
+    fn drop(&mut self) {
+        if let Some(at) = self.0 {
+            ASKS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            ASK_NS.fetch_add(at.elapsed().as_nanos() as u64, std::sync::atomic::Ordering::Relaxed);
+        }
+    }
+}
+
+/// The asks since the last telling, said once a frame while there are any.
+pub(crate) fn tell_asks() {
+    if tracing() {
+        let (n, ns) = (ASKS.swap(0, std::sync::atomic::Ordering::Relaxed), ASK_NS.swap(0, std::sync::atomic::Ordering::Relaxed));
+        if n > 0 {
+            eprintln!("trace asks n={n} {:.2}ms", ns as f64 / 1e6);
+        }
+    }
+}
+
 pub struct Editor {
     doc: Doc,
+    /// Whether the files not on this device yet are being looked for (`read_pictures`).
+    looking: bool,
+    /// What covers the view's foot (`set_covered`).
+    covered: f32,
+    /// The ground the note is drawn on, which a table's edges fade into.
+    ground: Option<Hsla>,
+    /// How far each table wider than its room is moved along, by its first
+    /// line: kept as its grid is made again.
+    table_shift: RefCell<HashMap<usize, f32>>,
     sel: Sel,
     analysis: Analysis,
     mode: Mode,
@@ -361,6 +439,11 @@ pub struct Editor {
     pic_hover: Option<picture::PicHover>,
     pic_drag: Option<picture::PicDrag>,
     pic_hold: Option<(usize, f32)>,
+    /// A finger's hold on the words, an end of the selection or the caret
+    /// under way, and the system's edit menu over the selection (`touch.rs`).
+    grab: Option<touch::Grab>,
+    menu_wanted: bool,
+    menu_for: Option<Sel>,
     /// The line of a picture or a frame the bar's pencil opened, the
     /// caret in it rather than on the whole (`picture.rs`).
     editing: Option<usize>,
@@ -421,6 +504,10 @@ impl Editor {
         })
         .detach();
         Self {
+            looking: false,
+            covered: 0.,
+            ground: None,
+            table_shift: RefCell::default(),
             doc: Doc::default(),
             sel: Sel::default(),
             analysis: markdown::analyze(""),
@@ -462,6 +549,9 @@ impl Editor {
             pic_hover: None,
             pic_drag: None,
             pic_hold: None,
+            grab: None,
+            menu_wanted: false,
+            menu_for: None,
             editing: None,
             embeds: HashMap::new(),
             cards: HashMap::new(),
@@ -709,6 +799,36 @@ impl Editor {
     /// room kept under the last line: for a page that is a flex column.
     pub fn fill_page(&mut self, foot: f32) {
         self.foot = Some(foot);
+    }
+
+    /// How much of the view's foot something over the page covers (the
+    /// bar over an iPhone's keyboard): the caret is kept above it.
+    /// The ground the note is drawn on.
+    pub fn set_ground(&mut self, ground: Hsla) {
+        self.ground = Some(ground);
+    }
+
+    /// A table wider than its room moved along by `dx`, a finger's or the
+    /// wheel's. True when it moved.
+    pub fn shift_table(&mut self, first: usize, dx: f32, cx: &mut Context<Self>) -> bool {
+        let cache = self.cache.borrow();
+        let Some((_, grid)) = cache.grids.get(&first) else { return false };
+        let now = grid.shift.get();
+        let to = (now - dx).clamp(0., grid.reach());
+        if (to - now).abs() < 0.01 {
+            return false;
+        }
+        grid.shift.set(to);
+        self.table_shift.borrow_mut().insert(first, to);
+        cx.notify();
+        true
+    }
+
+    pub fn set_covered(&mut self, covered: f32) {
+        if self.covered != covered {
+            self.covered = covered;
+            self.want_scroll |= self.focused;
+        }
     }
 
     /// Whether `y`, from the element's top, is under the last line: in the
@@ -1051,6 +1171,13 @@ impl Editor {
     }
 
     fn tab(&mut self, _: &Tab, _: &mut Window, cx: &mut Context<Self>) {
+        self.indent(true, cx);
+    }
+
+    /// A list's items a level in. Off a list the Tab key types a tab,
+    /// and the bar's button over an iPhone's keyboard (`MakeIndent`)
+    /// does nothing, a tab in the middle of a word being no indent.
+    fn indent(&mut self, key: bool, cx: &mut Context<Self>) {
         if self.locked() {
             return;
         }
@@ -1060,7 +1187,9 @@ impl Editor {
         }
         let lines: Vec<usize> = self.selected_lines().filter(|l| list_line(self.doc.line(*l)).is_some()).collect();
         if lines.is_empty() {
-            self.insert("\t", cx);
+            if key {
+                self.insert("\t", cx);
+            }
             return;
         }
         let before = self.sel;
@@ -1201,6 +1330,21 @@ impl Editor {
             Some((a, b)) if self.sel.range() != (a, b) => Sel { anchor: a, head: b },
             _ => Sel { anchor: Pos::default(), head: self.doc.end() },
         };
+        cx.notify();
+    }
+
+    /// The edit menu's Select: the word at the caret, the menu over it.
+    fn select_word(&mut self, _: &SelectWord, _: &mut Window, cx: &mut Context<Self>) {
+        let (a, b) = self.grain_range(self.sel.head, Grain::Word);
+        self.sel = Sel { anchor: a, head: b };
+        self.menu_wanted = true;
+        cx.notify();
+    }
+
+    /// The edit menu's Select All: the note, the menu over it.
+    fn select_everything(&mut self, _: &SelectEverything, _: &mut Window, cx: &mut Context<Self>) {
+        self.sel = Sel { anchor: Pos::default(), head: self.doc.end() };
+        self.menu_wanted = true;
         cx.notify();
     }
 
@@ -1490,6 +1634,180 @@ impl Editor {
         self.toggle_wrap("*", SpanKind::Em, cx);
     }
 
+    /// What begins each line the selection touches is changed, as one
+    /// step of undo: `lead` says, for a line and its place among them,
+    /// the stretch at its start to take out and what goes in its place.
+    /// The selection keeps its words.
+    fn relead(&mut self, lead: impl Fn(usize, &str) -> Option<(Range<usize>, String)>, cx: &mut Context<Self>) {
+        if self.locked() || self.in_cell() {
+            return;
+        }
+        let before = self.sel;
+        let mut after = before;
+        let mut changes = Vec::new();
+        for (nth, l) in self.selected_lines().enumerate() {
+            let Some((cut, put)) = lead(nth, self.doc.line(l)) else { continue };
+            for p in [&mut after.anchor, &mut after.head] {
+                if p.line == l {
+                    p.col = if p.col >= cut.end { p.col + put.len() - cut.len() } else if p.col > cut.start { cut.start + put.len() } else { p.col };
+                }
+            }
+            changes.push((Pos::new(l, cut.start), Pos::new(l, cut.end), put));
+        }
+        if changes.is_empty() {
+            return;
+        }
+        self.doc.replace_many(changes, before, after);
+        self.sel = after;
+        self.after_edit(cx);
+    }
+
+    /// The lines made a heading, a size smaller at each asking, and plain
+    /// again after the third: none, `#`, `##`, `###`, none. Every line
+    /// the selection touches takes what the first one becomes.
+    fn cycle_heading(&mut self, cx: &mut Context<Self>) {
+        let marks = |text: &str| {
+            let n = text.bytes().take_while(|b| *b == b'#').count();
+            if (1..=6).contains(&n) && (text.len() == n || text.as_bytes()[n] == b' ') { n } else { 0 }
+        };
+        let next = match marks(self.doc.line(self.selected_lines().start)) {
+            0 => 1,
+            n if n < 3 => n + 1,
+            _ => 0,
+        };
+        self.relead(
+            |_, text| {
+                let n = marks(text);
+                let cut = if n == 0 { 0 } else { (n + 1).min(text.len()) };
+                (!text.trim().is_empty() || cut > 0 || next > 0).then(|| (0..cut, if next == 0 { String::new() } else { format!("{} ", "#".repeat(next)) }))
+            },
+            cx,
+        );
+    }
+
+    /// The lines made a list's items, or plain again when the first is
+    /// one of that kind already: bullets, or numbers from 1. A list of
+    /// the other kind, or of tasks, changes its marker and keeps its
+    /// place, in a quote too.
+    fn toggle_list(&mut self, numbers: bool, cx: &mut Context<Self>) {
+        let is = |text: &str| {
+            let (_, body) = quote_line(text).unwrap_or((0, 0));
+            list_line(&text[body..]).is_some_and(|item| if numbers { matches!(item.kind, ListKind::Ordered(_)) } else { item.kind == ListKind::Bullet })
+        };
+        let off = is(self.doc.line(self.selected_lines().start));
+        self.relead(
+            |nth, text| {
+                let (_, body) = quote_line(text).unwrap_or((0, 0));
+                let item = list_line(&text[body..]);
+                let indent = body + item.as_ref().map_or(text[body..].len() - text[body..].trim_start_matches([' ', '\t']).len(), |i| i.indent.len());
+                let cut = indent..indent + item.as_ref().map_or(0, |i| i.marker.len());
+                let put = if off { String::new() } else if numbers { format!("{}. ", nth + 1) } else { "- ".to_string() };
+                (cut.len() > 0 || !put.is_empty()).then_some((cut, put))
+            },
+            cx,
+        );
+    }
+
+    /// The lines made a quote, or taken a level out of one when the
+    /// first is in one already.
+    fn toggle_quote(&mut self, cx: &mut Context<Self>) {
+        let off = quote_line(self.doc.line(self.selected_lines().start)).is_some();
+        self.relead(
+            |_, text| {
+                if !off {
+                    return Some((0..0, "> ".to_string()));
+                }
+                // The first mark and the space after it.
+                let at = text.find('>')?;
+                quote_line(text)?;
+                Some((0..(at + 1 + usize::from(text.as_bytes().get(at + 1) == Some(&b' '))), String::new()))
+            },
+            cx,
+        );
+    }
+
+    /// The link button: a link at the caret is asked for again with its
+    /// words and address; else the selection on one line is the words
+    /// of a new one; else the caret alone asks for both.
+    fn make_link(&mut self, cx: &mut Context<Self>) {
+        if self.locked() || self.in_cell() {
+            return;
+        }
+        if let Some(ask) = self.link_ask() {
+            cx.emit(EditorEvent::AskLink(ask));
+        }
+    }
+
+    /// What the link button asks about, at the selection.
+    pub fn link_ask(&self) -> Option<LinkAsk> {
+        let (a, b) = self.sel.range();
+        if a.line != b.line {
+            return None;
+        }
+        if let Some(found) = self.link_on(a.line, a.col).filter(|f| f.now == Layout::Link && f.range.start <= a.col && b.col <= f.range.end) {
+            let raw = &self.doc.line(a.line)[found.range.clone()];
+            // A `[[note]]` link is the vault's own; it stays as it is.
+            if !raw.starts_with("[[") {
+                let (from, to) = (Pos::new(a.line, found.range.start), Pos::new(a.line, found.range.end));
+                let words = found.words.replace("\\[", "[").replace("\\]", "]");
+                return Some(LinkAsk { from, to, was: raw.to_string(), words, href: found.href, editing: true });
+            }
+        }
+        let was = self.doc.slice(a, b);
+        Some(LinkAsk { from: a, to: b, words: was.clone(), was, href: String::new(), editing: false })
+    }
+
+    /// A link asked for, answered: `[words](href)` in the place it was
+    /// asked for, as one step of undo, the caret after it. With no
+    /// address it is the words alone, plain; with no words, the address
+    /// alone; with neither, nothing. A line changed since the ask has the
+    /// answer put at the caret.
+    pub fn put_link(&mut self, ask: &LinkAsk, words: &str, href: &str, cx: &mut Context<Self>) {
+        if self.locked() {
+            return;
+        }
+        let (words, href) = (words.trim(), href.trim());
+        let text = match (words.is_empty(), href.is_empty()) {
+            (false, false) => format!("[{}]({})", link_words(words), link_href(href)),
+            (false, true) => words.to_string(),
+            (true, false) => href.to_string(),
+            (true, true) => String::new(),
+        };
+        let still = ask.from.line < self.doc.line_count() && ask.to.col <= self.doc.line(ask.to.line).len() && self.doc.slice(ask.from, ask.to) == ask.was;
+        let (a, b) = if still { (ask.from, ask.to) } else { self.sel.range() };
+        if a == b && text.is_empty() {
+            return;
+        }
+        let before = self.sel;
+        let caret = Pos::new(a.line, a.col + text.len());
+        self.doc.replace_many(vec![(a, b, text)], before, Sel::caret(caret));
+        self.sel = Sel::caret(caret);
+        self.after_edit(cx);
+    }
+
+    /// The link button where no window asks: the selection, or the word
+    /// under the caret, becomes a link's words with the caret where its
+    /// address goes; with neither, an empty one with the caret where its
+    /// words go (the menu bar's note).
+    pub fn make_link_inline(&mut self, cx: &mut Context<Self>) {
+        if self.locked() || self.in_cell() {
+            return;
+        }
+        let (mut a, mut b) = self.sel.range();
+        if a == b {
+            let word = self.doc.word_at(a);
+            (a, b) = (Pos::new(a.line, word.start), Pos::new(a.line, word.end));
+        }
+        if a.line != b.line {
+            return;
+        }
+        let before = self.sel;
+        let caret = if a == b { Pos::new(a.line, a.col + 1) } else { Pos::new(b.line, b.col + 3) };
+        self.doc.replace_many(vec![(a, a, "[".to_string()), (b, b, "]()".to_string())], before, Sel::caret(caret));
+        self.sel = Sel::caret(caret);
+        self.after_edit(cx);
+    }
+
     /// ⌘↩: a task's box ticked or cleared; a bullet made a task; a plain
     /// line made a task.
     fn toggle_task(&mut self, _: &ToggleTask, _: &mut Window, cx: &mut Context<Self>) {
@@ -1677,6 +1995,14 @@ impl Editor {
         let theme = cx.theme().clone();
         let mut cache = self.cache.borrow_mut();
         self.reader().lay_out_note(&mut cache, width, &theme, window);
+        // A table made again stands where it was moved to, as far as it
+        // can still go.
+        let mut shifts = self.table_shift.borrow_mut();
+        shifts.retain(|first, _| cache.grids.contains_key(first));
+        for (first, (_, grid)) in &cache.grids {
+            grid.shift.set(shifts.get(first).copied().unwrap_or(0.).clamp(0., grid.reach()));
+        }
+        drop(shifts);
         drop(cache);
         // The sources the layout did not meet go, and the pixels of
         // pictures the note no longer shows, from the GPU too.
@@ -1748,7 +2074,7 @@ impl Editor {
             Row::Table(t) => {
                 let c = t.column_of(p.col);
                 let (x, y) = t.cells.get(c)?.caret(p.col);
-                CaretAt::new(t.inset + t.grid.xs[c] + crate::layout::CELL_X + x, top + t.cell_y + y, t.cells[c].line_h, t.cells[c].caret_h)
+                CaretAt::new(t.left() + t.grid.xs[c] + crate::layout::CELL_X + x, top + t.cell_y + y, t.cells[c].line_h, t.cells[c].caret_h)
             }
             Row::Rule { inset, line_h } => CaretAt::new(*inset, top, *line_h, Rhythm::caret(self.look.text_px, *line_h)),
             Row::Pad { h, .. } => CaretAt::new(0., top, *h, Rhythm::caret(self.look.text_px, *h)),
@@ -1825,9 +2151,9 @@ impl Editor {
                 _ => Pos::new(line, text_len),
             },
             Row::Table(t) => {
-                let c = t.column_at(x - t.inset);
+                let c = t.column_at(x - t.left());
                 let flow = t.cells.get(c)?;
-                Pos::new(line, flow.col_at(x - t.inset - t.grid.xs[c] - crate::layout::CELL_X, y - top - t.cell_y).min(text_len))
+                Pos::new(line, flow.col_at(x - t.left() - t.grid.xs[c] - crate::layout::CELL_X, y - top - t.cell_y).min(text_len))
             }
             _ => Pos::new(line, 0),
         })
@@ -1855,8 +2181,8 @@ impl Editor {
                 r.flow.link_at(x - r.inset, y - top - r.top_pad).map(Hit::Link)
             }
             Row::Table(t) => {
-                let c = t.column_at(x - t.inset);
-                t.cells.get(c)?.link_at(x - t.inset - t.grid.xs[c] - crate::layout::CELL_X, y - top - t.cell_y).map(Hit::Link)
+                let c = t.column_at(x - t.left());
+                t.cells.get(c)?.link_at(x - t.left() - t.grid.xs[c] - crate::layout::CELL_X, y - top - t.cell_y).map(Hit::Link)
             }
             _ => None,
         }
@@ -1875,8 +2201,8 @@ impl Editor {
         let mut dy = 0.;
         if caret_top < vt + SCROLL_MARGIN {
             dy = vt + SCROLL_MARGIN - caret_top;
-        } else if caret_bottom > vb - SCROLL_MARGIN {
-            dy = (vb - SCROLL_MARGIN) - caret_bottom;
+        } else if caret_bottom > vb - SCROLL_MARGIN - self.covered {
+            dy = (vb - SCROLL_MARGIN - self.covered) - caret_bottom;
         }
         if dy.abs() > 0.5 {
             let max = f32::from(self.scroll.max_offset().y);
@@ -1903,12 +2229,27 @@ impl EntityInputHandler for Editor {
     /// Nothing of typing changes: a key no binding takes still reaches the
     /// method and composes, and this is read nowhere else on a Mac. An
     /// iPhone and an iPad read it for another thing: their keyboard comes
-    /// out only for a handler that says it takes text.
+    /// out only for a handler that says it takes text, so not for a note
+    /// that reads only.
     fn accepts_text_input(&self, _: &mut Window, _: &mut Context<Self>) -> bool {
-        cfg!(target_os = "ios")
+        // A note that takes no change brings no keyboard out, and puts
+        // away the one that is: a press in it selects, and that is all.
+        cfg!(target_os = "ios") && !self.locked()
+    }
+
+    /// What a touch keyboard does for the words: it corrects, capitalizes
+    /// sentences and suggests, as in the system's own notes, but in code
+    /// and HTML, where it would change what is meant.
+    fn text_input_configuration(&mut self, _: &mut Window, _: &mut Context<Self>) -> TextInputConfiguration {
+        let plain = self.analysis.lines.get(self.sel.head.line).is_some_and(|l| matches!(l.kind, LineKind::Code | LineKind::FenceOpen(_) | LineKind::FenceClose | LineKind::Html));
+        if plain {
+            return TextInputConfiguration::default();
+        }
+        TextInputConfiguration { autocorrect: true, autocapitalize: Autocapitalize::Sentences, suggestions: true, input_action: TextInputAction::Unspecified }
     }
 
     fn text_for_range(&mut self, range_utf16: Range<usize>, adjusted_range: &mut Option<Range<usize>>, _: &mut Window, _: &mut Context<Self>) -> Option<String> {
+        let _asked = asked();
         let a = self.doc.pos_of_utf16(range_utf16.start);
         let b = self.doc.pos_of_utf16(range_utf16.end);
         *adjusted_range = Some(self.doc.utf16_of(a)..self.doc.utf16_of(b));
@@ -1916,11 +2257,13 @@ impl EntityInputHandler for Editor {
     }
 
     fn selected_text_range(&mut self, _: bool, _: &mut Window, _: &mut Context<Self>) -> Option<UTF16Selection> {
+        let _asked = asked();
         let (a, b) = self.sel.range();
         Some(UTF16Selection { range: self.doc.utf16_of(a)..self.doc.utf16_of(b), reversed: self.sel.head < self.sel.anchor })
     }
 
     fn marked_text_range(&self, _: &mut Window, _: &mut Context<Self>) -> Option<Range<usize>> {
+        let _asked = asked();
         self.marked.map(|(a, b)| self.doc.utf16_of(a)..self.doc.utf16_of(b))
     }
 
@@ -1974,17 +2317,20 @@ impl EntityInputHandler for Editor {
     }
 
     fn bounds_for_range(&mut self, range_utf16: Range<usize>, _: Bounds<Pixels>, _: &mut Window, _: &mut Context<Self>) -> Option<Bounds<Pixels>> {
+        let _asked = asked();
         let at = self.caret_at(self.doc.pos_of_utf16(range_utf16.start))?;
         Some(Bounds::new(point(self.origin.x + px(at.x), self.origin.y + px(at.y)), size(px(2.), px(at.h))))
     }
 
     fn character_index_for_point(&mut self, point: Point<Pixels>, _: &mut Window, _: &mut Context<Self>) -> Option<usize> {
+        let _asked = asked();
         let local = (f32::from(point.x - self.origin.x), f32::from(point.y - self.origin.y));
         let p = self.pos_at(local.0, local.1, &self.cache.borrow())?;
         Some(self.doc.utf16_of(p))
     }
 
     fn text_length_utf16(&mut self, _: &mut Window, _: &mut Context<Self>) -> Option<usize> {
+        let _asked = asked();
         Some(self.doc.utf16_len())
     }
 }
@@ -2039,7 +2385,17 @@ impl Render for Editor {
             .on_action(cx.listener(Self::bold))
             .on_action(cx.listener(Self::italic))
             .on_action(cx.listener(Self::toggle_task))
+            .on_action(cx.listener(|this, _: &MakeStrike, _, cx| this.toggle_wrap("~~", SpanKind::Strike, cx)))
+            .on_action(cx.listener(|this, _: &MakeCode, _, cx| this.toggle_wrap("`", SpanKind::Code, cx)))
+            .on_action(cx.listener(|this, _: &MakeHeading, _, cx| this.cycle_heading(cx)))
+            .on_action(cx.listener(|this, _: &MakeLink, _, cx| this.make_link(cx)))
+            .on_action(cx.listener(|this, _: &MakeBullets, _, cx| this.toggle_list(false, cx)))
+            .on_action(cx.listener(|this, _: &MakeNumbers, _, cx| this.toggle_list(true, cx)))
+            .on_action(cx.listener(|this, _: &MakeQuote, _, cx| this.toggle_quote(cx)))
+            .on_action(cx.listener(|this, _: &MakeIndent, _, cx| this.indent(false, cx)))
             .on_action(cx.listener(Self::select_all))
+            .on_action(cx.listener(Self::select_word))
+            .on_action(cx.listener(Self::select_everything))
             .on_action(cx.listener(Self::copy))
             .on_action(cx.listener(Self::cut))
             .on_action(cx.listener(Self::paste))
@@ -2180,7 +2536,7 @@ fn paint_plate(left: f32, top: f32, width: f32, height: f32, head: f32, theme: &
 /// move carries left out: a column's move as it shows.
 #[allow(clippy::too_many_arguments)]
 fn paint_table_shifted(t: &crate::layout::TableRow, ox: f32, oy: f32, shift: &[f32], carried: Option<usize>, line: Option<usize>, info: &PaintInfo, theme: &gpui_component::Theme, window: &mut Window, cx: &mut App) {
-    let left = ox + t.inset;
+    let left = ox + t.left();
     if !t.head {
         window.paint_quad(fill(Bounds::new(point(px(left), px(oy)), size(px(t.grid.width), px(1.))), theme.border));
     }
@@ -2263,18 +2619,22 @@ fn paint_row(row: &Row, ox: f32, oy: f32, height: f32, full_w: Pixels, line: Opt
             window.paint_quad(fill(b, theme.border));
         }
         Row::Table(t) => {
-            let left = ox + t.inset;
+            let left = ox + t.left();
             let total = t.grid.width;
-            if !t.head {
-                window.paint_quad(fill(Bounds::new(point(px(left), px(oy)), size(px(total), px(1.))), theme.border));
-            }
-            for (c, flow) in t.cells.iter().enumerate() {
-                let x = left + t.grid.xs[c];
-                if c > 0 {
-                    window.paint_quad(fill(Bounds::new(point(px(x), px(oy)), size(px(1.), px(t.height))), theme.border));
+            // A table wider than its room shows what of it is in the room.
+            let room = Bounds::new(point(px(ox + t.inset), px(oy)), size(px(t.grid.room), px(t.height)));
+            window.with_content_mask(t.grid.wide().then_some(ContentMask { bounds: room }), |window| {
+                if !t.head {
+                    window.paint_quad(fill(Bounds::new(point(px(left), px(oy)), size(px(total), px(1.))), theme.border));
                 }
-                paint_flow(flow, point(px(x + crate::layout::CELL_X), px(oy + t.cell_y)), line, false, info, theme, window, cx);
-            }
+                for (c, flow) in t.cells.iter().enumerate() {
+                    let x = left + t.grid.xs[c];
+                    if c > 0 {
+                        window.paint_quad(fill(Bounds::new(point(px(x), px(oy)), size(px(1.), px(t.height))), theme.border));
+                    }
+                    paint_flow(flow, point(px(x + crate::layout::CELL_X), px(oy + t.cell_y)), line, false, info, theme, window, cx);
+                }
+            });
         }
         Row::Nested(n) => {
             // A selection over the block is a wash over the whole of it.
@@ -2291,7 +2651,7 @@ fn paint_row(row: &Row, ox: f32, oy: f32, height: f32, full_w: Pixels, line: Opt
             }
             for &(first, last) in &n.plates.tables {
                 let (Some((top, Row::Table(head))), Some((last_top, last_row))) = (n.rows.get(first), n.rows.get(last)) else { continue };
-                paint_plate(ox + head.inset, oy + top, head.grid.width, last_top + last_row.height() - top, head.height, theme, window);
+                paint_plate(ox + head.left(), oy + top, head.grid.width, last_top + last_row.height() - top, head.height, theme, window);
             }
             for (top, inner) in &n.rows {
                 paint_row(inner, ox, oy + top, inner.height(), full_w, None, info, theme, window, cx);
@@ -2536,11 +2896,27 @@ impl Element for EditorElement {
             let b = Bounds::new(point(px(ox + inset), px(oy + top)), size(bounds.size.width - px(inset), px(bottom - top)));
             window.paint_quad(quad(b, px(8.), theme.muted, px(1.), theme.border, BorderStyle::default()));
         }
+        // The tables wider than their room: where, and how far moved along.
+        let mut wide: Vec<(Bounds<Pixels>, f32, f32)> = Vec::new();
+        let router = cx.try_global::<crate::scroll::Router>().map(|r| r.0.clone());
         for &(first_line, last_line) in &info.tables {
             let (Some(top), Some(last), Some(head)) = (cache.tops.get(first_line), cache.entries.get(last_line), cache.entries.get(first_line)) else { continue };
             let bottom = cache.tops[last_line] + last.height;
             if let (Row::Table(t), true) = (&*head.row, visible(*top, bottom - top)) {
-                paint_plate(ox + t.inset, oy + top, t.grid.width, bottom - top, head.height, &theme, window);
+                let room = Bounds::new(point(px(ox + t.inset), px(oy + top)), size(px(t.grid.room), px(bottom - top)));
+                if t.grid.wide() {
+                    wide.push((room, t.grid.shift.get(), t.grid.reach()));
+                    // A gesture across it moves it along, as the note's
+                    // scroller would move the note (`scroll.rs`).
+                    if let Some(router) = router.as_ref() {
+                        let editor = editor.downgrade();
+                        router.name_side(room, Rc::new(move |e: &ScrollEvent, _, cx: &mut App| {
+                            let dx = f32::from(e.delta.pixel_delta(px(20.)).x);
+                            let _ = editor.update(cx, |ed, cx| ed.shift_table(first_line, dx, cx));
+                        }));
+                    }
+                }
+                window.with_content_mask(t.grid.wide().then_some(ContentMask { bounds: room }), |window| paint_plate(ox + t.left(), oy + top, t.grid.width, bottom - top, head.height, &theme, window));
             }
         }
 
@@ -2579,6 +2955,23 @@ impl Element for EditorElement {
                 }
             }
         }
+        // What of a wide table is past its room fades out at that edge, as
+        // the note does at the page's top and foot.
+        let ground = editor.read(cx).ground.unwrap_or(theme.background);
+        for (room, shift, reach) in wide {
+            const FADE: f32 = 28.;
+            let (left, right) = ((shift / FADE).min(1.), ((reach - shift) / FADE).min(1.));
+            let edge = |x: Pixels, angle: f32, k: f32, window: &mut Window| {
+                let b = Bounds::new(point(x, room.origin.y + px(1.)), size(px(FADE), room.size.height - px(2.)));
+                window.paint_quad(fill(b, linear_gradient(angle, linear_color_stop(ground.opacity(k), 0.), linear_color_stop(ground.opacity(0.), 1.))));
+            };
+            if left > 0. {
+                edge(room.origin.x, 90., left, window);
+            }
+            if right > 0. {
+                edge(room.right() - px(FADE), 270., right, window);
+            }
+        }
         if let Some(m) = &info.table_move {
             if let (Some(card), Some(carried)) = (m.card, m.carried) {
                 paint_move_card(m, card, carried, &cache, ox, oy, &info, &theme, window, cx);
@@ -2599,6 +2992,14 @@ impl Element for EditorElement {
         }
         if let Some(b) = info.caret {
             window.paint_quad(fill(b, theme.caret));
+        }
+        // Under a finger: the selection's handles, and the system's edit menu over it.
+        if cfg!(target_os = "ios") {
+            if let Some(bars) = editor.read(cx).handle_bars() {
+                touch::paint_handles(bars, theme.caret, window);
+            }
+            editor.update(cx, |e, cx| e.settle_menu(window, cx));
+            touch::listen(editor.clone(), bounds, prepaint.hitbox.clone(), prepaint.wide.clone(), window);
         }
         trace("paint", paint_started);
 
@@ -2626,6 +3027,7 @@ impl Element for EditorElement {
             stamp("mouse down");
             ed.update(cx, |e, cx| {
                 cx.emit(EditorEvent::Pressed);
+                let (before, was_focused) = (e.sel, e.focus.is_focused(window));
                 // Under the last line, on a page the editor fills: the
                 // caret at the words' end.
                 if e.under_words(y) {
@@ -2636,16 +3038,24 @@ impl Element for EditorElement {
                 // ⌘C and the find to work on, and a link waits for the
                 // release, so a selection can begin on one.
                 let reading = e.mode == Mode::Reading;
-                if !e.focus.is_focused(window) {
+                // A picture opens in the viewer at a double click, at a
+                // click while it cannot change, or at a finger's tap.
+                let views = e.picture_at(x, y).filter(|_| ev.click_count == 2 || (ev.click_count == 1 && (!e.pictures_change() || cfg!(target_os = "ios")))).map(|(_, line)| line);
+                // Under a finger the words are not given the keyboard for
+                // a tap that only looks: it would bring the keys up under
+                // the viewer, and again as the viewer closed.
+                if !e.focus.is_focused(window) && !(cfg!(target_os = "ios") && views.is_some()) {
                     window.focus(&e.focus, cx);
                 }
-                // A picture opens in the viewer at a double click, or at a
-                // click while it cannot change.
-                if let Some((_, line)) = e.picture_at(x, y) {
-                    if ev.click_count == 2 || (ev.click_count == 1 && !e.pictures_change()) {
-                        e.view_picture(line, bounds.origin, cx);
-                        return;
-                    }
+                if let Some(line) = views {
+                    e.view_picture(line, bounds.origin, cx);
+                    return;
+                }
+                // On an iPhone the keyboard may have been put away by the
+                // system (a finger drawn down into it) with the words
+                // still its owner: a press in them asks for it again.
+                if cfg!(target_os = "ios") && !e.locked() {
+                    window.request_virtual_keyboard();
                 }
                 match e.hit(x, y) {
                     Some(Hit::Task(line)) if !e.read_only => {
@@ -2681,6 +3091,7 @@ impl Element for EditorElement {
                         }
                         e.drag = Some((grain, a, b));
                         e.preferred_x = None;
+                        e.tapped(ev.click_count, before, was_focused);
                         e.kick_blink(cx);
                         cx.notify();
                     }
@@ -2964,6 +3375,31 @@ impl Editor {
             })
             .detach();
         }
+        // Those iCloud has not brought yet are looked at twice a second,
+        // off the frames, until each has come: then the note is laid out
+        // with them.
+        if !self.looking && !self.pictures.borrow().waiting.is_empty() {
+            self.looking = true;
+            cx.spawn(async move |this, cx| loop {
+                cx.background_executor().timer(Duration::from_millis(500)).await;
+                let left = this.update(cx, |e, cx| {
+                    let mut store = e.pictures.borrow_mut();
+                    let before = store.waiting.len();
+                    store.waiting.retain(|p| !onyx_core::vault::at_hand(p));
+                    let left = store.waiting.len();
+                    drop(store);
+                    if left != before {
+                        cx.notify();
+                    }
+                    e.looking = left > 0;
+                    left
+                });
+                if !left.is_ok_and(|left| left > 0) {
+                    break;
+                }
+            })
+            .detach();
+        }
     }
 
     /// Lets the pictures go, as a note is closed.
@@ -3013,7 +3449,19 @@ impl Editor {
 
 #[cfg(test)]
 mod tests {
-    use super::one_edit;
+    use super::{link_href, link_words, one_edit};
+
+    #[test]
+    fn a_link_is_written_so_markdown_reads_it_whole() {
+        assert_eq!(link_href("https://example.com/a"), "https://example.com/a");
+        assert_eq!(link_href("https://en.wikipedia.org/wiki/Rust_(language)"), "https://en.wikipedia.org/wiki/Rust_(language)");
+        assert_eq!(link_href("notes/My Note.md"), "<notes/My Note.md>");
+        assert_eq!(link_href("a)b"), "<a)b>");
+        assert_eq!(link_words("see [1]"), "see \\[1\\]");
+        let md = format!("[{}]({})", link_words("see [1]"), link_href("notes/My Note.md"));
+        let a = crate::markdown::analyze(&md);
+        assert!(a.spans.iter().any(|s| s.kind == crate::markdown::SpanKind::Link("notes/My Note.md".into()) && s.range == (0..md.len())), "{md}");
+    }
 
     fn apply(mine: &str, theirs: &str) -> String {
         match one_edit(mine, theirs) {

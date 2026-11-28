@@ -1,0 +1,19 @@
+# gpui_ios
+
+gpui's backend for an iPhone and an iPad (UIKit, Metal, CoreText), copied from zed's `crates/gpui_ios` at `f8cfc7ed9e57503def9479138894f3139f5400cc`, the revision `Cargo.lock` pins every gpui crate to (https://github.com/zed-industries/zed, Apache-2.0, `LICENSE-APACHE`). The root `Cargo.toml` `[patch]`es the zed source with this copy, so `gpui_platform` builds on it too. Only `src/` is carried: upstream's example and its test need zed's workspace.
+
+`Cargo.toml` is written for this copy. Upstream's takes every dependency from zed's workspace (`workspace = true`); here each is written out as zed's root manifest has it at that revision, with two features more for the changes below (`CADisplayLink` was upstream's, `CAFrameRateRange` is this copy's).
+
+## Changes
+
+1. `src/ios/application.rs`, the scene's `will_connect`: the display link asks for the screen's own pace (`setPreferredFrameRateRange`, 80 to the screen's `maximumFramesPerSecond`) where the screen has more than 60 frames. Upstream leaves the link as it is made, which fires 60 times a second on an iPhone that draws 120: measured on an iPhone 17 Pro, a scroll was drawn every 16.7 ms before and every 8.3 ms after. The bundle's `Info.plist` says `CADisableMinimumFrameDurationOnPhone` too, without which the system holds an app to 60; the key alone changed nothing. Marked `(Studio addition.)`.
+2. `src/ios/window.rs`, `handle_touch`: a moving touch carries where UIKit expects the finger next (`UIEvent.predictedTouchesForTouch`, the last of them) as `TouchEvent::predicted_position`, which gpui's own recognizer leads a pan with. Upstream passes `None`. Marked `(Studio addition.)`.
+3. `src/ios/window.rs`, `handle_keyboard_dismiss_touch`: the keyboard is put away only by a finger drawn down into it, as the system's own text views have it. Upstream put it away at any 24 points drawn down the view, so scrolling back up a note being written closed the keyboard at every pull. Marked `(Studio change.)`.
+
+4. `src/ios/platform.rs`, `gestures`: the backend gives GPUI its tuning for touches, a pan after ten points (`touch_slop`), as UIKit's own scroll views have it. Upstream gives none, so GPUI's default of eight held, under which a thumb's tap that rolled a little was a pan and pressed nothing. Marked `(Studio addition.)`.
+
+5. `src/ios/window.rs` (`MetalFrames`, `start_metal_frames`, `metal_frame`, `wake_frames`, `frame_waker`) and `src/ios/application.rs` (`pace`, `render_frame`): each window is paced by a `CAMetalDisplayLink` of its own, which hands a frame its drawable as the frame is due, as GPUI's Mac backend has it. Upstream paces every window from the scene's one `CADisplayLink` and the renderer asks the layer for a drawable (`nextDrawable`), which waits until the system's compositor lets one go: once a frame fell behind, every frame after it waited out the rest of its interval there, the window's thread asleep and deaf to a finger. Measured on an iPhone 17 Pro, a note scrolling: a frame's turn was 8.1 ms of the 8.3 for whole launches, two of three, and 1.8 to 2.6 ms in every launch after. The link asks for the screen's own pace as change 1 does, pauses after an update in which GPUI drew nothing and asked for nothing, and is woken by GPUI through `PlatformWindow::frame_waker`. The scene's `CADisplayLink` still starts: its first tick gives each window its link and pauses itself, and it goes on pacing a window where there is no such link (before iOS 17). Marked `(Studio addition.)` and `(Studio change.)`.
+
+## Taking a newer one
+
+When gpui's pin moves (`cargo update -p gpui --precise <rev>`), copy `crates/gpui_ios/src` of that revision over `src/`, apply the five changes again unless upstream has them, and bring `Cargo.toml`'s dependencies in line with zed's root manifest at that revision. A copy left behind the pin builds against a newer gpui and may not compile, or worse, may.

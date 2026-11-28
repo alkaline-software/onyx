@@ -12,6 +12,7 @@ mod file_undo;
 #[allow(dead_code)]
 mod file_icons;
 mod folder_look;
+mod glass;
 mod fonts;
 mod i18n;
 mod langs;
@@ -424,6 +425,20 @@ fn main() {
     // anything else.
     #[cfg(windows)]
     velopack::VelopackApp::build().run();
+    // A probe's trace to a file it names (`ONYX_TRACE=/path`): an app a UI
+    // test starts in a simulator has no console to print to.
+    #[cfg(unix)]
+    if let Some(path) = std::env::var("ONYX_TRACE").ok().filter(|p| p.starts_with('/')) {
+        use std::os::fd::AsRawFd as _;
+        unsafe extern "C" {
+            fn dup2(from: i32, to: i32) -> i32;
+        }
+        if let Ok(file) = std::fs::OpenOptions::new().create(true).append(true).open(&path) {
+            // SAFETY: the file's descriptor put in the place of the standard error's, once, before anything prints.
+            unsafe { dup2(file.as_raw_fd(), 2) };
+            std::mem::forget(file);
+        }
+    }
     let app = gpui_platform::application().with_assets(assets::Assets);
     // The app stays running with no window; a Dock click opens one.
     app.on_reopen(|cx| {

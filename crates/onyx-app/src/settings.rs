@@ -339,7 +339,7 @@ impl Shell {
             .child(page);
         // A compact window's settings are a page of the whole screen: its
         // ground runs under the status bar and the home indicator.
-        let scrim = div().id("settings-scrim").absolute().inset_0().occlude().bg(theme.overlay).children(crate::widgets::reaches(if narrow { theme.popover } else { theme.overlay })).flex().items_center().justify_center().on_click(cx.listener(|this, _, window, cx| this.close_settings(window, cx))).child(card);
+        let scrim = div().id("settings-scrim").absolute().inset_0().occlude().bg(theme.overlay).children(crate::glass::cover("settings")).children(crate::widgets::reaches(if narrow { theme.popover } else { theme.overlay })).flex().items_center().justify_center().on_click(cx.listener(|this, _, window, cx| this.close_settings(window, cx))).child(card);
         Some(crate::widgets::fade_in("settings-sheet", scrim).into_any_element())
     }
 
@@ -349,7 +349,8 @@ impl Shell {
         // A compact window's: the page's width is the rows' measure.
         let narrow = self.settings_in && self.is_compact();
         let page_x = if narrow { px(16.) } else { PAGE_X };
-        NARROW.set(narrow.then(|| (self.room_size().width - page_x * 2. - px(30.)).min(CONTROL_W)));
+        // A compact window's controls are as wide as the card's inside.
+        NARROW.set(narrow.then(|| self.room_size().width - page_x * 2. - px(30.)));
         let rows = match section {
             "font" => self.fonts_rows(cx),
             "about" => self.about_rows(cx),
@@ -364,23 +365,28 @@ impl Shell {
         let here = self.settings_in;
         let mut close_button = here.then(|| {
             let wash = theme.foreground.opacity(0.08);
+            // On glass (`glass.rs`) it is a round button of the system's
+            // own material, a finger's size, as a sheet's is there.
+            let glass = crate::glass::on();
             div()
                 .id("settings-close")
-                .size(px(hand(28.)))
+                .relative()
+                .size(px(if glass { 44. } else { hand(28.) }))
                 .flex_shrink_0()
                 .rounded_full()
                 .flex()
                 .items_center()
                 .justify_center()
                 .cursor_pointer()
-                .bg(wash)
-                .hover(move |s| s.bg(wash.opacity(0.14)))
+                .when(!glass, |d| d.bg(wash).hover(move |s| s.bg(wash.opacity(0.14))))
+                .children(crate::glass::plate("settings-close", 999.))
+                .children(crate::widgets::press_light(999.))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(|this, _, window, cx| {
                     swallow_click(window, cx);
                     this.close_settings(window, cx)
                 }))
-                .child(Icon::default().path("icons/close.svg").with_size(px(hand(13.))).text_color(theme.muted_foreground))
+                .child(crate::glass::icon("icons/close.svg", if crate::glass::on() { 18. } else { hand(13.) }, if crate::glass::on() { theme.foreground.opacity(0.86) } else { theme.muted_foreground }))
         });
         let round = px(if here && !narrow { 15. } else { 0. });
         // At General's title's right, the window's language.
@@ -468,7 +474,7 @@ impl Shell {
                                     .relative()
                                     .flex_1()
                                     .min_h_0()
-                                    .child(v_flex().id("settings-body").flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.settings_scroll).px(page_x).pt(px(2.)).pb(px(24.)).child(page_in(format!("page-{section}"), v_flex().gap(px(18.)).children(rows))))
+                                    .child(v_flex().id("settings-body").flex_1().min_h_0().relative().top(self.scrollers.stretch_of(&self.settings_scroll)).overflow_y_scroll().track_scroll(&self.settings_scroll).px(page_x).pt(px(2.)).pb(px(24.)).child(page_in(format!("page-{section}"), v_flex().gap(px(18.)).children(rows))))
                                     .vertical_scrollbar(&self.settings_scroll)
                             }),
                     ),
@@ -642,8 +648,7 @@ impl Shell {
             .into_any_element();
         let text = vec![self.size_row(cx), self.spelling_row(cx)];
         vec![
-            // An iPhone and an iPad have no panel to choose a picture's file in.
-            group(Some(t("You").into()), None, (!cfg!(target_os = "ios")).then(|| line(t("Avatar").into(), None, avatar, &theme)).into_iter().chain([line(t("Name").into(), None, self.name_field(cx), &theme)]).collect(), &theme),
+            group(Some(t("You").into()), None, vec![line(t("Avatar").into(), None, avatar, &theme), line(t("Name").into(), None, self.name_field(cx), &theme)], &theme),
             group(Some(t("Container").into()), None, vec![self.container_row(cx)], &theme),
             group(Some(t("Window").into()), None, vec![line(t("Theme").into(), None, theme_choice, &theme), line(t("Accent").into(), Some(accent_name), accents, &theme)], &theme),
             group(Some(t("Text").into()), None, text, &theme),
@@ -733,6 +738,7 @@ impl Shell {
                 .rounded(px(6.))
                 .text_color(theme.muted_foreground)
                 .hover(move |s| s.bg(wash).text_color(danger))
+                .children(crate::widgets::press_light(6.))
                 .managed_tooltip(|window, cx| tip(t("Close Container"), window, cx))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(|_, _, _, cx| {
@@ -965,6 +971,7 @@ impl Shell {
                 .cursor_pointer()
                 .text_color(quiet)
                 .hover(move |s| s.bg(over).text_color(ink))
+                .children(crate::widgets::press_light(999.))
                 .managed_tooltip(|window, cx| tip(t("Clear"), window, cx))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .on_click(cx.listener(move |this, _, window, cx| {
@@ -1331,7 +1338,20 @@ impl Shell {
         let theme = cx.theme().clone();
         let sizes = self.cfg.editor.text_sizes();
         let place = |this: &Self, key: &'static str, name: &str, value: f32, cx: &mut Context<Self>| h_flex().gap(px(8.)).items_center().child(div().text_size(px(hand(12.5))).text_color(theme.muted_foreground).child(name.to_string())).child(this.stepper(key, value, true, cx));
-        // In a compact window the two stand one over the other.
+        // In a compact window each size is a line of its own, its name at
+        // the left and its steps at the right, the reset beside the row's
+        // name.
+        if NARROW.get().is_some() {
+            let size = |this: &Self, key: &'static str, name: &str, value: f32, cx: &mut Context<Self>| h_flex().w_full().items_center().child(div().flex_1().text_size(px(hand(12.5))).text_color(theme.muted_foreground).child(name.to_string())).child(this.stepper(key, value, true, cx));
+            return v_flex()
+                .px(px(14.))
+                .py(px(10.))
+                .gap(px(8.))
+                .child(h_flex().items_center().child(div().flex_1().text_size(px(hand(13.))).child(t("Size"))).children(self.size_reset(sizes, cx)))
+                .child(size(self, "note", t("Text"), sizes.note, cx))
+                .child(size(self, "code", t("Code"), sizes.code, cx))
+                .into_any_element();
+        }
         let control = h_flex()
             .gap_x(px(16.))
             .gap_y(px(8.))
@@ -1572,6 +1592,7 @@ impl Shell {
             .text_size(px(hand(12.5)))
             .cursor_pointer()
             .hover(|s| s.bg(theme.foreground.opacity(0.06)))
+            .children(crate::widgets::press_light(999.))
             // A press on it is not a drag of the window's top.
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |this, ev: &ClickEvent, _, cx| {
@@ -1611,7 +1632,7 @@ impl Shell {
         let pill = h_flex()
             .id("writing-pill")
             .h(control_h())
-            .w(WRITING_W)
+            .w(if NARROW.get().is_some() { control_w() } else { WRITING_W })
             .justify_center()
             .px(px(12.))
             .gap(px(7.))
@@ -1622,6 +1643,7 @@ impl Shell {
             .text_size(px(hand(12.5)))
             .cursor_pointer()
             .hover(|s| s.bg(theme.foreground.opacity(0.06)))
+            .children(crate::widgets::press_light(999.))
             .on_click(cx.listener(move |this, ev: &ClickEvent, _, cx| {
                 let at = ev.position() + point(px(-60.), px(16.));
                 let chosen = this.cfg.editor.writing_language.clone();
@@ -1634,6 +1656,17 @@ impl Shell {
             .child(Icon::default().path("icons/chevron-down.svg").with_size(px(hand(12.))).text_color(theme.muted_foreground))
             .into_any_element();
         let language = div().when(!on, |d| d.opacity(0.45).occlude()).child(pill);
+        // In a compact window the switch is at the name's right, as a
+        // switch is on an iPhone, and the language under them.
+        if NARROW.get().is_some() {
+            return v_flex()
+                .px(px(14.))
+                .py(px(10.))
+                .gap(px(8.))
+                .child(h_flex().items_center().gap(px(12.)).child(div().flex_1().min_w_0().text_size(px(hand(13.))).child(t("Check spelling and grammar"))).child(check))
+                .child(language)
+                .into_any_element();
+        }
         line(t("Check spelling and grammar").into(), None, h_flex().gap(px(12.)).items_center().child(language).child(check).into_any_element(), &theme)
     }
 
@@ -1787,6 +1820,7 @@ impl Shell {
                 .justify_center()
                 .cursor_pointer()
                 .hover(move |s| s.bg(hover))
+                .children(crate::widgets::press_light(999.))
                 .managed_tooltip(|window, cx| tip(t("Clear"), window, cx))
                 .on_click(cx.listener(|this, _, window, cx| {
                     swallow_click(window, cx);

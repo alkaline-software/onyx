@@ -63,10 +63,18 @@ actions!(embed, [Leave, Still, LineUp, LineDown, PageUpIn, PageDownIn, ToStart, 
 /// The key context of a frame the keyboard is in.
 pub(crate) const EMBED_CONTEXT: &str = "Embed";
 
-/// The bar along a frame's top, and a picture's.
-pub(crate) const HEAD_H: f32 = 36.;
+/// Whether a finger and not a pointer works the frame: an iPhone, an iPad.
+const TOUCH: bool = cfg!(target_os = "ios");
+/// The bar along a frame's top, and a picture's: a finger's size where a
+/// finger presses it.
+pub(crate) const HEAD_H: f32 = if TOUCH { 44. } else { 36. };
+/// A bar's icon.
+const BAR_ICON: f32 = if TOUCH { 17. } else { 14. };
 /// The narrowest a PDF's frame goes.
 pub(crate) const CONTROL_LEAST: f32 = 160.;
+/// The narrowest a table of data stands: its name line holds the file's
+/// name beside its bar's tools, and a table of two short columns spans it.
+pub(crate) const SHEET_LEAST: f32 = 300.;
 /// The corners of every piece a note shows whole, a picture and a frame
 /// alike: the bar over its top follows them, inside a frame's border by
 /// its width, and the ring around it stands out from them by its own.
@@ -92,7 +100,7 @@ const KEEP_BYTES: usize = 96 << 20;
 const WIDEST: f32 = 4096.;
 /// The zooms the buttons step through, as points to pixels.
 const ZOOMS: [f32; 15] = [0.25, 0.33, 0.5, 0.67, 0.75, 0.9, 1., 1.1, 1.25, 1.5, 1.75, 2., 2.5, 3., 4.];
-const BUTTON: f32 = 24.;
+const BUTTON: f32 = if TOUCH { 34. } else { 24. };
 /// The sidebar's width, as wide as a third of the frame at most, and a
 /// small page's in it.
 const SIDE_W: f32 = 168.;
@@ -188,6 +196,13 @@ pub(crate) struct Embed {
     want: Option<(usize, f32)>,
     /// The width a document's words were last laid out at.
     measured: Option<f32>,
+    /// A table of data (`preview::is_table`): shown as its table, with no
+    /// frame round it, as wide as the table asks (`natural`, measured at
+    /// the words' room, `room`), under a line of its name.
+    sheet: bool,
+    pub(crate) room: f32,
+    measured_room: f32,
+    pub(crate) natural: Option<f32>,
     /// The scale the pages were last drawn at: a change the zoom did not
     /// make (the sidebar, the frame's width) keeps the same place in view.
     last_k: Option<f32>,
@@ -211,6 +226,8 @@ pub(crate) struct Embed {
     /// since when, for its fade.
     hovered: bool,
     head_hovered: bool,
+    /// How far down the frame its bar stands, its top being out of sight.
+    head_down: f32,
     bar_on: bool,
     bar_since: Option<Instant>,
     /// The bar of a large card: no file under it, the card is.
@@ -243,7 +260,7 @@ impl Embed {
         } else {
             Body::Picture
         };
-        let mut me = Self { path, nth, note, store, body, focus: cx.focus_handle(), size: (0., 0.), scroll: ScrollHandle::new(), zoom: None, leaves: HashMap::new(), kept: None, drawing: None, seen: 0..0, sel: None, selecting: false, page_field: None, shown_page: usize::MAX, want: None, measured: None, last_k: None, side_open: false, side_list: List::Pages, side_at: None, side_scroll: ScrollHandle::new(), thumbs: HashMap::new(), thumbing: false, followed: usize::MAX, folds: HashMap::new(), renaming: None, hovered: false, head_hovered: false, bar_on: false, bar_since: None, card: None, tab: None, _subs: Vec::new() };
+        let mut me = Self { path, nth, note, store, body, focus: cx.focus_handle(), size: (0., 0.), scroll: ScrollHandle::new(), zoom: None, leaves: HashMap::new(), kept: None, drawing: None, seen: 0..0, sel: None, selecting: false, page_field: None, shown_page: usize::MAX, want: None, measured: None, sheet: false, room: 0., measured_room: 0., natural: None, last_k: None, side_open: false, side_list: List::Pages, side_at: None, side_scroll: ScrollHandle::new(), thumbs: HashMap::new(), thumbing: false, followed: usize::MAX, folds: HashMap::new(), renaming: None, hovered: false, head_hovered: false, head_down: 0., bar_on: false, bar_since: None, card: None, tab: None, _subs: Vec::new() };
         // Its pages leave the GPU with it, as `let_go` lets them go.
         cx.on_release(|me: &mut Self, cx| {
             let images: Vec<_> = me.leaves.drain().chain(me.thumbs.drain()).map(|(_, leaf)| leaf.image).collect();
@@ -252,6 +269,7 @@ impl Embed {
             }
         })
         .detach();
+        me.sheet = matches!(me.body, Body::Reading) && onyx_core::preview::is_table(&me.path);
         if matches!(me.body, Body::Reading) {
             me.read_words(look, cx);
         }
@@ -410,8 +428,12 @@ impl Embed {
                     preview::Preview::Markdown { text, cut } => {
                         let text = if cut { format!("{text}\n\n*{}*\n", t("Only the start of the file is shown.")) } else { text };
                         let editor = cx.new(Editor::new);
+                        let sheet = me.sheet;
                         editor.update(cx, |e, cx| {
                             e.set_framed(cx);
+                            if sheet {
+                                e.set_sheet(cx);
+                            }
                             e.set_look(look, cx);
                             e.set_mode(Mode::Reading, cx);
                             e.set_place(path.clone(), vault, cx);
@@ -468,6 +490,23 @@ impl Embed {
     /// None for a PDF, whose first page gives it, and while still read.
     pub(crate) fn measure(&mut self, window: &mut Window, cx: &mut Context<Self>) -> Option<f32> {
         match &self.body {
+            // A table of data is laid out at the room first, which says how
+            // wide it asks to be, then at its own width where that is less
+            // (a width asked for); at its natural width the two agree.
+            Body::Words(editor) if self.sheet => {
+                let (room, w) = (self.room.max(40.), self.size.0.max(40.));
+                if self.measured != Some(w) || self.natural.is_none_or(|_| self.room != self.measured_room) {
+                    editor.update(cx, |e, cx| e.relayout(room, window, cx));
+                    let natural = editor.read(cx).widest_table().unwrap_or(room).min(room).ceil();
+                    if (natural - w).abs() > 0.5 {
+                        editor.update(cx, |e, cx| e.relayout(w, window, cx));
+                    }
+                    self.natural = Some(natural);
+                    self.measured = Some(w);
+                    self.measured_room = self.room;
+                }
+                Some(editor.read(cx).content_height() + HEAD_H)
+            }
             Body::Words(editor) => {
                 let w = (self.size.0 - 2. - WORDS_PAD_X * 2.).max(40.);
                 if self.measured != Some(w) {
@@ -512,7 +551,10 @@ impl Embed {
     /// from the note, which hears the pointer on a picture), and how far
     /// it shows at this draw, 0 to 1.
     pub(crate) fn settle_bar(&mut self, near: bool, window: &mut Window) -> f32 {
-        let want = near || self.hovered || self.head_hovered || self.renaming.is_some();
+        // Under a finger the bar goes by what is selected (`near`), and a
+        // tab's file, which nothing selects, keeps its bar.
+        let touch = cfg!(target_os = "ios");
+        let want = near || self.renaming.is_some() || if touch { self.tab.is_some() } else { self.hovered || self.head_hovered };
         if want != self.bar_on {
             // A fade turned back midway goes back from where it was.
             let shown = self.bar_alpha();
@@ -544,9 +586,19 @@ impl Embed {
         ((self.frame_w() - 2. - self.side_w()).max(10.), (self.size.1 - 2.).max(10.))
     }
 
+    /// How wide the sidebar stands open: `SIDE_W`, or a third of a narrow frame.
+    fn side_full(&self) -> f32 {
+        SIDE_W.min((self.size.0 / 3.).round())
+    }
+
+    /// A small page's width in the sidebar, less in a narrow one.
+    fn thumb_w(&self) -> f32 {
+        THUMB_W.min(self.side_full() - 28.).max(24.)
+    }
+
     /// How wide the sidebar stands at this draw, as it slides.
     fn side_w(&self) -> f32 {
-        let full = SIDE_W.min((self.size.0 / 3.).round());
+        let full = self.side_full();
         let t = self.side_at.map_or(1., |at| ease_out_quint()((at.elapsed().as_secs_f32() / FOLD_ANIM.as_secs_f32()).min(1.)));
         (full * if self.side_open { t } else { 1. - t }).round()
     }
@@ -800,14 +852,15 @@ impl Embed {
 
     /// Where each small page stands in the sidebar: its left, top, width
     /// and height; and how tall the list is.
-    fn thumb_places(sizes: &[(f32, f32)]) -> (Vec<(f32, f32, f32, f32)>, f32) {
+    fn thumb_places(&self, sizes: &[(f32, f32)]) -> (Vec<(f32, f32, f32, f32)>, f32) {
+        let side = self.side_full();
         let widest = sizes.iter().map(|s| s.0).fold(1., f32::max);
-        let k = THUMB_W / widest;
+        let k = self.thumb_w() / widest;
         let mut y = THUMB_GAP;
         let mut out = Vec::with_capacity(sizes.len());
         for (w, h) in sizes {
             let (pw, ph) = ((w * k).round().max(4.), (h * k).round().max(4.));
-            out.push((((SIDE_W - pw) / 2.).round(), y, pw, ph));
+            out.push((((side - pw) / 2.).round(), y, pw, ph));
             y += ph + THUMB_LABEL + THUMB_GAP;
         }
         (out, y)
@@ -832,7 +885,7 @@ impl Embed {
             return;
         }
         self.thumbing = true;
-        let width = (THUMB_W * window.scale_factor()).round() as u32;
+        let width = (self.thumb_w() * window.scale_factor()).round() as u32;
         let path = self.path.clone();
         let pages = batch.clone();
         let job = cx.background_spawn(async move { preview::pdf_pages(&path, &pages, width).into_iter().map(|d| d.and_then(|(w, h, rgba)| crate::layout::bgra(w, h, rgba))).collect::<Vec<_>>() });
@@ -860,6 +913,7 @@ impl Embed {
     /// PDF has one, and the list; `page` is the one the bar says.
     fn render_side(&mut self, sizes: &[(f32, f32)], page: usize, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
+        let side = self.side_full();
         let outline = self.outline().filter(|o| !o.is_empty());
         if outline.is_none() {
             self.side_list = List::Pages;
@@ -867,17 +921,17 @@ impl Embed {
         let (_, bh) = self.body_size();
         // It stands under the bar, as pdf.js's stands under its tools: the
         // bar comes over the frame's top, and would cover the switch.
-        let head = HEAD_H + if outline.is_some() { SIDE_HEAD } else { 0. };
+        let head = HEAD_H + self.head_down + if outline.is_some() { SIDE_HEAD } else { 0. };
         let view_h = (bh - head).max(10.);
         let top = -f32::from(self.side_scroll.offset().y);
         let scroll = self.side_scroll.clone();
-        if let Some(router) = cx.try_global::<crate::scroll::Router>() {
-            router.0.name(&scroll);
+        if let Some(router) = self.router(cx) {
+            router.name(&scroll);
         }
         let list = match (self.side_list, &outline) {
             (List::Outline, Some(marks)) => self.render_outline(marks.clone(), top, view_h, cx),
             _ => {
-                let (places, tall) = Self::thumb_places(sizes);
+                let (places, tall) = self.thumb_places(sizes);
                 // The page the bar says kept in the list's view as it changes.
                 if self.followed != page && !self.sliding() {
                     self.followed = page;
@@ -893,7 +947,7 @@ impl Embed {
                 let first = places.partition_point(|p| p.1 + p.3 + THUMB_LABEL < top);
                 let last = places.partition_point(|p| p.1 < top + view_h).max(first + 1).min(places.len());
                 self.draw_thumbs(first..last, places.len(), window, cx);
-                let mut column = div().relative().w(px(SIDE_W)).h(px(tall));
+                let mut column = div().relative().w(px(side)).h(px(tall));
                 for i in first.saturating_sub(1)..(last + 1).min(places.len()) {
                     let p = places[i];
                     let on = i == page;
@@ -905,7 +959,7 @@ impl Embed {
                             .absolute()
                             .left(px(0.))
                             .top(px(p.1 - THUMB_GAP / 2.))
-                            .w(px(SIDE_W))
+                            .w(px(side))
                             .h(px(p.3 + THUMB_LABEL + THUMB_GAP))
                             .cursor_pointer()
                             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
@@ -934,7 +988,7 @@ impl Embed {
                                     .absolute()
                                     .left(px(0.))
                                     .top(px(THUMB_GAP / 2. + p.3 + 3.))
-                                    .w(px(SIDE_W))
+                                    .w(px(side))
                                     .flex()
                                     .justify_center()
                                     .text_size(px(11.))
@@ -979,9 +1033,9 @@ impl Embed {
             .on_mouse_down(MouseButton::Left, cx.listener(|me, _, window, cx| window.focus(&me.focus, cx)))
             .child(
                 div()
-                    .w(px(SIDE_W))
+                    .w(px(side))
                     .h_full()
-                    .pt(px(HEAD_H))
+                    .pt(px(HEAD_H + self.head_down))
                     .flex()
                     .flex_col()
                     .children(switch)
@@ -993,6 +1047,7 @@ impl Embed {
     /// The outline's lines in view, a line folded hiding those under it.
     fn render_outline(&mut self, marks: Arc<Vec<PdfMark>>, top: f32, view_h: f32, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
+        let side = self.side_full();
         // A line alone at the top (the document's title) stands open,
         // whatever the file says, or the outline would be one line.
         let lone = marks.iter().filter(|m| m.depth == 0).count() == 1;
@@ -1011,7 +1066,7 @@ impl Embed {
         }
         let first = ((top / MARK_H).floor().max(0.) as usize).saturating_sub(2);
         let last = (((top + view_h) / MARK_H).ceil() as usize + 2).min(shown.len());
-        let mut column = div().relative().w(px(SIDE_W)).h(px(shown.len() as f32 * MARK_H + 8.));
+        let mut column = div().relative().w(px(side)).h(px(shown.len() as f32 * MARK_H + 8.));
         for (row, &i) in shown.iter().enumerate().take(last).skip(first) {
             let m = &marks[i];
             let open = open_of(i, m);
@@ -1042,7 +1097,7 @@ impl Embed {
                     .absolute()
                     .left(px(4.))
                     .top(px(4. + row as f32 * MARK_H))
-                    .w(px(SIDE_W - 8.))
+                    .w(px(side - 8.))
                     .h(px(MARK_H))
                     .pl(px(2. + m.depth.min(4) as f32 * 10.))
                     .pr(px(6.))
@@ -1241,11 +1296,28 @@ impl Embed {
         }
     }
 
-    /// What the bar's pencil does: the caret in the line that embeds the
-    /// file, which shows under it as written, so it can be changed there.
-    fn edit_line(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let (Some(line), Some(note)) = (self.line(cx), self.note.upgrade()) else { return };
-        note.update(cx, |e, cx| e.edit_object(line, window, cx));
+    /// The window's scrollers, for this frame to name its own to, while
+    /// a scroll begun on it is its own. Under a pointer that is always.
+    /// Under a finger it is while the frame is the piece selected (a tap
+    /// in it), or a tab's: a frame as wide as the page stood in the way
+    /// of every pull up the note, which went into the file's pages until
+    /// they ran out.
+    fn router(&self, cx: &App) -> Option<Rc<crate::scroll::Scrollers>> {
+        let mine = !TOUCH || self.tab.is_some() || self.line(cx).zip(self.note.upgrade()).is_some_and(|(line, note)| note.read(cx).object_selected() == Some(line));
+        if !mine {
+            return None;
+        }
+        cx.try_global::<crate::scroll::Router>().map(|r| r.0.clone())
+    }
+
+    /// The bar's place down the frame, from the note as it lays it out.
+    pub(crate) fn set_head_down(&mut self, down: f32, cx: &mut Context<Self>) {
+        // A table's name line stands over it, never over the table.
+        let down = if self.sheet { 0. } else { down };
+        if (self.head_down - down).abs() > 0.01 {
+            self.head_down = down;
+            cx.notify();
+        }
     }
 
     /// A press in the frame: the whole selected in the note, the keyboard
@@ -1433,8 +1505,8 @@ impl Embed {
         )
         .size_full();
         let scroll = self.scroll.clone();
-        if let Some(router) = cx.try_global::<crate::scroll::Router>() {
-            router.0.zooms(&scroll);
+        if let Some(router) = self.router(cx) {
+            router.zooms(&scroll);
         }
         let side = (self.side_open || sliding).then(|| self.render_side(&sizes, page, window, cx));
         let worded = text.as_ref().is_some_and(|t| t.iter().any(|p| !p.glyphs.is_empty()));
@@ -1480,8 +1552,8 @@ impl Embed {
         let (places, cw, ch) = self.places(&sizes, k);
         let p = places[0];
         let scroll = self.scroll.clone();
-        if let Some(router) = cx.try_global::<crate::scroll::Router>() {
-            router.0.zooms(&scroll);
+        if let Some(router) = self.router(cx) {
+            router.zooms(&scroll);
         }
         let kept = self.kept.get_or_insert_with(|| crate::pictures::Kept::new(cx)).clone();
         let source = crate::pictures::through(&kept, ImageSource::Resource(Resource::Path(self.path.clone().into())), 0);
@@ -1549,13 +1621,15 @@ impl Embed {
 
     fn render_words(&mut self, editor: Entity<Editor>, cx: &mut Context<Self>) -> AnyElement {
         let scroll = editor.read(cx).scroll.clone();
-        if let Some(router) = cx.try_global::<crate::scroll::Router>() {
-            router.0.name(&scroll);
+        if let Some(router) = self.router(cx) {
+            router.name(&scroll);
         }
+        // A table of data stands under its name line, edge to edge.
+        let (x, top, foot) = if self.sheet { (0., HEAD_H, 0.) } else { (WORDS_PAD_X, WORDS_PAD_Y, WORDS_FOOT) };
         div()
             .relative()
             .size_full()
-            .child(div().id("embed-words").size_full().overflow_y_scroll().track_scroll(&scroll).px(px(WORDS_PAD_X)).pt(px(WORDS_PAD_Y)).pb(px(WORDS_FOOT)).child(editor))
+            .child(div().id("embed-words").size_full().overflow_y_scroll().track_scroll(&scroll).px(px(x)).pt(px(top)).pb(px(foot)).child(editor))
             .vertical_scrollbar(&scroll)
             .into_any_element()
     }
@@ -1598,7 +1672,8 @@ impl Embed {
                     press(me, ev, window, cx);
                 }))
             })
-            .child(Icon::default().path(icon).with_size(px(14.)).text_color(ink))
+            .children(crate::widgets::press_light(6.))
+            .child(Icon::default().path(icon).with_size(px(BAR_ICON)).text_color(ink))
     }
 
     /// A share on the bar, a PDF's zoom or a picture's size: a press sets
@@ -1617,8 +1692,9 @@ impl Embed {
             .rounded(px(6.))
             .cursor_pointer()
             .hover(move |s| s.bg(hover))
-            .text_size(px(12.))
+            .text_size(px(if TOUCH { 13.5 } else { 12. }))
             .text_color(if accent { theme.primary } else { theme.muted_foreground })
+            .children(crate::widgets::press_light(6.))
             .managed_tooltip(move |window, cx| tip(label, window, cx))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |me, _, window, cx| {
@@ -1660,12 +1736,15 @@ impl Embed {
             }
             fits
         };
-        let page = pdf && take(84.);
-        let view = picture && take(BUTTON + 2.);
+        let page = pdf && take(if TOUCH { 96. } else { 84. });
+        // On an iPhone and an iPad every file has View: the system's
+        // viewer over the whole window (`sys::open`).
+        let view = (picture || (cfg!(target_os = "ios") && self.card.is_none())) && take(BUTTON + 2.);
         let zoom = tab && !self.sizes().is_empty() && take(BUTTON * 2. + 50.);
-        let size = !tab && changes && facts.is_some() && take(48.);
-        let pencil = !tab && changes && take(BUTTON + 11.);
-        let place = changes && (facts.is_some() || card_across.is_some()) && take(BUTTON * 3. + 17.);
+        // On a phone what a note embeds is the page's width (`widgets::full_width`): no width or place to set.
+        let full = crate::widgets::full_width();
+        let size = !tab && changes && !full && facts.is_some() && take(if TOUCH { 56. } else { 48. });
+        let place = changes && !full && (facts.is_some() || card_across.is_some()) && take(BUTTON * 3. + 17.);
         let side = pdf && take(BUTTON + 7.);
         let iconed = take(22.);
         let named = room >= 40.;
@@ -1677,7 +1756,7 @@ impl Embed {
             right = right
                 .child(div().w(px(40.)).h(px(22.)).px(px(3.)).flex().items_center().rounded(px(5.)).bg(theme.background).border_1().border_color(theme.input).text_size(px(12.)).child(Input::new(&field).appearance(false).bordered(false).px(px(0.))))
                 .child(div().pl(px(5.)).pr(px(2.)).text_size(px(12.)).text_color(theme.muted_foreground).child(format!("/ {count}")));
-            if place || size || pencil || zoom {
+            if place || size || zoom {
                 right = right.child(rule());
             }
         }
@@ -1723,13 +1802,13 @@ impl Embed {
                 .child(rule());
         }
         if view {
-            right = right.child(self.button("embed-view", "icons/maximize.svg", t("View"), cx, |me, _, _, cx| me.picture_do("view", cx)));
-        }
-        if pencil {
-            if size || view {
-                right = right.child(rule());
-            }
-            right = right.child(self.button("embed-edit", "icons/pencil-simple.svg", t("Edit Link"), cx, |me, _, window, cx| me.edit_line(window, cx)));
+            right = right.child(self.button("embed-view", "icons/maximize.svg", t("View"), cx, move |me, _, _, cx| {
+                if picture {
+                    me.picture_do("view", cx)
+                } else {
+                    crate::sys::open(&me.path.to_string_lossy())
+                }
+            }));
         }
         right = right.child(self.button("embed-more", "icons/ellipsis.svg", t("More"), cx, |me, ev, _, cx| me.more(ev.position(), cx)));
         let side = side.then(|| self.button("embed-side", "icons/panel-left.svg", t("Toggle Sidebar"), cx, |me, _, _, cx| me.toggle_side(cx)).ml(px(-4.)).when(self.side_open, |d| d.bg(theme.muted)));
@@ -1781,6 +1860,11 @@ impl Embed {
         // let the picture show between the two as a second line.
         let over = picture && !tab;
         let round = if over { CONTROL_ROUND } else { CONTROL_ROUND - 1. };
+        // A table's name line is always there, on the page's ground; what
+        // the bar does comes in at its right as a bar does.
+        let sheet = self.sheet && !tab;
+        let alpha = if sheet { self.bar_alpha() } else { 1. };
+        let right = (alpha > 0.).then(|| right.opacity(alpha));
         h_flex()
             .id("embed-head")
             .occlude()
@@ -1796,9 +1880,10 @@ impl Embed {
             .items_center()
             .rounded_t(px(round))
             .when(over, |d| d.border_1())
-            .when(!over, |d| d.border_b_1())
+            .when(!over && !sheet, |d| d.border_b_1())
+            .when(sheet, |d| d.px(px(2.)))
             .border_color(theme.border)
-            .bg(theme.background.opacity(0.94))
+            .bg(if sheet { theme.background } else { theme.background.opacity(0.94) })
             // The bar's empty part: the whole, selected in the note; a right
             // click, its menu.
             .on_mouse_down(MouseButton::Left, cx.listener(|me, _, window, cx| {
@@ -1811,7 +1896,7 @@ impl Embed {
                 me.more(ev.position, cx);
             }))
             .child(h_flex().flex_1().min_w_0().gap(px(7.)).items_center().children(side).when(iconed, |d| d.child(Icon::default().path(icon).with_size(px(14.)).flex_shrink_0())).child(label))
-            .child(right)
+            .children(right)
             .into_any_element()
     }
 }
@@ -1829,6 +1914,9 @@ impl Render for Embed {
         // A note settles its frames' bars as it lays them out, with the
         // pointer near; a tab's frame has only its own hover.
         let alpha = if tab { self.settle_bar(false, window) } else { self.bar_alpha() };
+        // A table's name line is always there; its bar's own part fades.
+        let sheet = self.sheet && !tab;
+        let alpha = if sheet { 1. } else { alpha };
         let head = (alpha > 0.).then(|| self.render_head(window, cx));
         let hover = cx.listener(|me: &mut Self, on: &bool, _, cx| {
             me.hovered = *on;
@@ -1860,10 +1948,8 @@ impl Render for Embed {
             .relative()
             .size_full()
             .overflow_hidden()
-            .rounded(px(CONTROL_ROUND))
-            .border_1()
-            .border_color(theme.border)
-            .bg(theme.background)
+            // A table of data has its own edge: no frame round it.
+            .when(!sheet, |d| d.rounded(px(CONTROL_ROUND)).border_1().border_color(theme.border).bg(theme.background))
             // A press anywhere in it selects the whole in the note too, the
             // keyboard staying here for its words.
             .capture_any_mouse_down(cx.listener(|me, _, _, cx| me.mark_whole(cx)))
@@ -1882,8 +1968,8 @@ impl Render for Embed {
             .on_action(cx.listener(|me, _: &crate::shell::ZoomReset, _, cx| me.set_zoom(None, None, cx)))
             .when(tab, |d| d.child(self.sizer(cx)))
             .child(div().size_full().child(body))
-            .children(head.map(|head| div().absolute().top_0().left_0().w_full().opacity(alpha).child(head)))
-            .child(crate::widgets::round_corners(theme.background, CONTROL_ROUND - 1.))
+            .children(head.map(|head| div().absolute().top(px(self.head_down)).left_0().w_full().opacity(alpha).child(head)))
+            .when(!sheet, |d| d.child(crate::widgets::round_corners(theme.background, CONTROL_ROUND - 1.)))
             .into_any_element()
     }
 }

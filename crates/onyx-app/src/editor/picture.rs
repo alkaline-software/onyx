@@ -201,7 +201,8 @@ impl Editor {
         (a.line == b.line && a.col == 0 && b.col == self.doc.line(a.line).len() && b.col > 0 && self.object_line(a.line)).then_some(a.line)
     }
 
-    /// The piece on `line` selected, the keyboard in the note.
+    /// The piece on `line` selected, the keyboard in the note (left where
+    /// it is on an iPhone and an iPad).
     pub(crate) fn select_object(&mut self, line: usize, window: &mut Window, cx: &mut Context<Self>) {
         if line >= self.doc.line_count() {
             return;
@@ -209,7 +210,11 @@ impl Editor {
         self.editing = None;
         self.sel = self.object_sel(line);
         self.preferred_x = None;
-        window.focus(&self.focus, cx);
+        // Under a finger the keyboard stays where it is: in the note it
+        // would bring the keys up over a piece that was only pressed.
+        if !cfg!(target_os = "ios") {
+            window.focus(&self.focus, cx);
+        }
         cx.notify();
     }
 
@@ -388,20 +393,6 @@ impl Editor {
         super::MenuAt { file, link, picture, layout, remove: changes.then_some(line), ..Default::default() }
     }
 
-    /// For the bar's pencil: the caret in the piece's line, which then
-    /// shows under it as written.
-    pub(crate) fn edit_object(&mut self, line: usize, window: &mut Window, cx: &mut Context<Self>) {
-        if line >= self.doc.line_count() {
-            return;
-        }
-        self.editing = Some(line);
-        self.sel = Sel::caret(Pos::new(line, self.doc.line(line).len()));
-        self.want_scroll = true;
-        window.focus(&self.focus, cx);
-        self.kick_blink(cx);
-        cx.notify();
-    }
-
     /// A press beside a picture, not on it nor on its caption: the line
     /// nearest it that is not a picture's, the one before it for the
     /// picture's upper half, the one after for its lower. None when the
@@ -439,7 +430,7 @@ impl Editor {
     /// a PDF's frame. A document's frame runs the words' width.
     fn sized(&self, line: usize) -> bool {
         let cache = self.cache.borrow();
-        matches!(cache.entries.get(line).map(|e| &*e.row), Some(Row::Picture(p)) if p.card.is_none() && (!p.embed || onyx_core::vault::is_pdf(&p.path)))
+        matches!(cache.entries.get(line).map(|e| &*e.row), Some(Row::Picture(p)) if p.card.is_none() && (!p.embed || onyx_core::vault::is_pdf(&p.path) || onyx_core::preview::is_table(&p.path)))
     }
 
     /// The piece on `line`, when it takes a drag of its edge.
@@ -462,7 +453,14 @@ impl Editor {
 
     /// Whether the pointer is on the piece on `line` or near its edge:
     /// its bar shows.
+    /// Under a finger there is no pointer to come and go: the bar shows
+    /// while the piece is the one selected (a tap in a frame, a finger
+    /// held on a picture or a card). With the pointer's rule a touch
+    /// brought it and the lift took it away, a flicker at every tap.
     pub(crate) fn pointer_on(&self, line: usize) -> bool {
+        if cfg!(target_os = "ios") {
+            return self.object_selected() == Some(line);
+        }
         self.pic_hover.is_some_and(|h| h.line == line)
     }
 
@@ -523,7 +521,8 @@ impl Editor {
         if !self.pictures_change() {
             return false;
         }
-        if let Some(edge) = self.picture_edge_at(x, y) {
+        // On a phone a picture is the page's width: its edge sets nothing.
+        if let Some(edge) = self.picture_edge_at(x, y).filter(|_| !crate::widgets::full_width()) {
             let Some(line) = self.pic_hover.map(|h| h.line) else { return false };
             let Some(picture) = self.sized_picture(line) else { return false };
             if clicks >= 2 {
@@ -550,8 +549,9 @@ impl Editor {
             return true;
         }
         // On the picture: the whole of it, unless ⇧ carries a selection
-        // there or a second click opens the viewer.
-        if clicks == 1 && !shift {
+        // there or a second click opens the viewer. A finger's tap opens
+        // the viewer at once, and a finger held selects it.
+        if clicks == 1 && !shift && !cfg!(target_os = "ios") {
             if let Some((_, line)) = self.picture_at(x, y).filter(|(_, l)| self.object_line(*l)) {
                 self.select_object(line, window, cx);
                 return true;

@@ -1,4 +1,4 @@
-//! A file of a vault's `.assets` folder read for showing. Most kinds come
+//! A file of a vault's assets folder read for showing. Most kinds come
 //! out as markdown, which the note's own reader draws: a note as it is,
 //! code fenced in its language, a table of values as a markdown table, a
 //! notebook as its cells, a page of HTML, a Word document or a deck as
@@ -93,6 +93,13 @@ const TEXTS: &[&str] = &["csv", "tsv", "ipynb", "html", "htm"];
 
 fn ext_of(path: &Path) -> String {
     path.extension().and_then(|e| e.to_str()).unwrap_or("").to_ascii_lowercase()
+}
+
+/// Whether a file is a table of data, a sheet's or a workbook's: a note
+/// shows it as its table (`embed.rs`), not as a page in a frame.
+pub fn is_table(path: &Path) -> bool {
+    let ext = ext_of(path);
+    ext == "csv" || ext == "tsv" || BOOKS.contains(&ext.as_str())
 }
 
 /// Which group a file is in, by its name alone. A file of a name not

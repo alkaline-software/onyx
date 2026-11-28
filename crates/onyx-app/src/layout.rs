@@ -36,6 +36,12 @@ pub(crate) const PLATE_X: f32 = 12.;
 pub(crate) const CELL_X: f32 = 10.;
 /// A column is never narrower.
 const LEAST_COLUMN: f32 = 48.;
+/// The least a column of words is pressed to, in the text's size: some
+/// eight letters of it.
+const READ_COLUMN_EMS: f32 = 7.;
+/// The most a column of many words keeps of a wide room before the table
+/// is let past it, in the text's size.
+const KEPT_COLUMN_EMS: f32 = 22.;
 /// A picture is never taller than this share of its width's room.
 const MOST_PICTURE: f32 = 0.9;
 
@@ -267,6 +273,25 @@ pub(crate) struct Grid {
     pub fit: Vec<f32>,
     /// The room the table stands in, which a width set is a share of.
     pub room: f32,
+    /// How wide its words ask it to be, every column as wide as its
+    /// longest line, whatever the room (a table of data's frame is as
+    /// wide as this, `Embed::natural`).
+    pub asks: f32,
+    /// How far a table wider than its room is moved along, to the left:
+    /// 0 to `width - room` (`Editor::shift_table`).
+    pub shift: std::cell::Cell<f32>,
+}
+
+impl Grid {
+    /// Whether it is wider than its room, and moves along it.
+    pub fn wide(&self) -> bool {
+        self.width > self.room + 0.5
+    }
+
+    /// How far it can move along.
+    pub fn reach(&self) -> f32 {
+        (self.width - self.room).max(0.)
+    }
 }
 
 /// One row of a table on a line of its own.
@@ -286,6 +311,11 @@ impl TableRow {
     /// The column a place in the line stands in.
     pub fn column_of(&self, col: usize) -> usize {
         self.spots.iter().position(|s| col <= s.end).unwrap_or(self.spots.len().saturating_sub(1))
+    }
+
+    /// Where its columns begin, as it is moved along its room.
+    pub fn left(&self) -> f32 {
+        self.inset - self.grid.shift.get()
     }
 
     /// The column under `x`, from the table's left.
@@ -439,6 +469,12 @@ pub(crate) struct Pictures {
     /// How tall each framed document's words stand at the frame's width,
     /// once its frame has laid them out (`embed.rs`).
     pub embed_heights: HashMap<PathBuf, f32>,
+    /// How wide a table of data asks to stand, as its frame measured it
+    /// at the words' width (`Embed::natural`).
+    pub embed_widths: HashMap<PathBuf, f32>,
+    /// The note is a table of data's, in its frame: its tables span the
+    /// frame (`Reader::spans`).
+    pub span: bool,
     /// The note is itself in a frame: a file it embeds stays its words,
     /// so frames never stand inside frames.
     pub framed: bool,
@@ -450,6 +486,10 @@ pub(crate) struct Pictures {
     /// typed a letter at a time, a picture taken out) are let go after it
     /// (`Editor::relayout`), their pixels with them.
     pub met: std::collections::HashSet<String>,
+    /// The files a layout met that iCloud has not brought to this device
+    /// yet (`size_of`): asked for, and looked at again until they have
+    /// come (`Editor::read_pictures`).
+    pub waiting: std::collections::HashSet<PathBuf>,
 }
 
 /// How long the vault's list of files answers a picture's source.
@@ -496,8 +536,10 @@ impl Pictures {
         sum(self.drawn.values().fold(0u64, |a, d| a.wrapping_add(Arc::as_ptr(d) as u64)));
         sum(self.pdfs.len() as u64);
         sum(self.pdfs.values().fold(0u64, |a, f| a.wrapping_add(f.sizes.len() as u64)));
+        sum(self.waiting.len() as u64);
         sum(self.embed_heights.len() as u64);
         sum(self.embed_heights.values().fold(0u64, |a, x| a.wrapping_add(x.to_bits() as u64)));
+        sum(self.embed_widths.values().fold(0u64, |a, x| a.wrapping_add(x.to_bits() as u64)));
     }
 
     /// The file a picture's source names, a framed file among them.
@@ -565,11 +607,22 @@ impl Pictures {
         onyx_core::vault::resolve_link_with(root, &note, src, &mut || Arc::new(self.vault_files().iter().filter(|p| onyx_core::vault::is_note(p)).cloned().collect()))
     }
 
-    /// A picture's size in pixels, from the top of its file.
+    /// A picture's size in pixels, from the top of its file. A file
+    /// iCloud has not brought to this device yet has none: it is asked
+    /// for, and waited for off the layout (`waiting`, `Editor`'s look at
+    /// them), since reading even its first bytes here would hold the
+    /// window until the whole file had come over the network.
     pub(crate) fn size_of(&mut self, path: &Path) -> Option<(u32, u32)> {
         if let Some(s) = self.sizes.get(path) {
             return *s;
         }
+        if !onyx_core::vault::at_hand(path) {
+            if self.waiting.insert(path.to_path_buf()) {
+                crate::sys::bring(path);
+            }
+            return None;
+        }
+        self.waiting.remove(path);
         // A PDF's first page, by its size in points; the box every page
         // of it is shown in.
         let size = if onyx_core::vault::is_pdf(path) {
@@ -771,8 +824,16 @@ impl<'a> Reader<'a> {
         if cache.entries.len() != n {
             spare = std::mem::take(&mut cache.entries).into_iter().map(|e| (e.key, e)).collect();
         }
+        let probe = crate::editor::tracing().then(std::time::Instant::now);
         self.color_code(cache, theme);
+        if let Some(at) = probe {
+            eprintln!("trace code colors {:.2}ms", at.elapsed().as_secs_f64() * 1000.);
+        }
+        let probe = crate::editor::tracing().then(std::time::Instant::now);
         self.make_grids(&mut cache.grids, width, theme, window);
+        if let Some(at) = probe {
+            eprintln!("trace grids {:.2}ms", at.elapsed().as_secs_f64() * 1000.);
+        }
         let mut tops = Vec::with_capacity(n);
         let mut y = 0.;
         for line in 0..n {
@@ -821,6 +882,7 @@ impl<'a> Reader<'a> {
                 let path = pictures.find(&on.src);
                 path.as_ref().is_some_and(|p| pictures.drawn.contains_key(p)).hash(&mut h);
                 path.as_ref().and_then(|p| pictures.embed_heights.get(p)).map(|x| x.to_bits()).hash(&mut h);
+                path.as_ref().and_then(|p| pictures.embed_widths.get(p)).map(|x| x.to_bits()).hash(&mut h);
                 (self.editing == Some(line)).hash(&mut h);
             }
             let key = h.finish();
@@ -829,7 +891,13 @@ impl<'a> Reader<'a> {
                 let entry = match spare.remove(&key) {
                     Some(kept) => kept,
                     None => {
+                        let probe = crate::editor::tracing().then(std::time::Instant::now);
                         let row = self.lay_out(line, &hidden, &colors, revealed, width, &cache.grids, theme, window);
+                        if let Some(at) = probe.filter(|at| at.elapsed().as_micros() > 2000) {
+                            // What the line is made of, never its words.
+                            let (han, other) = (text.chars().filter(|c| ('\u{4e00}'..='\u{9fff}').contains(c)).count(), text.chars().filter(|c| !c.is_ascii() && !('\u{2e80}'..='\u{ffef}').contains(c)).count());
+                            eprintln!("trace slow line {line} {:.2}ms kind {:?} chars {} han {han} other {other}", at.elapsed().as_secs_f64() * 1000., std::mem::discriminant(&info.kind), text.chars().count());
+                        }
                         let height = row.height();
                         Entry { key, height, row: Rc::new(row) }
                     }
@@ -1264,6 +1332,7 @@ impl<'a> Reader<'a> {
             self.look.text_px.to_bits().hash(&mut h);
             t.rows.hash(&mut h);
             t.shares.iter().flatten().for_each(|s| s.to_bits().hash(&mut h));
+            self.spans().hash(&mut h);
             let held = self.hold.filter(|(first, _)| *first == t.first);
             held.iter().flat_map(|(_, c)| c).for_each(|c| c.to_bits().hash(&mut h));
             let key = h.finish();
@@ -1271,7 +1340,7 @@ impl<'a> Reader<'a> {
                 continue;
             }
             let room = (width - self.inset_of(&self.analysis.lines[t.first])).max(80.);
-            let (set, fit) = self.columns_of(t, room, theme, window);
+            let (set, fit, asks) = self.columns_of(t, room, theme, window);
             let cols = match held {
                 Some((_, c)) if c.len() == t.columns() => c.clone(),
                 _ => set,
@@ -1282,14 +1351,14 @@ impl<'a> Reader<'a> {
                 xs.push(x);
                 x += c;
             }
-            grids.insert(t.first, (key, Rc::new(Grid { cols, xs, width: x, fit, room })));
+            grids.insert(t.first, (key, Rc::new(Grid { cols, xs, width: x, fit, room, asks, shift: std::cell::Cell::new(0.) })));
         }
     }
 
     /// The columns' widths, and each column as wide as its words ask (the
     /// two the same where the person set none). A width set is its share
     /// of the room, so a table set narrower stays so.
-    fn columns_of(&self, t: &Table, room: f32, theme: &gpui_component::Theme, window: &mut Window) -> (Vec<f32>, Vec<f32>) {
+    fn columns_of(&self, t: &Table, room: f32, theme: &gpui_component::Theme, window: &mut Window) -> (Vec<f32>, Vec<f32>, f32) {
         let n = t.columns();
         let at_rest = Reader { sel: None, ..*self };
         let px_cell = self.rhythm.cell_px;
@@ -1322,13 +1391,40 @@ impl<'a> Reader<'a> {
         }
         let pad = CELL_X * 2. + 1.;
         let most: Vec<f32> = most.iter().map(|w| (w + pad).max(LEAST_COLUMN)).collect();
-        let least: Vec<f32> = least.iter().zip(&most).map(|(w, m)| (w + pad).max(LEAST_COLUMN).min(*m)).collect();
-        let fit = shared(&most, &least, room);
-        let set = match t.shares.as_ref().filter(|s| s.len() == n) {
-            Some(shares) => shares.iter().map(|s| (s / 100. * room).round().max(LEAST_COLUMN)).collect(),
+        // A column is not pressed narrower than a few words' width (or its
+        // own, when narrower): past that its words broke at every space and
+        // the table read a word a line. Such a table is wider than its room
+        // and moves along it under a finger or the wheel.
+        // A column of many words keeps some half of a narrow room, and at
+        // most some twenty-two letters' width of a wide one, and a short
+        // one some seven letters' (its longest word's, when longer),
+        // before the table is let past its room.
+        let readable = (self.look.text_px * READ_COLUMN_EMS).round();
+        let keeps = (room * 0.55).clamp(readable, (self.look.text_px * KEPT_COLUMN_EMS).round());
+        let least: Vec<f32> = least.iter().zip(&most).map(|(w, m)| if *m > keeps { keeps } else { (w + pad).max(LEAST_COLUMN).max(readable).min(*m) }).collect();
+        let full = self.spans();
+        let fit = if most.iter().sum::<f32>() <= room {
+            // Its words' widths, and on a phone the room's whole width,
+            // the rest shared as each column is wide.
+            let sum: f32 = most.iter().sum();
+            if full { most.iter().map(|m| (m + (room - sum) * m / sum.max(1.)).floor()).collect() } else { most.clone() }
+        } else {
+            shared(&most, &least, room.max(least.iter().sum()))
+        };
+        let set = match t.shares.as_ref().filter(|s| s.len() == n && !full) {
+            Some(shares) => shares.iter().zip(&least).map(|(s, l)| (s / 100. * room).round().max(LEAST_COLUMN).max(*l)).collect(),
             None => fit.clone(),
         };
-        (set, fit)
+        (set, fit, most.iter().sum())
+    }
+
+    /// Whether a table spans its room, the room its words leave shared as
+    /// each column is wide, the file's widths not read: on a phone
+    /// (`widgets::full_width`), and in a table of data's frame, which is
+    /// itself as wide as the table asks or as the line sets it
+    /// (`Pictures::span`).
+    fn spans(&self) -> bool {
+        crate::widgets::full_width() || self.pictures.borrow().span
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1442,12 +1538,21 @@ impl<'a> Reader<'a> {
         // the words, and as tall as that page there, so one page shows
         // whole. A document's is as wide as the words and as tall as its
         // words up to a height (`embed.rs`).
-        let held = self.resize.filter(|(l, _)| *l == line).map(|(_, w)| w);
+        let full = crate::widgets::full_width();
+        let held = if full { Some(room) } else { self.resize.filter(|(l, _)| *l == line).map(|(_, w)| w) };
         let (natural, tall, pw, ph) = if embed && onyx_core::vault::is_pdf(&path) {
             let (w, h) = pictures.size_of(&path).unwrap_or((612, 792));
             let (natural, tall) = (w as f32, h as f32);
             let wide = held.unwrap_or(on.asked.map_or(natural, |a| a.in_room(room))).min(room).max(crate::embed::CONTROL_LEAST.min(room)).round();
             (natural, tall, wide, ((wide - 2.) * tall / natural.max(1.)).round() + 2.)
+        } else if embed && onyx_core::preview::is_table(&path) {
+            // A table of data is as wide as its table asks (`Embed::natural`)
+            // or the width the line asks, placed as a picture is.
+            let least = crate::embed::SHEET_LEAST.min(room);
+            let natural = pictures.embed_widths.get(&path).copied().unwrap_or(room).clamp(least, room);
+            let body = pictures.embed_heights.get(&path).map_or(crate::embed::WORDS_MOST, |h| h.clamp(crate::embed::WORDS_LEAST, crate::embed::WORDS_MOST)).round();
+            let wide = held.unwrap_or(on.asked.map_or(natural, |a| a.in_room(room))).min(room).max(least).round();
+            (natural, body, wide, body)
         } else if embed {
             let body = pictures.embed_heights.get(&path).map_or(crate::embed::WORDS_MOST, |h| h.clamp(crate::embed::WORDS_LEAST, crate::embed::WORDS_MOST)).round();
             (room, body + 2., room, body + 2.)
@@ -1503,6 +1608,8 @@ impl<'a> Reader<'a> {
         let web = onyx_core::link_card::is_web(&on.src);
         let path = if web { PathBuf::from(&on.src) } else { self.pictures.borrow_mut().find_any(&on.src)? };
         let (w, h) = crate::card::card_size(size, room);
+        // On a phone a large card is as wide as the words too.
+        let (w, h) = if crate::widgets::full_width() && size == CardSize::Large { (room, h - (w * 0.5).round() + (room * 0.5).round()) } else { (w, h) };
         // Only a large card is narrower than the words, and so placed.
         let across = on.across.filter(|_| size == CardSize::Large).unwrap_or(Across::Start);
         let x = inset

@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <!-- What the store asks every app to say of itself (the privacy
+       manifest): Onyx follows no one and gathers nothing, and of the
+       system calls Apple wants a reason for, it reads its own files'
+       dates (the vault's tree and what changed on the disk, C617.1) and
+       the clock that counts from the device's start, to time what moves
+       in the window (35F9.1). scripts/ios-bundle.sh puts this file in the
+       bundle. A new dependency that calls another of those (the disk's
+       free room, the user's defaults, the keyboards) adds its line here. -->
+  <key>NSPrivacyTracking</key><false/>
+  <key>NSPrivacyTrackingDomains</key><array/>
+  <key>NSPrivacyCollectedDataTypes</key><array/>
+  <key>NSPrivacyAccessedAPITypes</key>
+  <array>
+    <dict>
+      <key>NSPrivacyAccessedAPIType</key><string>NSPrivacyAccessedAPICategoryFileTimestamp</string>
+      <key>NSPrivacyAccessedAPITypeReasons</key><array><string>C617.1</string></array>
+    </dict>
+    <dict>
+      <key>NSPrivacyAccessedAPIType</key><string>NSPrivacyAccessedAPICategorySystemBootTime</string>
+      <key>NSPrivacyAccessedAPITypeReasons</key><array><string>35F9.1</string></array>
+    </dict>
+  </array>
+</dict>
+</plist>

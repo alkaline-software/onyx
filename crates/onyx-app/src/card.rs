@@ -169,7 +169,9 @@ impl Card {
     fn press(&mut self, ev: &MouseDownEvent, window: &mut Window, cx: &mut Context<Self>) {
         cx.stop_propagation();
         let (Some(line), Some(note)) = (self.line(cx), self.note.upgrade()) else { return };
-        if ev.click_count >= 2 || note.read(cx).reads() {
+        // Under a finger a card is a link: a tap follows it, and a finger
+        // held selects it and gives its menu.
+        if ev.click_count >= 2 || note.read(cx).reads() || cfg!(target_os = "ios") {
             self.open(cx);
             return;
         }
@@ -231,7 +233,7 @@ impl Card {
             }
         } else {
             let name = self.file.as_ref().map(|f| f.name.clone()).unwrap_or_else(|| self.path.to_string_lossy().to_string());
-            img(crate::file_icons::path(&name, false, false, cx.theme().mode.is_dark())).size(px(size)).flex_shrink_0().into_any_element()
+            crate::file_icons::picture(&name, false, false, cx.theme().mode.is_dark(), size).size(px(size)).flex_shrink_0().into_any_element()
         }
     }
 
@@ -384,6 +386,8 @@ impl Render for Card {
             .on_mouse_down(MouseButton::Left, cx.listener(Self::press))
             .on_mouse_down(MouseButton::Right, cx.listener(Self::right_press))
             .child(body)
+            // Under a finger a card is pressed: the light over what it shows.
+            .children(crate::widgets::press_light(CONTROL_ROUND))
             // A picture made to cover its room is drawn past it, so its own
             // corners are not the card's: what lies past them is covered.
             .child(crate::widgets::round_corners(theme.background, CONTROL_ROUND - 1.))

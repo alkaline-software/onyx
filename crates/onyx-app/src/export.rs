@@ -703,6 +703,7 @@ impl Shell {
                     .inset_0()
                     .occlude()
                     .bg(theme.overlay)
+                    .children(crate::glass::cover("export"))
                     .flex()
                     .flex_col()
                     .items_center()

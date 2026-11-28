@@ -33,23 +33,25 @@ pub struct LayoutAt {
     pub at: usize,
     pub now: Layout,
     pub preview: bool,
+    /// A table of data's: it shows as its table or as a small card alone.
+    pub sheet: bool,
     /// A large card's place across the page, which its menu changes.
     pub across: Option<Across>,
 }
 
 /// The link a line holds at a byte: where it is in the line, where it
 /// leads, its words, how it shows, and whether it is all the line holds.
-struct Found {
-    range: Range<usize>,
-    href: String,
-    words: String,
-    now: Layout,
+pub(super) struct Found {
+    pub(super) range: Range<usize>,
+    pub(super) href: String,
+    pub(super) words: String,
+    pub(super) now: Layout,
     alone: bool,
     across: Across,
 }
 
 impl Editor {
-    fn link_on(&self, line: usize, at: usize) -> Option<Found> {
+    pub(super) fn link_on(&self, line: usize, at: usize) -> Option<Found> {
         if line >= self.doc.line_count() {
             return None;
         }
@@ -101,7 +103,8 @@ impl Editor {
         }
         let preview = file.as_deref().is_some_and(crate::layout::is_framed);
         let across = (found.now == Layout::Card(CardSize::Large)).then_some(found.across);
-        Some(LayoutAt { line, at, now: found.now, preview, across })
+        let sheet = file.as_deref().is_some_and(onyx_core::preview::is_table);
+        Some(LayoutAt { line, at, now: found.now, preview, sheet, across })
     }
 
     /// A menu's or a probe's choice by its word (`link`, `small`, `medium`,

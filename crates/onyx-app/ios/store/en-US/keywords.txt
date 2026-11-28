@@ -1,0 +1,1 @@
+markdown,notes,writing,editor,plain text,journal,wiki,links,tasks,tables,vault,notebook,icloud,md

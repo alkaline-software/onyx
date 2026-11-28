@@ -1,0 +1,23 @@
+Onyx keeps your notes as plain markdown files in a folder of your own, and draws them as they read while you write.
+
+YOUR FILES, AS THEY ARE
+A vault is a folder of markdown files. Onyx keeps no database and no copy of its own, so your notes open in any other app, and a vault made elsewhere opens in Onyx as it is. Keep a vault on your device, where the Files app shows it, or in iCloud, where the same vault is on your iPhone, your iPad and your Mac.
+
+LIVE PREVIEW
+Headings, bold, links, tasks, tables, code and pictures are drawn as they read. The marks show only where you are writing. On an iPad the note's source can open beside it, and the two follow each other.
+
+MORE THAN TEXT
+A note can hold pictures, a PDF's pages, another note or a document in a frame. A web link can stand as a card with the page's title and picture. Wikilinks find their note anywhere in the vault.
+
+AND
+• Folders with icons and colors of their own, kept with the vault so they travel with it
+• Tabs grouped by folder on an iPad
+• Search across your notes
+• Spelling and grammar for English, checked on your device
+• Light and dark, seven accents and a choice of typefaces
+• Eight languages: English, 简体中文, 繁體中文, 日本語, 한국어, Français, Deutsch, Español
+
+PRIVATE
+No account, no analytics, no tracking. Your notes stay on your device and in your own iCloud.
+
+Onyx is open source.

@@ -14,7 +14,7 @@ The names never change, so `releases/latest/download/<name>` links stay valid.
 
 Only the Mac is published, so the workflow's matrix has only its rows. Its steps for Windows and Linux stay, and a row for each runs them again; with those rows back, the release also carries `Onyx-windows-<arch>-setup.exe`, Velopack's `AlkalineSoftware.Onyx-<version>-win-<arch>-full.nupkg` and `releases.win-<arch>.json`, and `Onyx-linux-<arch>.AppImage` and `.deb`, for x64 and ARM each.
 
-Nothing is released for an iPhone or an iPad yet. The app builds and runs in simulators (`scripts/ios-app.sh`, `docs/platform.md`, iPhone and iPad); a release there waits on a device build being tried, which needs, in the developer account, an Apple Development and an Apple Distribution certificate, the App ID `com.alkalinesoftware.onyx` enabled for iOS with the iCloud container the Mac's App ID already has, and a provisioning profile for each, and then on a script that signs with `ios/Onyx.entitlements` and uploads to App Store Connect. `scripts/release-check.sh` type-checks the device's target with everything else.
+An iPhone and an iPad get theirs through the App Store, apart from the tag's workflow: `scripts/release-ios.sh --upload` signs the device's build for the store and sends it to App Store Connect (An iPhone's and an iPad's release, below). The app's record there is named Onyx by Alkaline, since the store takes a name once and Onyx alone was taken; the name under the icon is the bundle's own, Onyx. One build has been sent (0.6.0, build 120) and is ready in TestFlight, and the store's page for it is written (`scripts/store-ios.R`); it has not been sent for review yet. `scripts/release-check.sh` type-checks the device's target with everything else.
 
 ## One-time setup on a Mac
 
@@ -26,7 +26,9 @@ Nothing is released for an iPhone or an iPad yet. The app builds and runs in sim
 - The iCloud container, once, in the developer account at developer.apple.com: under Identifiers, an App ID for `com.alkalinesoftware.onyx` with the iCloud capability; under Identifiers, iCloud Containers, the container `iCloud.com.alkalinesoftware.onyx`, assigned to that App ID; under Profiles, a Developer ID Application profile for that App ID, downloaded to a folder outside the repository, such as `~/Library/MobileDevice/Provisioning Profiles/Onyx.provisionprofile`, with `ONYX_PROVISION_PROFILE` pointing at it in the shell's profile (in CI, the secret `ONYX_PROVISION_PROFILE_B64`). With it, `release-mac.sh` embeds the profile and signs in `macos/Onyx.entitlements`, and a vault made in iCloud goes in Onyx's app library, the folder Finder shows with the icon on it. Without it, the release runs the same, with iCloud vaults as plain folders under `iCloud Drive/Onyx` (`docs/platform.md`, iCloud Drive).
 - `gh auth login` with write access to the repository.
 - For the Windows type check: `brew install mingw-w64` and `rustup target add x86_64-pc-windows-gnu`.
-- For the iPhone's and iPad's type check: `rustup target add aarch64-apple-ios`, and for a simulator `aarch64-apple-ios-sim`.
+- For an iPhone and an iPad: `rustup target add aarch64-apple-ios`, which the type check wants too, and for a simulator `aarch64-apple-ios-sim`.
+- For an iPhone and an iPad, once, in the developer account: the App ID above serves them too, with its iCloud container; an Apple Development and an Apple Distribution certificate, which Xcode makes (Settings, Apple Accounts, the team, Manage Certificates); under Devices, each device a build is tried on, by its UDID (`xcrun devicectl list devices`); under Profiles, an iOS App Development profile for the App ID with those devices, and an App Store Connect profile for it, both kept beside the Mac's as `Onyx_Development.mobileprovision` and `Onyx_App_Store.mobileprovision` (`ONYX_IOS_PROFILE` and `ONYX_IOS_STORE_PROFILE` name others). A device takes a development build only with Developer Mode on (Settings, Privacy & Security), which the device offers once a build has been sent to it.
+- For the store, once, in App Store Connect: the app's record for the bundle ID, and under Users and Access, Integrations, an App Store Connect API key with the App Manager role, its `.p8` file in `~/.appstoreconnect/private_keys/` and `ASC_KEY_ID` and `ASC_ISSUER_ID` in the shell's profile. The page offers the key's file once. `scripts/store-ios.R` wants R's `httr2`, `jose`, `openssl` and `jsonlite`, and `scripts/store-shots.R` its `png`.
 - For the disk image's background and the installer's splash: Python with Pillow (`uv run --with pillow …`) and LXGW WenKai Medium in `~/Library/Fonts`.
 
 ## Each release
@@ -120,6 +122,35 @@ scripts/release-clean.sh
 ```
 
 Every time, without being asked, once step 7 printed its line and the installed copy opens. It deletes `target/` and `dist/`, fails if Spotlight finds a second `Onyx.app`, and, when the agent is the dev build's child, hands over to the installed copy once the turn is over: say so in the reply.
+
+## An iPhone's and an iPad's release
+
+From the commit the Mac's release is tagged at, with the device joined to the Mac for the second line:
+
+```
+cargo build --release --locked -p onyx-app --target aarch64-apple-ios
+scripts/ios-app.sh --device                  # on the device: try it there before anything is sent
+scripts/release-ios.sh --no-build --upload
+```
+
+`release-ios.sh` makes the bundle (`scripts/ios-bundle.sh`: the executable, `ios/Info.plist`, the privacy manifest and the compiled asset catalog), signs it with the Apple Distribution certificate, `ios/Onyx.entitlements` and the App Store profile, zips it as `dist/Onyx-ios.ipa`, has App Store Connect check it and sends it; `--validate` stops after the check, which keeps nothing there. It ends with `sent dist/Onyx-ios.ipa`. The package is about 100 MB, and the upload goes at the line's speed: 22 minutes at 75 KB/s the first time.
+
+The build's number is the count of commits, and the store takes a number once for a version: a second upload of the same version needs a new commit, or `ONYX_BUILD` set higher.
+
+Then the store's page, once Apple has processed the build (a few minutes; it shows under TestFlight):
+
+```
+cargo build -p onyx-app --target aarch64-apple-ios-sim
+Rscript scripts/store-shots.R                # the pictures, when what they show has changed
+Rscript scripts/store-ios.R                  # the page: the version, the build, the words, the pictures
+Rscript scripts/store-ios.R --no-pictures --submit
+```
+
+`store-ios.R` writes the version being prepared through the App Store Connect API, and makes one when the last is already out: its number (Cargo.toml's), the newest build of that version Apple has finished with, the copyright line, and for each language under `crates/onyx-app/ios/store/` (`en-US`, `zh-Hans`) the name, the line under it, the description, the keywords, the promotional text, the support page and the privacy page (`PRIVACY.md` on `main`, which has to be there when the reviewer follows the link). From the second version on, each language gets a `release_notes.txt`, the store's What's New, from that version's release notes. It runs again without harm: every call writes what the repository says. `--submit` sends the version to review, and is run only when the person says so.
+
+`store-shots.R` takes the pictures in two simulators of its own, made the first time (Onyx Shots Phone, an iPhone 17 Pro Max, 1320 by 2868; Onyx Shots Pad, an iPad Pro 13-inch, 2064 by 2752: the two sizes the store asks for), on the sample vault in `ios/store/vault/`, in English, at 9:41, into `dist/store/`. Its taps are places in the window's points, so a change to the sidebar's rows or to the vault's folders moves them; look at the pictures before they are sent. They go to the first language, and the other shows the same ones.
+
+Set once on the store's side, and kept from a version to the next: the category (Productivity), the age rating's answers (none of anything, 4+), the content rights (no third party's content), the price (free), the countries (all but mainland China, which wants a filing number, and the European Union's 27, which want a trader's status declared), and the notes for the reviewer (no account; New Vault on the first page). These were written through the API. Two things the API does not take are the person's, on the app's page there: App Privacy (Data Not Collected, since Onyx collects nothing, `PRIVACY.md`), and under App Review Information the contact's name, phone and email.
 
 ## Redoing a release under the same tag
 

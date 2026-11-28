@@ -1,0 +1,23 @@
+name: Touch
+options:
+  bundleIdPrefix: com.alkalinesoftware.touch
+  deploymentTarget:
+    iOS: "17.0"
+targets:
+  Runner:
+    type: application
+    platform: iOS
+    sources: [Runner]
+    settings:
+      GENERATE_INFOPLIST_FILE: YES
+      CODE_SIGNING_ALLOWED: NO
+  Touch:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [Touch]
+    dependencies:
+      - target: Runner
+    settings:
+      GENERATE_INFOPLIST_FILE: YES
+      CODE_SIGNING_ALLOWED: NO
+      TEST_TARGET_NAME: Runner

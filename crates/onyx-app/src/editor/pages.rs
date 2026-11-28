@@ -47,6 +47,19 @@ impl Editor {
         cx.notify();
     }
 
+    /// The note is a table of data's, in its frame: its tables span it.
+    pub(crate) fn set_sheet(&mut self, cx: &mut Context<Self>) {
+        self.pictures.borrow_mut().span = true;
+        cx.notify();
+    }
+
+    /// How wide the widest table asks to stand, as last laid out, as far
+    /// as its room goes (`Grid::asks`).
+    pub(crate) fn widest_table(&self) -> Option<f32> {
+        let cache = self.cache.borrow();
+        cache.entries.iter().filter_map(|e| if let Row::Table(t) = &*e.row { Some(t.grid.asks.min(t.grid.room) + t.inset) } else { None }).reduce(f32::max)
+    }
+
     /// How tall the note stands, as last laid out.
     pub(crate) fn content_height(&self) -> f32 {
         self.cache.borrow().total
@@ -92,19 +105,20 @@ impl Editor {
         for (line, path, nth) in lines {
             // A picture's view is its bar alone, while it shows: the picture
             // is painted under it.
-            let (top, x, w, h, embed) = {
+            let (top, x, w, h, embed, room) = {
                 let cache = self.cache.borrow();
                 let Some(Row::Picture(p)) = cache.entries.get(line).map(|e| &*e.row) else { continue };
-                (cache.tops[line] + p.pad, p.x, p.w, p.h, p.embed)
+                (cache.tops[line] + p.pad, p.x, p.w, p.h, p.embed, p.room)
             };
             let near = self.pointer_on(line);
             let (store, look) = (self.pictures.clone(), self.look.clone());
             let frame = self.embeds.entry((path.clone(), nth)).or_insert_with(|| cx.new(|cx| Embed::new(path.clone(), nth, weak.clone(), store, look, cx))).clone();
             // A document's words laid out at the frame's width give its
             // height; the note is laid out again when it changes.
-            let (words, alpha) = frame.update(cx, |m, cx| {
+            let (words, alpha, natural) = frame.update(cx, |m, cx| {
                 m.size = (w, h);
-                (m.measure(window, cx), m.settle_bar(near, window))
+                m.room = room;
+                (m.measure(window, cx), m.settle_bar(near, window), m.natural)
             });
             if !embed && alpha <= 0. {
                 continue;
@@ -115,9 +129,20 @@ impl Editor {
                     store.embed_heights.insert(path.clone(), tall);
                     cx.notify();
                 }
+                if let Some(natural) = natural.filter(|n| store.embed_widths.get(&path).is_none_or(|was| (was - n).abs() > 0.5)) {
+                    store.embed_widths.insert(path.clone(), natural);
+                    cx.notify();
+                }
             }
-            let h = if embed { h } else { HEAD_H.min(h) };
-            let b = Bounds::new(point(bounds.origin.x + px(x), bounds.origin.y + px(top)), size(px(w), px(h)));
+            // Under a finger the bar stays in sight while its piece is:
+            // a piece taller than the page left has its top, and its bar
+            // with it, scrolled away, and no pointer brings it back.
+            let piece_top = bounds.origin.y + px(top);
+            // It stands clear of the page's fading top edge, which takes no press.
+            let down = if cfg!(target_os = "ios") { (f32::from(view.top() - piece_top) + super::SCROLL_MARGIN).clamp(0., (h - HEAD_H).max(0.)) } else { 0. };
+            frame.update(cx, |m, cx| m.set_head_down(if embed { down } else { 0. }, cx));
+            let (h, piece_top) = if embed { (h, piece_top) } else { (HEAD_H.min(h), piece_top + px(down)) };
+            let b = Bounds::new(point(bounds.origin.x + px(x), piece_top), size(px(w), px(h)));
             if b.intersects(&view) {
                 out.push((frame, b));
             } else {
@@ -189,7 +214,7 @@ impl Editor {
                 self.card_bars.remove(&(href, nth));
                 continue;
             }
-            let near = hovered || self.pointer_on(line);
+            let near = (hovered && !cfg!(target_os = "ios")) || self.pointer_on(line);
             let (store, look) = (self.pictures.clone(), self.look.clone());
             let key = (href.clone(), nth);
             let bar = self.card_bars.entry(key.clone()).or_insert_with(|| cx.new(|cx| Embed::card_bar(path.clone(), CardBar { key, web, across: None }, weak.clone(), store, look, cx))).clone();

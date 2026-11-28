@@ -68,6 +68,8 @@ xcrun simctl io "iPhone 17 Pro" screenshot <file.png>
 
 `scripts/ios-app.sh` makes the bundle, installs it in the simulator named (else the one booted, else an iPad) and starts it with every `ONYX_` variable handed on. A variable with a space in it is not handed on, so a step's words have none. A simulator's app reads the Mac's own files, so the scratch home and vault are the Mac's. `ONYX_SHOT` takes no picture there: `simctl io … screenshot` does, from outside, whenever it is asked, so wait for the steps first. `--log` keeps what the app prints (`where`, `files`, `uikeys`), through the simulator's console; `where` says how many files are open too (`open 1`), which on an iPhone is never more than one.
 
+A device is the person's own: `scripts/ios-app.sh --device` signs the release build with the development profile and puts it on the device joined to the Mac, under Onyx's own identifier, so it stands where the store's copy would and opens the person's vaults. `ONYX_GO` and `--log` work there as in a simulator, but nothing on a device is a probe's to change, no picture is taken from the Mac, and a scratch home or vault on the Mac means nothing to it. Look at a device with the person, for what a simulator cannot say: iCloud, speed in the hand, a real finger.
+
 The steps of `ONYX_GO` for a finger and a keyboard, each in its turn, in the window's points from its top left (the status bar is part of the window, so a row's place is its place in the picture divided by the screen's scale):
 
 | Step | What it does |
@@ -75,13 +77,33 @@ The steps of `ONYX_GO` for a finger and a keyboard, each in its turn, in the win
 | `tap=<x>,<y>[,<taps>]` | a touch begun and ended there; `2` a double tap |
 | `pan=<x>,<y>,<to x>,<to y>` | a touch begun at the first place, moved to the second in ten steps and lifted: what is under it scrolls, and goes on by its own momentum |
 | `longtap=<x>,<y>` | a touch held 700 ms, then lifted: the right button there, so a row's or a note's menu |
-| `back=<how far>` | the swipe from the screen's edge, 0 to 1, let go there: past a half the system says it went back |
+| `back=<how far>` | the swipe from the screen's edge, begun 12 points in and pulled in ten steps with a frame drawn between each, 0 to 1, let go there: past a half the system says it went back. `back=<how far>,1` leaves the finger down there. Sent in one frame, as it once was, it could not show a step lost to a page that had moved |
+| `roll=<x>,<y>,<dx>,<dy>` | a thumb's tap that rolls: down there, moved by so much in four steps, and lifted. Past ten points gpui reads it as a pan, and on a button it is to press all the same |
+| `panhold=<x>,<y>,<to x>,<to y>` | a finger's pan as `pan=` moves, held at its end 1.5 s before it lifts: a scroller pulled past its end shows its stretch then; `holds` on stderr as it stops |
+| `rest=<x>,<y>` | a finger that rests there 450 ms and is taken back by the system: no tap, no long press, and for that while what is under it is lit. `rests` on stderr as it lands, to time a picture by |
+| `open=<part>` | the vault's first note with that in its name, shown: for a device, whose paths a script does not know |
 | `uikeys=<words>` | typed as the keyboard types them: handed to the view that has the keyboard by UIKit's own `insertText:`, from the run loop, and `uikeys true` on stderr when a view took them |
 | `uidelete` | the keyboard's delete key once, the same way |
 
-`tap`, `pan`, `longtap` and `back` go into gpui as the screen's touches do and through its own reading of them, so they check everything from there on, not UIKit's hit test. `uikeys` and `uidelete` go the whole way a typed key does (UIKit, gpui's backend, the input handler), which `type=` skips; they need the keyboard out, which it is once a tap has put the caret in words or in a field. A mouse's steps (`press=`, `drag=`) work there too and say nothing about a finger.
+`tap`, `pan`, `roll`, `rest`, `longtap` and `back` go into gpui as the screen's touches do and through its own reading of them, so they check everything from there on, not UIKit's hit test. `uikeys` and `uidelete` go the whole way a typed key does (UIKit, gpui's backend, the input handler), which `type=` skips; they need the keyboard out, which it is once a tap has put the caret in words or in a field. A mouse's steps (`press=`, `drag=`) work there too and say nothing about a finger.
 
-Look at an iPhone and an iPad both, each in its states: no vault, a vault with no note, a note, the keyboard out, the settings' sections, a menu. The core's CLI runs in a simulator as a plain process, for what the system answers there: `xcrun simctl spawn <simulator> target/aarch64-apple-ios-sim/debug/onyx-core trash <path>`.
+`reading` turns Reading on or off (`docs/window.md`), as the sidebar's step does, as the copy starts. `mark` prints `mark` at its turn: a script that watches the log takes a picture at each, so one launch gives a picture of every state the steps pass through. A press during a fling is `pan=…;wait=-900;tap=…`, the tap landing while the pan's momentum still counts. A tap while the keyboard is out lands on the window under the keys, where no finger reaches: keep such steps above the keyboard.
+
+The system's glass is not gpui's to draw, so `shoot` does not show it: `simctl io … screenshot` does.
+
+### A finger through UIKit
+
+`ONYX_GO`'s touches go into gpui and skip UIKit, so they cannot check what UIKit does with a finger: the glass under it, the system's edit menu and loupe, the keyboard's own keys. `scripts/touch.R` starts the app installed in a simulator from a UI test (`scripts/touch/`, an XcodeGen project built once) and gives it XCTest's touches, which go the whole way a finger does:
+
+```
+Rscript scripts/touch.R "iPhone 17 Pro" 'wait 2500;double 129,319;wait 800;shot /tmp/a.png;menu;pick Copy' ONYX_HOME=<scratch>/home ONYX_VAULT=<scratch>/vault ONYX_TRACE=<scratch>/trace.log
+```
+
+The steps, in points from the screen's top left: `tap x,y`, `double x,y`, `hold x,y[,ms]`, `drag x,y,tx,ty[,held ms]` (down, held, moved and lifted), `holddrag x,y,tx,ty[,held ms]` (held long enough to be a hold first, then moved), `keys <letters>` (each pressed on the system keyboard, `\n` its Return, whatever it is labeled), `wait ms`, `shot <file.png>`, `menu` (prints the system's edit menu's choices) and `pick <choice>` (presses one). The `ONYX_` variables after the steps go to the app. A UI test's app has no console, so `ONYX_TRACE=/path` writes the trace to that file. XCTest waits on each step, so a picture in the middle of a hold or a drag is taken from a recording (`simctl io … recordVideo`) cut into frames.
+
+Look at an iPhone and an iPad both, each in its states: no vault, a vault with no note, a note, the keyboard out and its bar, Reading on, the settings' sections, a menu. A small iPhone on an older system is worth a simulator of its own (an iPhone SE on iOS 18: 375 points wide, a home button, 60 frames).
+
+On a device `ONYX_TRACE=1` with `--log` says what a simulator cannot, the Mac's processor and disk being what a simulator runs on: `stamp <ms> shell render begins` at each frame and `turn ends` when the window's thread is free again, `open note`, `note read`, `tab shown` round a note's opening, `trace slow line` for a line that took over 2 ms to lay out (what it is made of, never its words), `trace bring <n> files not at hand` as a vault is asked of iCloud, `glass flush` and `glass told` round the frame's plates told to the system (the frame is drawn and presented by the first of them), and `trace asks` for what the system's keyboard asked of the editor between two frames. The core's CLI runs in a simulator as a plain process, for what the system answers there: `xcrun simctl spawn <simulator> target/aarch64-apple-ios-sim/debug/onyx-core trash <path>`.
 
 ## The core from a terminal
 

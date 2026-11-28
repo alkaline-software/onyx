@@ -772,6 +772,8 @@ impl MenuNote {
             }
             EditorEvent::Found => cx.notify(),
             EditorEvent::Pressed => self.caret = true,
+            // The menu bar's note has no sheet: the link is begun in place.
+            EditorEvent::AskLink(_) => editor.update(cx, |e, cx| e.make_link_inline(cx)),
             // A file renamed from its bar: by the main window when it is
             // open, which follows its links through the vault; else the
             // file alone.

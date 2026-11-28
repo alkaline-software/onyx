@@ -65,10 +65,12 @@ struct Folder {
 }
 
 /// Whether an entry is watched and listed: a vault's own folders are not
-/// (`.obsidian`, `.git`, `.trash`), but its assets are.
+/// (`.obsidian`, `.git`, `.trash`), but Onyx's own, with the assets in it,
+/// is, and an older Onyx's `.assets`, which is gathered into it
+/// (`vault::gather_assets`).
 fn listed(name: &std::ffi::OsStr) -> bool {
     let name = name.to_string_lossy();
-    !name.starts_with('.') || name == ".assets"
+    !name.starts_with('.') || name == crate::vault::OWN || name == crate::vault::OLD_ASSETS
 }
 
 fn list(dir: &Path) -> HashMap<OsString, Stamp> {

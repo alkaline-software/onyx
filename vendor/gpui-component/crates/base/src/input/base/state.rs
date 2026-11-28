@@ -360,6 +360,9 @@ pub struct InputBaseState<M: InputModeKind> {
     pub(crate) readonly: bool,
     pub(crate) text_align: TextAlign,
     pub(super) masked: bool,
+    /// Words a touch keyboard does not correct or capitalize: an address,
+    /// a path. (Studio addition.)
+    pub(super) plain: bool,
     pub(super) clean_on_escape: bool,
     pub(super) submit_on_enter: bool,
     pub(super) show_whitespaces: bool,
@@ -673,6 +676,7 @@ impl<M: InputModeKind> InputBaseState<M> {
             readonly: false,
             text_align: TextAlign::Left,
             masked: false,
+            plain: false,
             clean_on_escape: false,
             submit_on_enter: false,
             show_whitespaces: false,
@@ -746,6 +750,13 @@ impl<M: InputModeKind> InputBaseState<M> {
     }
 
     /// Set placeholder
+    /// Words a touch keyboard leaves as typed: no correction, capitals or
+    /// suggestions (an address, a path). (Studio addition.)
+    pub fn plain(mut self, plain: bool) -> Self {
+        self.plain = plain;
+        self
+    }
+
     pub fn placeholder(mut self, placeholder: impl Into<SharedString>) -> Self {
         self.placeholder = placeholder.into();
         self
@@ -3094,6 +3105,15 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
         if !self.is_editable() {
             return;
         }
+        // A touch keyboard's Return arrives as a line break typed, not as
+        // the Enter key: where Enter submits (a single line, or a field
+        // that submits on it) it submits, as the key does, and nothing is
+        // typed. (Studio addition.)
+        if matches!(new_text, "\n" | "\r") && self.ime_marked_range.is_none() && (self.is_single_line() || self.submit_on_enter) {
+            self.undo_manager.break_transaction_coalescing();
+            cx.emit(InputEvent::PressEnter { secondary: false, shift: false });
+            return;
+        }
         // The selection and what an input method marks on characters'
         // starts, whatever put them where they are: an offset inside a
         // character panicked at the slices below as a letter was typed,
@@ -3505,6 +3525,19 @@ impl<M: InputModeKind> EntityInputHandler for InputBaseState<M> {
     /// none has no document to type in.
     fn text_length_utf16(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> Option<usize> {
         Some(self.offset_to_utf16(self.text.len()))
+    }
+
+    /// (Studio addition.) What a touch keyboard does for the words typed:
+    /// it corrects, capitalizes sentences and suggests, as the system's own
+    /// fields do, but in a code editor, a password and a field kept plain;
+    /// its Return says Done where Enter submits. gpui's default turns all
+    /// of it off, and a note's name came out in small letters.
+    fn text_input_configuration(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> gpui::TextInputConfiguration {
+        let action = if self.is_single_line() || self.submit_on_enter { gpui::TextInputAction::Done } else { gpui::TextInputAction::Unspecified };
+        if self.is_code_editor() || self.masked || self.plain {
+            return gpui::TextInputConfiguration { input_action: action, ..Default::default() };
+        }
+        gpui::TextInputConfiguration { autocorrect: true, autocapitalize: gpui::Autocapitalize::Sentences, suggestions: true, input_action: action }
     }
 }
 

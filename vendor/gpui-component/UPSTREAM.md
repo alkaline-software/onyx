@@ -373,6 +373,10 @@ upstream revision finds them.
 
 77. `crates/ui/src/tooltip.rs` (`managed_tooltip_with_placement`): no tooltip comes after a touch (`Window::last_input_was_touch`). A finger has no pointer to hover with, and gpui leaves the pointer where a tap ended, so the button tapped showed its tooltip and kept it until the next touch. A pointer's hover shows one as before.
 
+78. `crates/base/src/input/base/state.rs` (`replace_text_in_range`): a line break typed where Enter submits (a single line, or a field that submits on Enter) is Enter: the field says `PressEnter` and types nothing. A touch keyboard's Return arrives as a line break through the input handler, never as the key, so on an iPhone and an iPad Return in a single-line field (a new note's name, a rename, a link's words) did nothing.
+
+79. `crates/base/src/input/base/state.rs` (`text_input_configuration`, `plain`): a field tells a touch keyboard to correct, capitalize sentences and suggest, as the system's fields do, except in a code editor, a password, or a field made `plain` (an address); its Return says Done where Enter submits. gpui's default turns every aid off, so on an iPhone a note's name came out in small letters with no suggestions.
+
 ## Updating
 
 Check out the new upstream revision, copy the four crates over these, re-apply

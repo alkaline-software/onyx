@@ -72,6 +72,7 @@ pub fn choice_pill(id: impl Into<ElementId>, icon: &'static str, label: impl Int
         .border_1()
         .border_color(edge)
         .when_some(ground, |d, bg| d.bg(bg))
+        .children(press_light(999.).filter(|_| !off))
         .child(Icon::default().path(icon).with_size(px(hand(14.))).text_color(ink))
         .child(label.into())
         .map(|d| if off { d.opacity(0.4) } else { d.cursor_pointer().hover(move |s| s.bg(hover)) })
@@ -276,6 +277,14 @@ pub fn in_hand() -> bool {
     HAND.with(std::cell::Cell::get)
 }
 
+/// Whether what a note embeds (a picture, a file's frame, a card) and its
+/// tables stand the page's whole width, whatever width the note asks:
+/// on an iPhone, and an iPad's compact window, where a width is not a
+/// finger's to set and a narrower one only wastes the little room.
+pub fn full_width() -> bool {
+    cfg!(target_os = "ios") && in_hand()
+}
+
 /// A measure made for a pointer as a hand wants it: the same on a Mac,
 /// and in a compact window larger by what takes a row's 13 points to 16,
 /// to the half point. The sidebar's and the menus' sizes, heights, icons
@@ -295,6 +304,27 @@ pub fn set_reach(top: Pixels, foot: Pixels) {
     REACH.with(|r| r.set((top, foot)));
 }
 
+thread_local! {
+    /// What the system keeps of the main window at each edge: the status
+    /// bar, the home indicator, the keyboard while it is out.
+    static KEPT: std::cell::Cell<gpui::Edges<Pixels>> = const { std::cell::Cell::new(gpui::Edges { top: px(0.), right: px(0.), bottom: px(0.), left: px(0.) }) };
+}
+
+/// The main window says what the system keeps of it, as each frame is built.
+pub fn set_kept(kept: gpui::Edges<Pixels>) {
+    KEPT.with(|k| k.set(kept));
+}
+
+/// The room a thing that floats over the window keeps from each of its
+/// edges: `gap`, past what the system keeps there. gpui holds a menu
+/// inside the window, and on an iPhone the keyboard is part of the
+/// window: held to the window alone, a menu opened low stood half under
+/// the keys.
+pub fn float_margin(gap: f32) -> gpui::Edges<Pixels> {
+    let k = KEPT.with(std::cell::Cell::get);
+    gpui::Edges { top: k.top + px(gap), right: k.right + px(gap), bottom: k.bottom + px(gap), left: k.left + px(gap) }
+}
+
 /// How far a compact window's page runs past the room, at its top and
 /// at its foot: nothing in a window whose page stays in the frame.
 pub fn reach() -> (Pixels, Pixels) {
@@ -310,6 +340,69 @@ pub fn reaches(ground: impl Into<Hsla>) -> [Div; 2] {
     let (top, foot) = reach();
     let ground = ground.into();
     [div().absolute().left_0().right_0().top(-top).h(top).bg(ground), div().absolute().left_0().right_0().bottom(-foot).h(foot).bg(ground)]
+}
+
+thread_local! {
+    /// Whether a finger rests on the main window (`Shell::finger_down`).
+    static RESTS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Whether a finger is down on the main window, from the moment it lands.
+    static DOWN: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    /// Where each thing a finger presses stood in the frame drawn last.
+    static PRESSED: std::cell::RefCell<Vec<Bounds<Pixels>>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Whether a finger is down on the main window, from the moment it
+/// landed: what answers at once, as the system's glass does, goes by this.
+pub fn finger_down() -> bool {
+    DOWN.with(std::cell::Cell::get)
+}
+
+/// The main window says whether a finger rests on it and whether one is
+/// down at all, as each frame is built.
+pub fn set_finger_rests(on: bool, down: bool) {
+    RESTS.with(|r| r.set(on));
+    DOWN.with(|d| d.set(down));
+    PRESSED.with(|p| p.borrow_mut().clear());
+}
+
+/// Whether a thing a finger presses stood at `at` in the frame drawn
+/// last: a touch that began there and rolled a little before it lifted
+/// was a press, as a button of the system's takes it (`Shell::finger_pan`).
+pub fn pressed_at(at: &gpui::Point<Pixels>) -> bool {
+    PRESSED.with(|p| p.borrow().iter().any(|b| b.contains(at)))
+}
+
+/// The light under a finger: laid first in anything a finger presses (a
+/// row, a button, a pill, a menu's choice), it fills it with a wash of the
+/// ink, round at `radius`, while a finger rests there. gpui draws no
+/// hover's style after a touch, and a press's only between the button's
+/// going down and coming up, which a tap sends together: without this
+/// nothing under a finger says it was felt until the finger has left. It
+/// asks the window's own reading of what is under the finger, so nothing
+/// lights under a sheet or a menu. Nothing off an iPhone and an iPad,
+/// where a pointer has its hover.
+pub fn press_light(radius: f32) -> Option<AnyElement> {
+    if !cfg!(target_os = "ios") {
+        return None;
+    }
+    Some(
+        canvas(
+            |bounds, window, _| {
+                PRESSED.with(|p| p.borrow_mut().push(bounds));
+                window.insert_hitbox(bounds, HitboxBehavior::Normal)
+            },
+            move |bounds, hitbox, window, cx| {
+                if RESTS.with(std::cell::Cell::get) && hitbox.is_hovered(window) {
+                    window.paint_quad(fill(bounds, cx.theme().foreground.opacity(0.1)).corner_radii(px(radius)));
+                }
+            },
+        )
+        .absolute()
+        .top_0()
+        .left_0()
+        .size_full()
+        .into_any_element(),
+    )
 }
 
 /// `hand`, not rounded: for measures that are summed to place something

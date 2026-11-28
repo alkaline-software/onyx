@@ -224,7 +224,7 @@ pub struct Shell {
     /// and the home indicator on an iPhone and an iPad, the keyboard while
     /// it is out. Nothing elsewhere. `room` is the window less these, and
     /// everything is laid out in it.
-    safe: Edges<Pixels>,
+    pub(crate) safe: Edges<Pixels>,
     room: Size<Pixels>,
     /// A window too narrow for the sidebar beside the note (`MIN_W`: an
     /// iPhone, an iPad's narrow window): the two are pages of the whole
@@ -236,6 +236,49 @@ pub struct Shell {
     /// The swipe from the screen's edge that brings the sidebar back in a
     /// compact window: how far it has come, while a finger holds it.
     side_pull: Option<f32>,
+    /// A finger drawing the drawer shut (`drawer_swipe`): when it last
+    /// moved, and how fast, in points a second.
+    side_swipe: Option<(Instant, f32)>,
+    /// Counts the fingers put down and the things that end a press (a
+    /// scroll begun, a finger lifted), so the light under a finger held
+    /// comes only for the press it was asked for (`finger_down`).
+    /// Whether the bar over the keyboard shows (`render_keys_bar`), said
+    /// as each frame is built; its tools' scroller, and where it stands
+    /// for the scroll router.
+    keys_bar: bool,
+    keys_scroll: ScrollHandle,
+    keys_at: Rc<std::cell::Cell<Bounds<Pixels>>>,
+    /// Whether notes are read and not written (`toggle_reading`): on an
+    /// iPhone and an iPad, where a touch in a note's words brings the
+    /// keyboard out. Every note, in every launch, until it is turned off.
+    reading: bool,
+    /// The press that turned it, for its button's line on the strip.
+    reading_anim: Option<(f32, Instant, u32)>,
+    finger: u32,
+    /// A fling is being ended by a touch of the window's own making
+    /// (`end_fling`), which is no finger.
+    fling_ending: bool,
+    /// A finger's pan under way, for what it was once it ends (`finger_pan`).
+    pan: Option<FingerPan>,
+    /// Whether the note's words had the keyboard when the page last stood
+    /// with nothing over it (`focus_editor_or_shell`).
+    note_keys: bool,
+    /// Where the edge swipe under way began, and the furthest it has got.
+    side_pull_from: (Point<Pixels>, f32),
+    /// Where a compact window's sidebar button was last drawn.
+    strip_at: Rc<std::cell::Cell<Bounds<Pixels>>>,
+    /// Where a compact window's close button was drawn, at the title
+    /// row's right end, a fixed place for the scroll router.
+    close_at: Rc<std::cell::Cell<Bounds<Pixels>>>,
+    /// Whether a finger rests on the window now: what is under it is lit
+    /// (`widgets::press_light`).
+    finger_rests: bool,
+    /// A finger is down, from its landing (`finger_down`).
+    finger_on: bool,
+    /// The note pressed whose words are not on this device yet
+    /// (`await_note`): it opens when they come, unless another was asked
+    /// for meanwhile.
+    fetching: Option<PathBuf>,
     side_scroll: ScrollHandle,
     /// The list on the sidebar's card before a vault is shown (`places.rs`).
     place_scroll: ScrollHandle,
@@ -250,6 +293,9 @@ pub struct Shell {
     last_shown: Option<PathBuf>,
     /// The tabs closed, the last closed last, for ⌘⇧T.
     closed_tabs: Vec<PathBuf>,
+    /// The note each asset showing in a tab was opened from, which shows
+    /// again when the asset closes, even where one file is open at a time.
+    opened_from: HashMap<PathBuf, PathBuf>,
     /// The row's drawing and motion.
     pub(crate) tabs_row: Tabs,
     /// A press on the strip that a tab or a button took first, so the
@@ -317,6 +363,14 @@ pub struct Shell {
     search_task: Option<Task<()>>,
     /// The find bar over the note, and its field.
     find_open: bool,
+    /// The system's fields of a phone's search and find (`glass::field`):
+    /// the words put in each and the keyboard given or taken, each with
+    /// the number it was asked at.
+    search_set: (u64, SharedString),
+    search_focus: (u64, bool),
+    find_set: (u64, SharedString),
+    find_focus: (u64, bool),
+    field_asks: u64,
     find_input: Entity<InputState>,
     /// The name's field in the settings, made with their window.
     pub(crate) name_input: Option<Entity<InputState>>,
@@ -367,6 +421,12 @@ pub struct Shell {
     /// A new vault under way: the sheet, and the field for its name.
     new_vault: Option<NewVaultSheet>,
     vault_input: Entity<InputState>,
+    /// The link sheet while it is up: the editor that asked, and what.
+    link_sheet: Option<(WeakEntity<Editor>, crate::editor::LinkAsk)>,
+    /// A link asked for, its sheet shown at the next frame.
+    link_asked: Option<(WeakEntity<Editor>, crate::editor::LinkAsk)>,
+    link_words: Entity<InputState>,
+    link_href: Entity<InputState>,
     /// Something to say under the strip, and when it was said.
     /// A line under the strip, gone after a few seconds, and the last one,
     /// kept while it goes.
@@ -445,10 +505,39 @@ const DRAWER: f32 = 0.84;
 const DRAWER_DIM: f32 = 0.38;
 /// The bar at a compact window's foot: its height, and the room under
 /// and over it.
+/// How long a finger rests before what is under it lights (`finger_down`).
+const FINGER_LIGHT: Duration = Duration::from_millis(90);
+/// How long after that the light stays with no word of the finger (`finger_down`).
+const FINGER_HELD: Duration = Duration::from_millis(520);
 const FOOT_BAR_H: f32 = 52.;
+/// The bar over the keyboard (`render_keys_bar`): its height, a tool's
+/// width, and its room from the window's sides and the keyboard's top.
+const KEYS_BAR_H: f32 = 44.;
+const KEYS_TOOL_W: f32 = 40.;
+const KEYS_BAR_GAP: f32 = 8.;
+/// A phone's bar of search and find (`render_safari_bar`): its height,
+/// and the room around it.
+const SAFARI_H: f32 = 48.;
+const SAFARI_GAP: f32 = 12.;
 const FOOT_BAR_GAP: f32 = 10.;
 /// A compact window's title row: taller than the Mac's, for a finger.
 const HAND_TITLE_H: Pixels = px(54.);
+/// How far a finger may roll on a button and still have pressed it.
+const ROLL: f32 = 24.;
+/// How far a touch that lands during a fling may go and still be a tap:
+/// what gpui's backend gives a tap that lands on still ground.
+const TAP_REACH: f32 = 10.;
+
+/// A finger's pan as the window follows it (`Shell::finger_pan`).
+struct FingerPan {
+    /// Where it began, and how far it has gone.
+    from: Point<Pixels>,
+    gone: Point<Pixels>,
+    /// It began over nothing that scrolls.
+    free: bool,
+    /// It landed during a fling, outside the scroller that was flinging.
+    beside: bool,
+}
 
 /// Every row of the tree is this tall for a pointer (`tree_row_h`).
 pub(crate) const TREE_ROW_H: f32 = 30.;
@@ -513,11 +602,15 @@ impl Shell {
         cx.observe_window_activation(window, |this, window, cx| {
             if !window.is_window_active() {
                 this.save_all(cx);
-            } else if let Some(watcher) = this.vault.as_ref().and_then(|v| v._watcher.as_ref()) {
+            } else if let Some(vault) = this.vault.as_ref() {
                 // Back in front: what another app wrote in place meanwhile
                 // is found where the watcher cannot hear it (an iPhone, an
-                // iPad; `onyx_core::watch`).
-                vault::look_again(watcher);
+                // iPad; `onyx_core::watch`), and what came to iCloud from
+                // another device is asked for.
+                if let Some(watcher) = vault._watcher.as_ref() {
+                    vault::look_again(watcher);
+                }
+                crate::sys::bring_vault(&vault.root);
             }
             cx.notify();
         })
@@ -538,6 +631,22 @@ impl Shell {
                 } else {
                     this.finish_rename(window, cx);
                 }
+            }
+        })
+        .detach();
+        // The link sheet's two fields: ↩ in the words goes to the
+        // address, ↩ in the address keeps the link.
+        let link_words = cx.new(|cx| InputState::new(window, cx));
+        cx.subscribe_in(&link_words, window, |this, _, ev: &InputEvent, window, cx| {
+            if let InputEvent::PressEnter { .. } = ev {
+                window.focus(&this.link_href.read(cx).focus_handle(cx), cx);
+            }
+        })
+        .detach();
+        let link_href = cx.new(|cx| InputState::new(window, cx).placeholder("https://").plain(true));
+        cx.subscribe_in(&link_href, window, |this, _, ev: &InputEvent, window, cx| {
+            if let InputEvent::PressEnter { .. } = ev {
+                this.finish_link(window, cx);
             }
         })
         .detach();
@@ -571,6 +680,61 @@ impl Shell {
             _ => {}
         })
         .detach();
+        // What iCloud brought from another device, looked for in the vault.
+        if cfg!(target_os = "ios") {
+            let mut landed = crate::sys::icloud_landed();
+            cx.spawn(async move |this, cx| {
+                use futures::StreamExt as _;
+                while landed.next().await.is_some() {
+                    let gone = this.update(cx, |s, _| {
+                        if let Some(watcher) = s.vault.as_ref().and_then(|v| v._watcher.as_ref()) {
+                            vault::look_again(watcher);
+                        }
+                    });
+                    if gone.is_err() {
+                        break;
+                    }
+                }
+            })
+            .detach();
+        }
+        // What the system's fields of a phone's search and find say.
+        if crate::glass::on() {
+            let mut heard = crate::glass::listen_fields();
+            cx.spawn_in(window, async move |this, cx| {
+                use futures::StreamExt as _;
+                while let Some(ev) = heard.next().await {
+                    if this.update_in(cx, |s, window, cx| s.field_heard(ev, window, cx)).is_err() {
+                        break;
+                    }
+                }
+            })
+            .detach();
+        }
+        // The system's edit menu over a finger's selection: each choice is
+        // the action of the words that have the keyboard's focus.
+        if let Some(mut heard) = crate::sys::listen_edit_menu() {
+            cx.spawn_in(window, async move |this, cx| {
+                use futures::StreamExt as _;
+                while let Some(choice) = heard.next().await {
+                    let done = this.update_in(cx, |_, window, cx| {
+                        use crate::sys::EditChoice;
+                        let action: Box<dyn gpui::Action> = match choice {
+                            EditChoice::Cut => Box::new(gpui_component::input::Cut),
+                            EditChoice::Copy => Box::new(gpui_component::input::Copy),
+                            EditChoice::Paste => Box::new(gpui_component::input::Paste),
+                            EditChoice::Select => Box::new(crate::editor::SelectWord),
+                            EditChoice::SelectAll => Box::new(crate::editor::SelectEverything),
+                        };
+                        window.dispatch_action(action, cx);
+                    });
+                    if done.is_err() {
+                        break;
+                    }
+                }
+            })
+            .detach();
+        }
         // A quit writes every note with changes first, and waits for
         // what the window remembers to be on the disk.
         cx.on_app_quit(|this, cx| {
@@ -637,6 +801,22 @@ impl Shell {
             compact: false,
             keys_out: false,
             side_pull: None,
+            side_swipe: None,
+            fetching: None,
+            keys_bar: false,
+            keys_scroll: ScrollHandle::new(),
+            keys_at: Rc::default(),
+            reading: cfg!(target_os = "ios") && ui.reading,
+            reading_anim: None,
+            finger: 0,
+            fling_ending: false,
+            pan: None,
+            note_keys: false,
+            side_pull_from: (Point::default(), 0.),
+            strip_at: Rc::default(),
+            close_at: Rc::default(),
+            finger_rests: false,
+            finger_on: false,
             sidebar_w: ui.sidebar_w.map(px).unwrap_or(SIDEBAR_W).clamp(SIDEBAR_MIN, SIDEBAR_MAX),
             side_w_anim: None,
             side_drag: false,
@@ -648,6 +828,7 @@ impl Shell {
             shown: None,
             last_shown: None,
             closed_tabs: Vec::new(),
+            opened_from: HashMap::new(),
             tabs_row: Tabs::default(),
             press_taken: false,
             folder_look: None,
@@ -659,6 +840,11 @@ impl Shell {
             search_open: false,
             search_input,
             search_scroll: ScrollHandle::new(),
+            search_set: (0, SharedString::default()),
+            search_focus: (0, false),
+            find_set: (0, SharedString::default()),
+            find_focus: (0, false),
+            field_asks: 0,
             search_results: None,
             avatar_files: RefCell::default(),
             search_task: None,
@@ -677,6 +863,10 @@ impl Shell {
             rename_input,
             new_vault: None,
             vault_input,
+            link_sheet: None,
+            link_asked: None,
+            link_words,
+            link_href,
             notice: None,
             last_notice: None,
             export: None,
@@ -706,6 +896,7 @@ impl Shell {
             update: UpdateRow::default(),
         };
         shell.user_name = Self::name_of(&shell.cfg);
+        crate::sys::share_name(shell.user_name.clone());
         // A probe's vault stands over the remembered one.
         let probing = std::env::var_os("ONYX_VAULT").is_some();
         let vault = std::env::var_os("ONYX_VAULT").map(PathBuf::from).or_else(|| ui.vault.clone()).filter(|p| p.is_dir());
@@ -763,6 +954,7 @@ impl Shell {
         ui.side_view = Some(self.side_view.key().to_string());
         ui.sidebar_w = Some(f32::from(self.sidebar_w));
         ui.settings_section = Some(self.settings_section.to_string());
+        ui.reading = self.reading;
         ui.source_open = Some(self.source_on);
         ui.source_share = Some(self.source_share);
         ui.term_w = Some(self.term_w);
@@ -842,6 +1034,10 @@ impl Shell {
         let (watcher, changes) = self.watch_vault(&root, cx);
         let tree = vault::tree(&root);
         library::forget_vaults();
+        // What iCloud keeps of it elsewhere is asked for, to be here
+        // before it is pressed.
+        crate::sys::bring_vault(&root);
+        crate::sys::follow_icloud();
         crate::folder_look::ensure(&root, cx);
         // Its folders come shut (at launch, `Shell::new` opens again the ones left open).
         self.vault = Some(Vault { root: root.clone(), tree, unfolded: HashSet::new(), _watcher: watcher });
@@ -851,6 +1047,7 @@ impl Shell {
         self.watch_changes(changes, cx);
         self.library = Library::default();
         self.reread_assets(cx);
+        self.gather_assets(cx);
         self.save_ui(window);
         window.focus(&self.focus, cx);
         cx.notify();
@@ -932,6 +1129,10 @@ impl Shell {
         let Some(root) = self.vault_root().map(Path::to_path_buf) else { return };
         if Self::assets_changed(&root, paths) {
             self.reread_assets(cx);
+        }
+        let old = root.join(vault::OLD_ASSETS);
+        if paths.iter().any(|p| p.starts_with(&old) && p.file_name().is_some_and(|n| n != ".DS_Store")) {
+            self.gather_assets(cx);
         }
         if !paths.iter().any(|p| Self::change_matters(&root, p)) {
             return;
@@ -1143,6 +1344,70 @@ impl Shell {
         cx.notify();
     }
 
+    /// The link button's sheet: the link's words and its address, filled
+    /// with what the editor found, the field still to fill holding the
+    /// keyboard. It is shown once the frame can hand it the focus.
+    fn ask_link(&mut self, editor: WeakEntity<Editor>, ask: crate::editor::LinkAsk, cx: &mut Context<Self>) {
+        self.menus.close(cx);
+        self.link_asked = Some((editor, ask));
+        cx.notify();
+    }
+
+    /// The sheet asked for, filled and given the keyboard, in a frame,
+    /// which has the window to focus in.
+    fn show_link_sheet(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((editor, ask)) = self.link_asked.take() else { return };
+        let (words, href) = (ask.words.clone(), ask.href.clone());
+        self.link_words.update(cx, |i, cx| i.set_value(words.clone(), window, cx));
+        self.link_href.update(cx, |i, cx| i.set_value(href, window, cx));
+        let field = if words.is_empty() || ask.editing { &self.link_words } else { &self.link_href };
+        window.focus(&field.read(cx).focus_handle(cx), cx);
+        self.link_sheet = Some((editor, ask));
+    }
+
+    fn finish_link(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((editor, ask)) = self.link_sheet.take() else { return };
+        let words = self.link_words.read(cx).value().to_string();
+        let href = self.link_href.read(cx).value().to_string();
+        if let Some(editor) = editor.upgrade() {
+            editor.update(cx, |e, cx| e.put_link(&ask, &words, &href, cx));
+            window.focus(&editor.read(cx).focus_handle(cx), cx);
+        }
+        cx.notify();
+    }
+
+    fn cancel_link(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let Some((editor, _)) = self.link_sheet.take() else { return };
+        match editor.upgrade() {
+            Some(editor) => window.focus(&editor.read(cx).focus_handle(cx), cx),
+            None => self.focus_editor_or_shell(window, cx),
+        }
+        cx.notify();
+    }
+
+    /// The link sheet: Text and Link, each with its name over it, then
+    /// Cancel and Save.
+    fn render_link_sheet(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
+        let (_, ask) = self.link_sheet.as_ref()?;
+        let theme = cx.theme().clone();
+        let name = |words: &str| div().text_size(px(hand(12.))).font_weight(FontWeight::MEDIUM).text_color(theme.muted_foreground).child(words.to_string()).into_any_element();
+        let body = vec![
+            name(t("Display Text")),
+            Self::sheet_field("link-words", &self.link_words, &theme, cx),
+            name(t("Link")),
+            Self::sheet_field("link-href", &self.link_href, &theme, cx),
+            h_flex()
+                .pt(px(4.))
+                .gap(px(8.))
+                .justify_end()
+                .child(small_pill("link-cancel", "icons/close.svg", t("Cancel"), Press::Quiet, false, &theme).on_click(cx.listener(|this, _, window, cx| this.cancel_link(window, cx))))
+                .child(small_pill("link-ok", "icons/check.svg", t("Save"), Press::Primary, false, &theme).on_click(cx.listener(|this, _, window, cx| this.finish_link(window, cx))))
+                .into_any_element(),
+        ];
+        let title = if ask.editing { t("Edit Link") } else { t("Add Link") };
+        Some(self.render_sheet("link-sheet", title.into(), body, t("↩ to save, Esc to cancel").into(), Self::cancel_link, cx))
+    }
+
     fn cancel_new_vault(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         self.new_vault = None;
         self.focus_editor_or_shell(window, cx);
@@ -1176,6 +1441,9 @@ impl Shell {
             e.set_place(path.to_path_buf(), root, cx);
             e.set_writing(writing, words, cx);
             e.set_text(text, cx);
+            if self.reading {
+                e.set_mode(crate::editor::Mode::Reading, cx);
+            }
         });
         let sub = Self::listen(&editor, path.to_path_buf(), cx);
         (editor, sub)
@@ -1196,6 +1464,7 @@ impl Shell {
             }
             // A press in a note's words is work in it: it is the file chosen.
             EditorEvent::Pressed => this.choose(&path, cx),
+            EditorEvent::AskLink(ask) => this.ask_link(editor.downgrade(), ask.clone(), cx),
         })
     }
 
@@ -1259,6 +1528,7 @@ impl Shell {
     /// A note opened: its tab shows, made if it was not open, at the end
     /// of its folder's pill.
     fn open_note(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        crate::editor::stamp("open note");
         if self.tabs.iter().any(|t| t.path == path) {
             self.show_tab(&path, window, cx);
             return;
@@ -1268,20 +1538,75 @@ impl Shell {
             self.open_asset(path, window, cx);
             return;
         }
+        // A note kept in iCloud and not on this device yet is read off
+        // the window's thread: the read waits for the network.
+        if !vault::at_hand(&path) {
+            self.await_note(path, window, cx);
+            return;
+        }
+        self.fetching = None;
         match vault::read(&path) {
             Ok(text) => {
+                crate::editor::stamp("note read");
                 let (editor, sub) = self.make_editor(&path, &text, cx);
+                crate::editor::stamp("editor made");
                 let (title, title_sub) = self.make_title(&path, window, cx);
+                crate::editor::stamp("title made");
                 self.tabs.push(Tab { path: path.clone(), editor, title, dirty: false, saved: text, save_due: None, _sub: sub, _title_sub: title_sub, asset: None, source: None });
                 self.closed_tabs.retain(|c| *c != path);
                 self.sort_tabs();
                 self.show_tab(&path, window, cx);
+                crate::editor::stamp("tab shown");
             }
             Err(e) => {
                 self.say(tf("The note could not be read: {why}", &[("why", &e)]), cx);
                 cx.notify();
             }
         }
+    }
+
+    /// A note whose words are not on this device (`vault::at_hand`) is
+    /// asked of iCloud and read on a thread of its own, which waits as
+    /// long as the network takes; the window goes on, the note's row lit
+    /// with a cloud on it, and the note opens when it has come. Read
+    /// where it was pressed, the read held the whole window a second and
+    /// more for each note not opened on that device before. A note
+    /// pressed after it takes its place: the one asked for last opens.
+    fn await_note(&mut self, path: PathBuf, window: &mut Window, cx: &mut Context<Self>) {
+        if self.fetching.as_ref() == Some(&path) {
+            return;
+        }
+        self.fetching = Some(path.clone());
+        crate::sys::bring(&path);
+        let (tx, rx) = futures::channel::oneshot::channel();
+        let from = path.clone();
+        let reading = std::thread::Builder::new().name("note".into()).spawn(move || {
+            let _ = tx.send(vault::read(&from).map(|_| ()).map_err(|e| e.to_string()));
+        });
+        if reading.is_err() {
+            self.fetching = None;
+            return;
+        }
+        cx.spawn_in(window, async move |this, cx| {
+            let came = rx.await.unwrap_or_else(|_| Err(String::new()));
+            let _ = this.update_in(cx, |s, window, cx| {
+                if s.fetching.as_ref() != Some(&path) {
+                    return;
+                }
+                s.fetching = None;
+                match came {
+                    // Here now: opened as any note at hand is.
+                    Ok(()) if vault::at_hand(&path) => s.open_note(path, window, cx),
+                    Ok(()) => cx.notify(),
+                    Err(e) => {
+                        s.say(tf("The note could not be read: {why}", &[("why", &e)]), cx);
+                        cx.notify();
+                    }
+                }
+            });
+        })
+        .detach();
+        cx.notify();
     }
 
     /// The row's order: a folder's tabs together (`Tabs::group`).
@@ -1356,8 +1681,19 @@ impl Shell {
         Self::let_asset_go(gone.asset, window, cx);
         self.closed_tabs.retain(|c| c != path);
         self.closed_tabs.push(path.to_path_buf());
+        // Where tabs stay open, only a note still open; where one file is
+        // open at a time, the note it let go.
+        let from = self.opened_from.remove(path).filter(|n| n.exists() && (crate::sys::one_file() || self.tabs.iter().any(|t| t.path == *n)));
         if self.shown.as_deref() == Some(path) {
             self.shown = None;
+            // An asset opened from a note gives way to that note, opened
+            // again where it was let go (one file at a time).
+            if let Some(note) = from {
+                self.open_note(note, window, cx);
+                self.save_ui(window);
+                cx.notify();
+                return;
+            }
             match self.tabs.get(ix.min(self.tabs.len().saturating_sub(1))).map(|t| t.path.clone()) {
                 Some(next) => self.show_tab(&next, window, cx),
                 // The last tab gone, the panes beside it go with it: the
@@ -1610,6 +1946,14 @@ impl Shell {
                     self.focus_editor_or_shell(window, cx);
                 } else {
                     self.open_note(path, window, cx);
+                    // On an iPhone and an iPad a note just made is to be
+                    // written in: the keyboard is in its words, unless
+                    // notes only read.
+                    if cfg!(target_os = "ios") && !self.reading {
+                        if let Some(editor) = self.shown_editor() {
+                            window.focus(&editor.read(cx).focus_handle(cx), cx);
+                        }
+                    }
                 }
                 self.save_ui(window);
             }
@@ -1629,7 +1973,9 @@ impl Shell {
     /// A link out of the app, to the system. A probe says it and opens
     /// nothing: a copy under a script stays in its window.
     fn open_outside(&self, target: &str) {
-        if std::env::var_os("ONYX_GO").is_some() {
+        // An iPhone's and an iPad's viewer for a file is in the window.
+        let here = cfg!(target_os = "ios") && !target.contains("://") && !target.starts_with("mailto:");
+        if std::env::var_os("ONYX_GO").is_some() && !here {
             eprintln!("open {target}");
         } else {
             crate::sys::open(target);
@@ -1781,7 +2127,12 @@ impl Shell {
     }
 
     pub(crate) fn focus_editor_or_shell(&self, window: &mut Window, cx: &mut Context<Self>) {
-        match self.shown_editor() {
+        // On an iPhone and an iPad the keyboard in a note's words brings
+        // the keys up over the page: it goes back there only when it was
+        // there before what is closing came (`note_keys`), and never
+        // under a compact window's drawer.
+        let away = cfg!(target_os = "ios") && (!self.note_keys || (self.compact && self.sidebar_open));
+        match self.shown_editor().filter(|_| !away) {
             Some(editor) => window.focus(&editor.read(cx).focus_handle(cx), cx),
             None => window.focus(&self.focus, cx),
         }
@@ -1821,7 +2172,8 @@ impl Shell {
             }
             if self.tabs.iter().any(|t| t.path == path) {
                 items.push(Entry::Rule);
-                items.push(Entry::choice("close-tab", "icons/close.svg", t("Close Tab")));
+                // One file at a time on an iPhone, with no tabs to name.
+                items.push(Entry::choice("close-tab", "icons/close.svg", t(if crate::sys::one_file() { crate::i18n::phrase("Close") } else { crate::i18n::phrase("Close Tab") })));
                 if self.tabs.len() > 1 {
                     items.push(Entry::choice("close-others", "icons/circle-x.svg", t("Close Other Tabs")));
                 }
@@ -2207,18 +2559,42 @@ impl Shell {
     }
 
     /// The swipe from the screen's edge over the note's page of a compact
-    /// window, which brings the sidebar back as a finger pulls it: the
-    /// page follows the finger, and let go it goes on to where the system
-    /// says the swipe ended, from where it had got.
-    fn side_pulled(&mut self, e: &BackGestureEvent, window: &mut Window, cx: &mut Context<Self>) {
-        if !self.compact || self.sidebar_open {
-            return;
+    /// window begins, and the sidebar is the finger's from here: the page
+    /// under the finger claims it (`on_back_gesture`), which is how gpui's
+    /// backend knows to let the system's swipe begin.
+    fn side_pull_begins(&mut self, e: &BackGestureEvent, _: &mut Window, cx: &mut Context<Self>) {
+        if e.phase == BackGesturePhase::Started && self.compact && !self.sidebar_open {
+            self.side_pull = Some(0.);
+            self.side_pull_from = (e.start_position, 0.);
+            cx.notify();
         }
+    }
+
+    /// The swipe's later steps, which bring the sidebar back as the finger
+    /// pulls it: the pages follow the finger, and let go they go on to
+    /// where the system says the swipe ended, from where they had got.
+    /// gpui sends every step to where the swipe began, and the page that
+    /// claimed it has moved from under there by then, so these are heard
+    /// by the window (`Shell::render`'s listener), not by the page: heard
+    /// by the page alone, the first step moved it and the rest were lost,
+    /// the end among them, and the drawer stood a finger's width out over
+    /// a page that took no press. True when the swipe was the sidebar's.
+    fn side_pull_goes(&mut self, e: &BackGestureEvent, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        let Some(at) = self.side_pull else { return false };
         match e.phase {
-            BackGesturePhase::Started | BackGesturePhase::Progressed => self.side_pull = Some(e.progress.clamp(0., 1.)),
+            BackGesturePhase::Started => return false,
+            BackGesturePhase::Progressed => {
+                self.side_pull = Some(e.progress.clamp(0., 1.));
+                self.side_pull_from.1 = self.side_pull_from.1.max(e.progress);
+            }
             BackGesturePhase::Committed | BackGesturePhase::Cancelled => {
-                let Some(at) = self.side_pull.take() else { return };
-                let coming = e.phase == BackGesturePhase::Committed;
+                self.side_pull = None;
+                // A press on the sidebar's button that rolled a little is
+                // the system's swipe by then, the button standing at the
+                // screen's edge, and it ends as one let go: it was a press.
+                let (from, most) = self.side_pull_from;
+                let pressed = most * f32::from(self.room.width) < ROLL && self.strip_at.get().contains(&from);
+                let coming = e.phase == BackGesturePhase::Committed || pressed;
                 // The eased clock set to where the finger left the page.
                 let done = if coming { at } else { 1. - at };
                 let passed = SLIDE.mul_f32(1. - (1. - done.clamp(0., 1.)).powf(0.2));
@@ -2227,9 +2603,213 @@ impl Shell {
                     self.sidebar_open = true;
                     self.save_ui(window);
                 }
+                self.finger_done(window, cx);
             }
         }
         cx.notify();
+        true
+    }
+
+    /// Notes read, or written again: every note open and every one opened
+    /// after, kept across launches (`UiState::reading`). As it reads a
+    /// note is the same page with nothing to type in and no keyboard, its
+    /// name with it: a touch scrolls, selects, follows a link or ticks a
+    /// box (`Mode::Reading`, `docs/editor.md`). A file's tab reads either way.
+    pub(crate) fn toggle_reading(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.reading_anim = Some((if self.reading { 1. } else { 0. }, Instant::now(), self.reading_anim.map_or(0, |(_, _, n)| n + 1)));
+        self.reading = !self.reading;
+        let mode = if self.reading { crate::editor::Mode::Reading } else { crate::editor::Mode::Live };
+        for tab in self.tabs.iter().filter(|t| t.asset.is_none()) {
+            tab.editor.update(cx, |e, cx| e.set_mode(mode, cx));
+        }
+        if self.reading {
+            // The name's field may have the keyboard, and is words now.
+            if let Some(tab) = self.shown_tab() {
+                if tab.title.read(cx).focus_handle(cx).is_focused(window) {
+                    self.focus_editor_or_shell(window, cx);
+                }
+            }
+        }
+        self.save_ui(window);
+        cx.notify();
+    }
+
+    /// A finger put down. gpui acts on a touch only once it knows what
+    /// it is, a tap at the lift or a scroll at the first move, so a thing
+    /// under a finger said nothing until the finger left it, and a press
+    /// felt late. gpui has the pointer where the finger is from the
+    /// moment it lands, so a frame drawn now lights what is under it as a
+    /// pointer does: it is asked for a moment after the landing, as the
+    /// system's own lists wait before they light a row, so a finger that
+    /// lands to scroll flashes nothing.
+    fn finger_down(&mut self, cx: &mut Context<Self>) {
+        if self.fling_ending {
+            return;
+        }
+        self.finger = self.finger.wrapping_add(1);
+        let finger = self.finger;
+        // The glass under it answers at once.
+        self.finger_on = true;
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(FINGER_LIGHT).await;
+            let _ = this.update(cx, |s, cx| {
+                if s.finger == finger {
+                    s.finger_rests = true;
+                    cx.notify();
+                }
+            });
+            // A touch the system takes back (its own swipe from an edge)
+            // ends with no word to the window: the light is put out once
+            // a held finger would have opened its menu.
+            cx.background_executor().timer(FINGER_HELD).await;
+            let _ = this.update(cx, |s, cx| {
+                if s.finger == finger && (std::mem::take(&mut s.finger_rests) | std::mem::take(&mut s.finger_on)) {
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// A fling that has nothing left to move is ended. gpui carries a
+    /// lifted finger's scroll on by its own count for as long as the
+    /// speed lasts, a second and more after a hard flick, whether its
+    /// scroller reached its end at once or not; and a touch while it
+    /// counts is one that stops the fling, never a tap. So a list flicked
+    /// to its end took no press for that long, and the first tap after
+    /// it did nothing. Only a touch ends gpui's count: one is begun where
+    /// the fling is and taken back at once, which gpui reads as a finger
+    /// that stopped the scroll and left. While a real finger is down gpui
+    /// passes it by, there being a touch already.
+    fn end_fling(&mut self, at: Point<Pixels>, window: &mut Window, cx: &mut Context<Self>) {
+        if std::mem::replace(&mut self.fling_ending, true) {
+            return;
+        }
+        let this = cx.entity().downgrade();
+        window.defer(cx, move |window, cx| {
+            let touch = |phase: TouchPhase| PlatformInput::Touch(TouchEvent { id: TouchId(u64::MAX), phase, position: at, predicted_position: None, force: None });
+            window.dispatch_event(touch(TouchPhase::Started), cx);
+            window.dispatch_event(touch(TouchPhase::Cancelled), cx);
+            let _ = this.update(cx, |s, _| s.fling_ending = false);
+        });
+    }
+
+    /// Whether a swipe along the keyboard's bar can move its tools no
+    /// further the way it goes.
+    fn keys_spent(&self, e: &ScrollEvent) -> bool {
+        let dx = e.delta.pixel_delta(px(20.)).x;
+        let at = self.keys_scroll.offset().x;
+        self.keys_bar && self.keys_at.get().contains(&e.position) && ((dx > px(0.) && at >= px(0.)) || (dx < px(0.) && at <= -self.keys_scroll.max_offset().x))
+    }
+
+    /// A finger's pan begins, before it is routed: one that begins with
+    /// no movement is a touch that landed while a fling still went, which
+    /// gpui reads as stopping the fling wherever it lands.
+    fn pan_begins(&mut self, e: &ScrollEvent) {
+        if e.touch_phase == TouchPhase::Started {
+            let d = e.delta.pixel_delta(px(20.));
+            let caught = d.x == px(0.) && d.y == px(0.);
+            self.pan = Some(FingerPan { from: e.position, gone: point(px(0.), px(0.)), free: false, beside: caught && !self.scrollers.owned_at(&e.position) });
+        }
+    }
+
+    /// A finger's pan goes on, after it is routed, and at its end is a
+    /// press after all when it was one. gpui reads a touch that moved ten
+    /// points as a pan and one that lands during a fling as stopping it,
+    /// whatever is under it, and neither is ever a tap; a button of the
+    /// system's takes both as a press, since nothing there scrolls. So
+    /// two pans are pressed where they began once the finger lifts: one
+    /// begun on a thing a finger presses over nothing that scrolls, that
+    /// went no further than a thumb rolls (`ROLL`); and a touch that
+    /// landed during a fling outside the scroller that was flinging (a
+    /// button on the bar while the note still coasts) and stayed within
+    /// a tap's own reach. A pan over nothing that scrolls leaves no
+    /// fling to count either.
+    fn finger_pan(&mut self, e: &ScrollEvent, window: &mut Window, cx: &mut Context<Self>) {
+        let Some(pan) = self.pan.as_mut() else { return };
+        pan.gone += e.delta.pixel_delta(px(20.));
+        match e.touch_phase {
+            TouchPhase::Started => pan.free = self.scrollers.nowhere(),
+            TouchPhase::Moved => {}
+            TouchPhase::Cancelled => self.pan = None,
+            TouchPhase::Ended => {
+                let Some(pan) = self.pan.take() else { return };
+                let far = f32::from(pan.gone.x).hypot(f32::from(pan.gone.y));
+                if pan.free {
+                    self.end_fling(pan.from, window, cx);
+                }
+                if (pan.free && far <= ROLL && crate::widgets::pressed_at(&pan.from)) || (pan.beside && far <= TAP_REACH) {
+                    let at = pan.from;
+                    window.defer(cx, move |window, cx| {
+                        let modifiers = Modifiers::default();
+                        window.dispatch_event(PlatformInput::MouseMove(MouseMoveEvent { position: at, pressed_button: None, modifiers }), cx);
+                        window.dispatch_event(PlatformInput::MouseDown(MouseDownEvent { button: MouseButton::Left, position: at, modifiers, click_count: 1, first_mouse: false }), cx);
+                        window.dispatch_event(PlatformInput::MouseUp(MouseUpEvent { button: MouseButton::Left, position: at, modifiers, click_count: 1 }), cx);
+                    });
+                }
+            }
+        }
+    }
+
+    /// The finger's press is over, by a lift or by a scroll begun: no
+    /// light comes for it, and the pointer gpui left where it touched goes
+    /// off the window, or the row there stayed lit, and every row a
+    /// scroll carried under that place lit as it passed.
+    fn finger_done(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        self.finger = self.finger.wrapping_add(1);
+        if std::mem::take(&mut self.finger_rests) | std::mem::take(&mut self.finger_on) {
+            cx.notify();
+        }
+        window.defer(cx, |window, cx| {
+            if window.mouse_position().x >= px(0.) {
+                window.dispatch_event(PlatformInput::MouseMove(MouseMoveEvent { position: point(px(-1.), px(-1.)), pressed_button: None, modifiers: Modifiers::default() }), cx);
+            }
+        });
+    }
+
+    /// A finger drawn sideways while a compact window's drawer is out
+    /// takes the drawer with it, as the swipe from the edge brought it:
+    /// the pages follow the finger, and let go they go on to where they
+    /// were headed, shut for a flick to the left or a pull past half way,
+    /// out again else. Up and down the finger scrolls the tree as ever.
+    /// True when the event was the drawer's, and nothing else is to hear it.
+    fn drawer_swipe(&mut self, e: &ScrollEvent, window: &mut Window, cx: &mut Context<Self>) -> bool {
+        if !self.compact || e.source != ScrollSource::Touch {
+            return false;
+        }
+        let d = e.delta.pixel_delta(px(20.));
+        let (dx, dy) = (f32::from(d.x), f32::from(d.y));
+        if e.touch_phase == TouchPhase::Started {
+            self.side_swipe = None;
+            if !self.sidebar_open || self.side_pull.is_some() || self.sidebar_moving() || self.scrollers.covered() || dx.abs() <= dy.abs() {
+                return false;
+            }
+            // As if a frame had passed, for the first move's speed.
+            self.side_swipe = Some((Instant::now() - Duration::from_millis(16), 0.));
+            self.side_pull = Some(1.);
+        }
+        let Some((last, speed)) = self.side_swipe else { return false };
+        let at = (self.side_pull.unwrap_or(1.) + dx / f32::from(self.sidebar_width()).max(1.)).clamp(0., 1.);
+        if matches!(e.touch_phase, TouchPhase::Ended | TouchPhase::Cancelled) {
+            self.side_swipe = None;
+            self.side_pull = None;
+            let coming = if speed.abs() > 300. { speed > 0. } else { at > 0.5 };
+            // The eased clock set to where the finger left the pages.
+            let done = if coming { at } else { 1. - at };
+            self.side_anim = Some((coming, Instant::now() - SLIDE.mul_f32(1. - (1. - done.clamp(0., 1.)).powf(0.2))));
+            if !coming {
+                self.sidebar_open = false;
+                self.save_ui(window);
+            }
+            // What gpui would carry on by itself is the drawer's no longer.
+            self.end_fling(e.position, window, cx);
+        } else {
+            self.side_pull = Some(at);
+            self.side_swipe = Some((Instant::now(), speed * 0.5 + dx / last.elapsed().as_secs_f32().max(0.004) * 0.5));
+        }
+        cx.notify();
+        true
     }
 
     /// Whether this is a compact window, and the room it has, for what is
@@ -2251,19 +2831,34 @@ impl Shell {
     /// How far a compact window's page runs under the room, to the
     /// screen's foot: what the system keeps for the home indicator, and
     /// nothing while the keyboard is out, whose top the page ends at.
+    /// How far a compact window's page runs past the room at its foot:
+    /// under the home indicator, and under the keyboard while it is out,
+    /// whose top corners are round and show what is behind them.
     fn foot(&self) -> Pixels {
-        if self.compact && !self.keys_out { self.safe.bottom } else { px(0.) }
+        if self.compact { self.safe.bottom } else { px(0.) }
     }
 
     /// Whether the bar at a compact window's foot shows (`render_foot_bar`).
     fn foot_bar_on(&self) -> bool {
-        self.compact && self.vault.is_some() && !self.keys_out
+        self.compact && self.vault.is_some() && !self.keys_out && !(self.safari() && (self.search_open || (self.find_open && self.shown.is_some())))
     }
 
     /// The room a compact window's page keeps clear at its foot, for the
     /// home indicator and the bar over it.
     fn foot_room(&self) -> f32 {
-        f32::from(self.foot()) + if self.foot_bar_on() { FOOT_BAR_H + 2. * FOOT_BAR_GAP } else { 0. }
+        f32::from(self.foot())
+            + if self.foot_bar_on() {
+                FOOT_BAR_H + 2. * FOOT_BAR_GAP
+            } else if self.find_open && self.safari() && !self.keys_bar {
+                SAFARI_H + 2. * SAFARI_GAP
+            } else {
+                self.keys_room()
+            }
+    }
+
+    /// What the bar over the keyboard covers of the page's foot.
+    fn keys_room(&self) -> f32 {
+        if self.keys_bar { KEYS_BAR_H + 2. * KEYS_BAR_GAP } else { 0. }
     }
 
     fn sheet_gutter(&self) -> f32 {
@@ -2556,15 +3151,22 @@ impl Shell {
                 .when(chosen, |d| d.bg(theme.foreground.opacity(0.13)))
                 .when(!chosen, |d| d.group_hover("tree-row", move |s| s.bg(hover_bg)))
                 .when(self.pressed.as_ref() == Some(&e.path), |d| d.bg(theme.foreground.opacity(0.1)))
+                .children(crate::widgets::press_light(hand(7.)).filter(|_| !chosen))
                 .child(div().w(px(hand(12.))).flex_shrink_0().flex().justify_center().when(e.dir, |d| d.child(Icon::default().path(if is_open_folder { "icons/chevron-down.svg" } else { "icons/chevron-right.svg" }).with_size(px(hand(12.))).text_color(theme.muted_foreground))))
                 .children(icon)
                 .child(div().flex_1().min_w_0().truncate().child(e.name.clone()))
+                // A note on its way from iCloud (`await_note`): a cloud
+                // that breathes on the window's clock until it is here.
+                .when(self.fetching.as_ref() == Some(&e.path), |d| {
+                    let breath = crate::ambient::pulse(0.35, 0.9, crate::ambient::phase(Duration::from_millis(1400)));
+                    d.child(Icon::default().path("icons/cloud.svg").with_size(px(hand(14.))).flex_shrink_0().text_color(theme.foreground.opacity(breath)))
+                })
                 // A folder's New Note and New Folder, there while the
                 // pointer is on its row (`hover_row`): no room is kept for
                 // them else, so a name is cut only while they show. A hover
                 // style cannot do it, being applied as the row is painted,
                 // after its layout.
-                .when(e.dir && self.hover_row.as_ref() == Some(&e.path), |d| {
+                .when(e.dir && self.hover_row.as_ref() == Some(&e.path) && cfg!(not(target_os = "ios")), |d| {
                     let (note_in, folder_in) = (path.clone(), path.clone());
                     d.child(
                         h_flex()
@@ -2687,6 +3289,7 @@ impl Shell {
                     .justify_center()
                     .cursor_pointer()
                     .hover(move |s| s.bg(accent))
+                    .children(crate::widgets::press_light(hand(6.)))
                     .managed_tooltip(|window, cx| tip(t("Settings (⌘,)"), window, cx))
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -2764,6 +3367,8 @@ impl Shell {
                             .px(px(8.))
                             .pt(px(LIST_TOP))
                             .pb(px(12.))
+                            .relative()
+                            .top(self.scrollers.stretch_of(&self.side_scroll))
                             .overflow_y_scroll()
                             .track_scroll(&self.side_scroll)
                             .children(rows),
@@ -2813,20 +3418,43 @@ impl Shell {
     /// copy has a name of its own each time, so the old picture is not
     /// what the image cache answers with.
     pub(crate) fn pick_avatar(&mut self, cx: &mut Context<Self>) {
+        // An iPhone and an iPad have no panel of files: the system's picker
+        // of the photos hands over the one picture chosen.
+        #[cfg(target_os = "ios")]
+        {
+            let dir = onyx_core::paths::root().join("avatar");
+            let _ = std::fs::create_dir_all(&dir);
+            let rx = crate::sys::pick_picture(dir.join("chosen.png"));
+            cx.spawn(async move |this, cx| {
+                let Ok(Some(from)) = rx.await else { return };
+                this.update(cx, |this, cx| this.keep_avatar(&from, cx)).ok();
+                let _ = std::fs::remove_file(&from);
+            })
+            .detach();
+        }
+        #[cfg(not(target_os = "ios"))]
+        self.pick_avatar_file(cx);
+    }
+
+    /// A picture chosen made the avatar, in Onyx's own folder at the
+    /// sizes it is drawn at.
+    fn keep_avatar(&mut self, from: &Path, cx: &mut Context<Self>) {
+        let dir = onyx_core::paths::root().join("avatar");
+        let to = dir.join(format!("{}.png", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)));
+        if let Err(e) = std::fs::create_dir_all(&dir).map_err(|e| e.to_string()).and_then(|_| avatar_keep(from, &to)) {
+            self.say(tf("The picture could not be used: {why}", &[("why", &e)]), cx);
+            return;
+        }
+        self.set_avatar(to.to_string_lossy().to_string(), cx);
+    }
+
+    #[cfg_attr(target_os = "ios", allow(dead_code))]
+    fn pick_avatar_file(&mut self, cx: &mut Context<Self>) {
         let rx = cx.prompt_for_paths(PathPromptOptions { files: true, directories: false, multiple: false, prompt: Some(t("Choose").into()) });
         cx.spawn(async move |this, cx| {
             let Ok(Ok(Some(paths))) = rx.await else { return };
             let Some(from) = paths.into_iter().next() else { return };
-            this.update(cx, |this, cx| {
-                let dir = onyx_core::paths::root().join("avatar");
-                let to = dir.join(format!("{}.png", std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0)));
-                if let Err(e) = std::fs::create_dir_all(&dir).map_err(|e| e.to_string()).and_then(|_| avatar_keep(&from, &to)) {
-                    this.say(tf("The picture could not be used: {why}", &[("why", &e)]), cx);
-                    return;
-                }
-                this.set_avatar(to.to_string_lossy().to_string(), cx);
-            })
-            .ok();
+            this.update(cx, |this, cx| this.keep_avatar(&from, cx)).ok();
         })
         .detach();
     }
@@ -2855,6 +3483,7 @@ impl Shell {
         }
         self.cfg.app.user_name = name.clone();
         self.user_name = Self::name_of(&self.cfg);
+        crate::sys::share_name(self.user_name.clone());
         let _ = Config::edit(move |c| c.app.user_name = name);
         cx.notify();
     }
@@ -2898,6 +3527,7 @@ impl Shell {
                 .cursor_pointer()
                 .when(active, |d| d.bg(accent))
                 .hover(move |s| s.bg(accent.opacity(0.6)))
+                .children(crate::widgets::press_light(9.))
                 .managed_tooltip_at(gpui_component::Placement::Right, move |window, cx| tip(words.clone(), window, cx))
                 // The press is the entry's, not the rail's to move the
                 // window by.
@@ -3107,10 +3737,63 @@ impl Shell {
             return;
         }
         self.search_open = true;
+        if self.safari() {
+            // The drawer goes: the search is the whole screen.
+            if self.sidebar_open {
+                self.toggle_sidebar(window, cx);
+            }
+            window.focus(&self.focus, cx);
+            let words = self.search_input.read(cx).value();
+            self.field_asks += 2;
+            self.search_set = (self.field_asks, words);
+            self.search_focus = (self.field_asks + 1, true);
+            cx.notify();
+            return;
+        }
         self.search_input.update(cx, |s, cx| {
             s.focus(window, cx);
             s.select_all(window, cx);
         });
+        cx.notify();
+    }
+
+    /// Whether search and find are a phone's: a bar at the foot over the
+    /// keyboard, on glass, with the system's own field, as Safari's.
+    fn safari(&self) -> bool {
+        self.compact && crate::glass::on()
+    }
+
+    /// What a field of the system's said (`glass::FieldEvent`).
+    fn field_heard(&mut self, ev: crate::glass::FieldEvent, window: &mut Window, cx: &mut Context<Self>) {
+        use crate::glass::FieldEvent;
+        match ev {
+            FieldEvent::Changed("search", words) => {
+                self.search_input.update(cx, |s, cx| s.set_value(words, window, cx));
+                self.run_search(cx);
+            }
+            FieldEvent::Changed("find", words) => {
+                self.find_input.update(cx, |s, cx| s.set_value(words, window, cx));
+                self.run_find(cx);
+            }
+            FieldEvent::Return("search") => {
+                if let Some(first) = self.search_results.as_ref().and_then(|r| r.notes.first()) {
+                    let path = first.path.clone();
+                    let query = self.search_input.read(cx).value().to_string();
+                    self.open_found(path, &query, window, cx);
+                }
+            }
+            FieldEvent::Return("find") => self.find_step(1, cx),
+            // Their own: a press in the field, the keyboard's own key to hide it.
+            FieldEvent::Focus(key, on) => {
+                let asked = self.field_asks;
+                match key {
+                    "search" => self.search_focus = (self.search_focus.0.max(asked), on),
+                    "find" => self.find_focus = (self.find_focus.0.max(asked), on),
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
         cx.notify();
     }
 
@@ -3146,8 +3829,10 @@ impl Shell {
         self.close_search(window, cx);
         self.open_note(path, window, cx);
         let query = query.to_string();
-        self.find_input.update(cx, |s, cx| s.set_value(query, window, cx));
+        self.find_input.update(cx, |s, cx| s.set_value(query.clone(), window, cx));
         self.find_open = true;
+        self.field_asks += 1;
+        self.find_set = (self.field_asks, query.into());
         self.run_find(cx);
         cx.notify();
     }
@@ -3165,6 +3850,16 @@ impl Shell {
             return;
         }
         self.find_open = true;
+        if self.safari() {
+            window.focus(&self.focus, cx);
+            let words = self.find_input.read(cx).value();
+            self.field_asks += 2;
+            self.find_set = (self.field_asks, words);
+            self.find_focus = (self.field_asks + 1, true);
+            self.run_find(cx);
+            cx.notify();
+            return;
+        }
         self.find_input.update(cx, |s, cx| {
             s.focus(window, cx);
             s.select_all(window, cx);
@@ -3200,24 +3895,68 @@ impl Shell {
         cx.notify();
     }
 
+    /// The notes the search found, a row each: the name, where it is and
+    /// how many times, and the lines the words are in.
+    fn search_hits(&self, window: &mut Window, cx: &mut Context<Self>) -> Vec<AnyElement> {
+        let Some(res) = self.search_results.as_ref() else { return Vec::new() };
+        let theme = cx.theme().clone();
+        let mut snippet_style = window.text_style();
+        snippet_style.font_size = px(hand(11.5)).into();
+        snippet_style.color = theme.muted_foreground;
+        let mark = HighlightStyle { color: Some(theme.foreground), background_color: Some(theme.warning.opacity(0.35)), ..Default::default() };
+        res.notes.iter().take(40).enumerate().map(|(i, n)| {
+                                let query = res.query.clone();
+                                let path = n.path.clone();
+                                let where_ = if n.folder.is_empty() { crate::i18n::count(n.hits, "{n} hit", "{n} hits") } else { format!("{} · {}", n.folder, crate::i18n::count(n.hits, "{n} hit", "{n} hits")) };
+                                let style = snippet_style.clone();
+                                v_flex()
+                                    .id(("hit", i))
+                                    .px(px(12.))
+                                    .py(px(8.))
+                                    .gap(px(3.))
+                                    .rounded(px(10.))
+                                    .cursor_pointer()
+                                    .hover(|st| st.bg(theme.list_hover))
+                                    .children(crate::widgets::press_light(10.))
+                                    .on_mouse_down(MouseButton::Right, cx.listener({
+                                        let path = path.clone();
+                                        move |this, ev: &MouseDownEvent, window, cx| {
+                                            swallow_click(window, cx);
+                                            this.show_found_menu(path.clone(), ev.position, cx);
+                                        }
+                                    }))
+                                    .on_click(cx.listener(move |this, _, window, cx| {
+                                        swallow_click(window, cx);
+                                        this.open_found(path.clone(), &query, window, cx);
+                                    }))
+                                    .child(h_flex().gap(px(8.)).child(div().flex_1().min_w_0().truncate().text_size(px(hand(13.))).font_weight(FontWeight::MEDIUM).child(n.title.clone())).child(div().flex_shrink_0().text_size(px(hand(11.))).text_color(theme.muted_foreground).child(where_)))
+                                    .children(n.snippets.iter().map(|sn| {
+                                        let marks: Vec<(std::ops::Range<usize>, HighlightStyle)> = sn.marks.iter().map(|r| (r.clone(), mark)).collect();
+                                        div().w_full().truncate().child(StyledText::new(sn.text.clone()).with_default_highlights(&style, marks))
+                                    }))
+        })
+        .map(|row| row.into_any_element())
+        .collect()
+    }
+
     fn render_search(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         self.scrollers.name_over(&self.search_scroll);
         let theme = cx.theme().clone();
         let focus = self.search_input.read(cx).focus_handle(cx);
+        if self.safari() {
+            return self.render_safari_search(cx, window);
+        }
         // Borrowed, not copied: every note found, each with its words,
         // copied at each draw (the field's caret draws twice a second) to
         // draw the first 40.
         let results = self.search_results.as_ref();
-        let mut snippet_style = window.text_style();
-        snippet_style.font_size = px(11.5).into();
-        snippet_style.color = theme.muted_foreground;
-        let mark = HighlightStyle { color: Some(theme.foreground), background_color: Some(theme.warning.opacity(0.35)), ..Default::default() };
         div()
             .id("search-overlay")
             .absolute()
             .inset_0()
             .occlude()
             .bg(theme.overlay)
+            .children(crate::glass::cover("search"))
             .children(crate::widgets::reaches(theme.overlay))
             .flex()
             .flex_col()
@@ -3258,36 +3997,7 @@ impl Shell {
                         v_flex().relative().flex_1().min_h_0().pb(px(8.)).vertical_scrollbar(&self.search_scroll).child(v_flex().id("search-results").flex_1().min_h_0().overflow_y_scroll().track_scroll(&self.search_scroll).px(px(8.)).pt(px(8.)).map(|d| match results {
                             None => d.child(div().p(px(12.)).text_size(px(hand(12.5))).text_color(theme.muted_foreground).child(t("Type to search every note's name and words."))),
                             Some(res) if res.notes.is_empty() => d.child(div().p(px(12.)).text_size(px(hand(12.5))).text_color(theme.muted_foreground).child(t("No matches."))),
-                            Some(res) => d.children(res.notes.iter().take(40).enumerate().map(|(i, n)| {
-                                let query = res.query.clone();
-                                let path = n.path.clone();
-                                let where_ = if n.folder.is_empty() { crate::i18n::count(n.hits, "{n} hit", "{n} hits") } else { format!("{} · {}", n.folder, crate::i18n::count(n.hits, "{n} hit", "{n} hits")) };
-                                let style = snippet_style.clone();
-                                v_flex()
-                                    .id(("hit", i))
-                                    .px(px(12.))
-                                    .py(px(8.))
-                                    .gap(px(3.))
-                                    .rounded(px(10.))
-                                    .cursor_pointer()
-                                    .hover(|st| st.bg(theme.list_hover))
-                                    .on_mouse_down(MouseButton::Right, cx.listener({
-                                        let path = path.clone();
-                                        move |this, ev: &MouseDownEvent, window, cx| {
-                                            swallow_click(window, cx);
-                                            this.show_found_menu(path.clone(), ev.position, cx);
-                                        }
-                                    }))
-                                    .on_click(cx.listener(move |this, _, window, cx| {
-                                        swallow_click(window, cx);
-                                        this.open_found(path.clone(), &query, window, cx);
-                                    }))
-                                    .child(h_flex().gap(px(8.)).child(div().flex_1().min_w_0().truncate().text_size(px(hand(13.))).font_weight(FontWeight::MEDIUM).child(n.title.clone())).child(div().flex_shrink_0().text_size(px(hand(11.))).text_color(theme.muted_foreground).child(where_)))
-                                    .children(n.snippets.iter().map(|sn| {
-                                        let marks: Vec<(std::ops::Range<usize>, HighlightStyle)> = sn.marks.iter().map(|r| (r.clone(), mark)).collect();
-                                        div().w_full().truncate().child(StyledText::new(sn.text.clone()).with_default_highlights(&style, marks))
-                                    }))
-                            })),
+                            Some(_) => d.children(self.search_hits(window, cx)),
                         })),
                     ),
             )
@@ -3296,6 +4006,128 @@ impl Shell {
 
     /// The find bar over the note: the phrase, how many of it and which
     /// one, and the way to the next and the one before.
+    /// A phone's bar of search or find, as Safari's: at the foot, over
+    /// the keyboard while it is out, on glass. A round button that closes
+    /// it at the left; a pill with the system's own field in the middle;
+    /// for find, how many and which at the field's right, and a pill of
+    /// the previous and the next at the bar's right.
+    fn render_safari_bar(&self, find: bool, cx: &mut Context<Self>) -> AnyElement {
+        let theme = cx.theme().clone();
+        let ink = theme.foreground.opacity(0.86);
+        let round = |id: &'static str, icon: &'static str, w: f32| {
+            div()
+                .id(id)
+                .relative()
+                .w(px(w))
+                .h_full()
+                .flex_shrink_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .children(crate::widgets::press_light(999.))
+                .child(crate::glass::icon(icon, 20., ink))
+        };
+        let close = div().relative().size(px(SAFARI_H)).flex_shrink_0().rounded_full().children(crate::glass::plate(if find { "find-x" } else { "search-x" }, 999.)).child(round("safari-close", "icons/close.svg", SAFARI_H).on_click(cx.listener(move |this, _, window, cx| {
+            swallow_click(window, cx);
+            if find {
+                this.close_find(window, cx)
+            } else {
+                this.close_search(window, cx)
+            }
+        })));
+        let (key, placeholder, set, focus) = if find { ("find", t("Find in this note"), self.find_set.clone(), self.find_focus) } else { ("search", t("Search your notes"), self.search_set.clone(), self.search_focus) };
+        let count = find.then(|| {
+            let (n, at) = self.shown_editor().map(|e| (e.read(cx).find_count(), e.read(cx).find_at())).unwrap_or((0, 0));
+            let empty = self.find_input.read(cx).value().trim().is_empty();
+            let words = if empty { String::new() } else { format!("{}/{}", if n == 0 { 0 } else { at + 1 }, n) };
+            crate::glass::label(words, 56., if n == 0 && !empty { theme.danger } else { theme.muted_foreground })
+        });
+        let field = h_flex()
+            .relative()
+            .flex_1()
+            .min_w_0()
+            .h_full()
+            .pl(px(16.))
+            .pr(px(14.))
+            .gap(px(8.))
+            .items_center()
+            .rounded_full()
+            .children(crate::glass::plate(if find { "find-field" } else { "search-field" }, 999.))
+            .child(crate::glass::icon("icons/search.svg", 18., theme.muted_foreground))
+            .child(crate::glass::field(crate::glass::Field { key, placeholder: placeholder.into(), set, focus }, theme.foreground))
+            .children(count);
+        let steps = find.then(|| {
+            h_flex()
+                .relative()
+                .h_full()
+                .flex_shrink_0()
+                .rounded_full()
+                .children(crate::glass::plate("find-steps", 999.))
+                .child(round("safari-prev", "icons/chevron-up.svg", 50.).on_click(cx.listener(|this, _, window, cx| {
+                    swallow_click(window, cx);
+                    this.find_step(-1, cx)
+                })))
+                .child(round("safari-next", "icons/chevron-down.svg", 50.).on_click(cx.listener(|this, _, window, cx| {
+                    swallow_click(window, cx);
+                    this.find_step(1, cx)
+                })))
+        });
+        h_flex().id(if find { "find-bar" } else { "search-bar" }).occlude().h(px(SAFARI_H)).px(px(SAFARI_GAP)).gap(px(8.)).on_click(|_, window, cx| swallow_click(window, cx)).child(close).child(field).children(steps).into_any_element()
+    }
+
+    /// A phone's search: the bar at the foot (`render_safari_bar`) over
+    /// what was showing, which stays until words are typed; then the notes
+    /// found, from the top, on the page's ground. A press anywhere but the
+    /// bar and a note found puts it away, as its X does.
+    fn render_safari_search(&self, cx: &mut Context<Self>, window: &mut Window) -> AnyElement {
+        let theme = cx.theme().clone();
+        let results = self.search_results.as_ref();
+        let typed = results.is_some();
+        let none = results.is_some_and(|r| r.notes.is_empty());
+        let list = v_flex()
+            .id("search-results")
+            .size_full()
+            .relative()
+            .top(self.scrollers.stretch_of(&self.search_scroll))
+            .overflow_y_scroll()
+            .track_scroll(&self.search_scroll)
+            .px(px(8.))
+            .pt(px(12.))
+            .pb(px(SAFARI_H + SAFARI_GAP * 2. + 8.))
+            .when(none, |d| d.child(div().p(px(12.)).text_size(px(hand(12.5))).text_color(theme.muted_foreground).child(t("No matches."))))
+            .children(self.search_hits(window, cx));
+        let found = typed.then(|| {
+            crate::widgets::fade_in(
+                "safari-search",
+                div()
+                    .absolute()
+                    .inset_0()
+                    .bg(theme.background)
+                    .children(crate::glass::cover("search"))
+                    .children(crate::widgets::reaches(theme.background))
+                    .child(div().size_full().relative().vertical_scrollbar(&self.search_scroll).child(list).child(edge_fade(&self.search_scroll, theme.background, true, px(0.)))),
+            )
+        });
+        div()
+            .id("search-overlay")
+            .absolute()
+            .inset_0()
+            .occlude()
+            .key_context(SEARCH_CONTEXT)
+            .on_action(cx.listener(|this, _: &Escape, window, cx| {
+                cx.stop_propagation();
+                this.close_search(window, cx)
+            }))
+            .on_click(cx.listener(|this, _, window, cx| {
+                swallow_click(window, cx);
+                this.close_search(window, cx)
+            }))
+            .children(found)
+            .child(div().absolute().left_0().right_0().bottom(px(SAFARI_GAP)).child(self.render_safari_bar(false, cx)))
+            .into_any_element()
+    }
+
     fn render_find_bar(&self, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
         let focus = self.find_input.read(cx).focus_handle(cx);
@@ -3311,11 +4143,15 @@ impl Shell {
         } else {
             tf("{n} of {total}", &[("n", &(at + 1)), ("total", &n)])
         };
+        // In a compact window the bar and what is pressed on it are a
+        // finger's size, its words a row's.
+        let in_hand = crate::widgets::in_hand();
+        let hand = crate::widgets::hand;
         let button = |id: &'static str, icon: &'static str, label: SharedString| {
             let hover = theme.foreground.opacity(0.07);
             div()
                 .id(id)
-                .size(px(22.))
+                .size(px(if in_hand { 34. } else { 22. }))
                 .flex_shrink_0()
                 .rounded(px(5.))
                 .flex()
@@ -3323,8 +4159,9 @@ impl Shell {
                 .justify_center()
                 .cursor_pointer()
                 .hover(move |s| s.bg(hover))
+                .children(crate::widgets::press_light(5.))
                 .managed_tooltip(move |window, cx| tip(label.clone(), window, cx))
-                .child(Icon::default().path(icon).with_size(px(14.)).text_color(theme.muted_foreground))
+                .child(Icon::default().path(icon).with_size(px(hand(14.))).text_color(theme.muted_foreground))
         };
         h_flex()
             .w_full()
@@ -3342,18 +4179,18 @@ impl Shell {
                     }))
                     .w(px(self.sheet_w(self.width_level())))
                     .max_w_full()
-                    .h(px(36.))
+                    .h(px(if in_hand { 44. } else { 36. }))
                     .px(px(10.))
-                    .gap(px(8.))
+                    .gap(px(if in_hand { 4. } else { 8. }))
                     .items_center()
-                    .rounded(px(10.))
+                    .rounded(px(hand(10.)))
                     .border_1()
                     .border_color(theme.border)
                     .bg(theme.popover)
                     .shadow_sm()
-                    .child(Icon::default().path("icons/search.svg").with_size(px(14.)).text_color(theme.muted_foreground))
-                    .child(div().id("find-field").track_focus(&focus).flex_1().min_w_0().text_size(px(13.)).child(Input::new(&self.find_input).appearance(false).bordered(false).on_secondary_click(Self::input_menu(&self.find_input, "edit", cx))))
-                    .child(div().text_size(px(11.5)).flex_shrink_0().text_color(if n == 0 && !empty { theme.danger } else { theme.muted_foreground }).child(count))
+                    .child(Icon::default().path("icons/search.svg").with_size(px(hand(14.))).mr(px(if in_hand { 4. } else { 0. })).text_color(theme.muted_foreground))
+                    .child(div().id("find-field").track_focus(&focus).flex_1().min_w_0().text_size(px(hand(13.))).child(Input::new(&self.find_input).appearance(false).bordered(false).on_secondary_click(Self::input_menu(&self.find_input, "edit", cx))))
+                    .child(div().text_size(px(hand(11.5))).flex_shrink_0().mr(px(if in_hand { 4. } else { 0. })).text_color(if n == 0 && !empty { theme.danger } else { theme.muted_foreground }).child(count))
                     .child(button("find-prev", "icons/chevron-up.svg", t("Previous (⇧↩)").into()).on_click(cx.listener(|this, _, window, cx| {
                         swallow_click(window, cx);
                         this.find_step(-1, cx)
@@ -3383,7 +4220,8 @@ impl Shell {
         let theme = if compact { cx.theme().clone() } else { self.frame_theme(cx) };
         // Beside the drawer the page is darkened and the button, the way
         // back, is not: it stands on a plate of the page's ground.
-        let plate = (compact && k > 0.).then(|| theme.background.opacity(k));
+        let glass = compact && crate::glass::on();
+        let plate = (compact && k > 0. && !glass).then(|| theme.background.opacity(k));
         let size = if compact { self.toggle_w() } else { STRIP_BTN + (RAIL_ENTRY - STRIP_BTN) * (1. - k) };
         let icon_size = if compact { px(20.) } else { px(16.) + px(2.) * (1. - k) };
         let beside = k < 0.5 && !compact;
@@ -3399,9 +4237,11 @@ impl Shell {
                 .justify_center()
                 .cursor_pointer()
                 .on_mouse_down(MouseButton::Left, cx.listener(|this, _, _, _| this.press_taken = true))
-                .hover(move |s| s.bg(hover))
+                .when(!glass, |d| d.hover(move |s| s.bg(hover)))
+                .when(glass, |d| d.rounded_full().children(crate::glass::plate(if id == "strip-close" { "close" } else { "menu" }, 999.)))
+                .children(crate::widgets::press_light(999.))
                 .map(|d| if beside { d.managed_tooltip_at(gpui_component::Placement::Right, move |window, cx| tip(label.clone(), window, cx)) } else { d.managed_tooltip(move |window, cx| tip(label.clone(), window, cx)) })
-                .child(Icon::default().path(icon).with_size(icon_size).text_color(theme.muted_foreground))
+                .child(if glass { crate::glass::icon(icon, f32::from(icon_size), theme.foreground.opacity(0.86)) } else { Icon::default().path(icon).with_size(icon_size).text_color(theme.muted_foreground).into_any_element() })
         };
         let row_y = px(1.) + FRAME / 2. + (TITLEBAR_H - STRIP_BTN) / 2.;
         let rail_x = RAIL_W / 2. - RAIL_ENTRY / 2.;
@@ -3426,14 +4266,59 @@ impl Shell {
             (rx + (x - rx) * k, ry + (y - ry) * k)
         };
         let ((sx, sy), (qx, qy)) = (at(0.), at(1.));
+        let strip_at = self.strip_at.clone();
+        if compact {
+            self.scrollers.fixed(strip_at.clone());
+        }
+        // A compact window's file has a close button at the row's right
+        // end, the menu button's twin: it closes what the foot bar's menu
+        // closes, and goes under the drawer's dim as the drawer comes.
+        let close = (compact && self.shown.is_some()).then(|| {
+            let close_at = self.close_at.clone();
+            self.scrollers.fixed(close_at.clone());
+            crate::glass::show("close", 1. - k);
+            let x = self.card_x + px(self.card_w) - STRIP_END - size;
+            button("strip-close", "icons/close.svg", t("Close Tab").into())
+                .absolute()
+                .left(x)
+                .top(hand_y)
+                .when(!glass, |d| d.opacity(1. - k))
+                .child(canvas(move |b, _, _| close_at.set(b), |_, _, _, _| ()).absolute().top_0().left_0().size_full())
+                .on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
+                    swallow_click(window, cx);
+                    if e.click_count() > 1 {
+                        return;
+                    }
+                    if let Some(path) = this.shown.clone() {
+                        this.close_tab(&path, window, cx);
+                    }
+                }))
+        });
         div()
             .absolute()
             .top_0()
             .left_0()
-            .child(button("strip-sidebar", "icons/panel-left.svg", t("Sidebar (⌘⇧B)").into()).absolute().left(sx).top(sy).on_click(cx.listener(|this, _, window, cx| {
+            .child(button("strip-sidebar", "icons/panel-left.svg", t("Sidebar (⌘⇧B)").into()).absolute().left(sx).top(sy).child(canvas(move |b, _, _| strip_at.set(b), |_, _, _, _| ()).absolute().top_0().left_0().size_full()).on_click(cx.listener(|this, e: &ClickEvent, window, cx| {
                 swallow_click(window, cx);
+                // A finger's second tap in a row is the first one again,
+                // sent before the drawer was seen to move.
+                if cfg!(target_os = "ios") && e.click_count() > 1 {
+                    return;
+                }
+                // A tap is a finger lifted: no swipe is under way, and one
+                // still held (its end lost to the system) held the drawer
+                // where it was left, every press of this button drawing
+                // nothing until the next swipe. It goes, the drawer taken
+                // as it was seen.
+                if let Some(pulled) = this.side_pull.take() {
+                    crate::editor::stamp(&format!("stale pull {pulled}"));
+                    this.side_swipe = None;
+                    this.side_anim = None;
+                    this.sidebar_open = pulled > 0.5;
+                }
                 this.toggle_sidebar(window, cx)
             })))
+            .children(close)
             .when(!compact, |d| {
                 d.child(button("strip-search", "icons/search.svg", t("Search (⌘K)").into()).absolute().left(qx).top(qy).on_click(cx.listener(|this, _, window, cx| {
                     swallow_click(window, cx);
@@ -3547,10 +4432,30 @@ impl Shell {
         let on = self.foot_bar_on();
         let theme = cx.theme().clone();
         let wash = theme.foreground.opacity(0.08);
-        let button = |id: &'static str, icon: &'static str| div().id(id).size(px(FOOT_BAR_H - 8.)).rounded_full().flex().items_center().justify_center().cursor_pointer().hover(move |s| s.bg(wash)).active(move |s| s.bg(wash)).child(Icon::default().path(icon).with_size(px(22.)).text_color(theme.foreground.opacity(0.8)));
+        // On glass the bar is the system's plate and its icons the plate's
+        // marks (`glass.rs`); elsewhere a round bar of the popover's ground.
+        let glass = crate::glass::on();
+        let ink = theme.foreground.opacity(if glass { 0.86 } else { 0.8 });
         let note = self.shown.as_deref().is_some_and(vault::is_note);
+        let button = |id: &'static str, icon: &'static str, lit: bool, dim: bool| {
+            div()
+                .id(id)
+                .relative()
+                .size(px(FOOT_BAR_H - 8.))
+                .rounded_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .when(!glass, |d| d.hover(move |s| s.bg(wash)).active(move |s| s.bg(wash)))
+                .when(lit && !glass, |d| d.bg(wash))
+                .children(lit.then(|| crate::glass::wash(wash, 999.)).flatten())
+                .children(crate::widgets::press_light(999.))
+                .child(crate::glass::icon(icon, 22., if dim { ink.opacity(0.3) } else { ink }))
+        };
         let listed = note && self.menus.open.as_ref().is_some_and(|m| m.what == "entry") && self.pressed.is_some() && self.pressed == self.shown;
         let place = self.foot_at.clone();
+        self.scrollers.fixed(place.clone());
         let bar = h_flex()
             .id("foot-bar")
             .relative()
@@ -3560,20 +4465,46 @@ impl Shell {
             .gap(px(8.))
             .items_center()
             .rounded_full()
-            .bg(theme.popover)
             .border_1()
-            .border_color(theme.border)
-            .shadow(float_shadow(&theme))
+            .border_color(gpui::transparent_black())
+            .when(!glass, |d| d.bg(theme.popover).border_color(theme.border).shadow(float_shadow(&theme)))
+            .children(crate::glass::plate("foot", 999.))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-            .child(button("foot-search", "icons/search.svg").on_click(cx.listener(|this, _, window, cx| {
+            // Over a note it finds in the note, as Safari's finds in its page;
+            // on the vault's page it searches the notes, as the drawer's does.
+            .child(button("foot-search", "icons/search.svg", false, false).on_click(cx.listener(|this, _, window, cx| {
                 swallow_click(window, cx);
-                this.open_search(window, cx)
+                if this.shown.is_some() {
+                    this.open_find(window, cx)
+                } else {
+                    this.open_search(window, cx)
+                }
             })))
-            .child(button("foot-new-note", "icons/file-plus.svg").on_click(cx.listener(|this, _, window, cx| {
+            .child(button("foot-new-note", "icons/file-plus.svg", false, false).on_click(cx.listener(|this, _, window, cx| {
                 swallow_click(window, cx);
                 this.new_note(&NewNote, window, cx)
             })))
-            .child(button("foot-more", "icons/menu.svg").when(!note, |d| d.opacity(0.35).cursor_default()).when(listed, |d| d.bg(wash)).on_click(cx.listener(|this, _, window, cx| {
+            // Reading: an open book, in the accent on a wash while notes read.
+            .child(
+                div()
+                    .id("foot-reading")
+                    .size(px(FOOT_BAR_H - 8.))
+                    .rounded_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .relative()
+                    .when(self.reading && !glass, |d| d.bg(theme.primary.opacity(0.16)))
+                    .children(self.reading.then(|| crate::glass::wash(theme.primary.opacity(0.18), 999.)).flatten())
+                    .children(crate::widgets::press_light(999.))
+                    .child(crate::glass::icon("icons/book-open.svg", 22., if self.reading { theme.primary } else { ink }))
+                    .on_click(cx.listener(|this, _, window, cx| {
+                        swallow_click(window, cx);
+                        this.toggle_reading(window, cx)
+                    })),
+            )
+            .child(button("foot-more", "icons/menu.svg", listed, !note).when(!note, |d| d.cursor_default()).on_click(cx.listener(|this, _, window, cx| {
                 swallow_click(window, cx);
                 let Some(path) = this.shown.clone().filter(|p| vault::is_note(p)) else { return };
                 if this.menus.open.as_ref().is_some_and(|m| m.what == "entry") {
@@ -3591,18 +4522,150 @@ impl Shell {
             .child(canvas(move |b, _, _| place.set(b), |_, _, _, _| ()).absolute().top_0().left_0().size_full())
             .into_any_element();
         let bar = match self.motion.presence("foot-bar", on, cx) {
-            Some((coming, serial)) => div().child(bar).with_animation(("foot-bar", serial as u64), Animation::new(crate::widgets::FOLD_ANIM).with_easing(ease_out_quint()), move |d, t| d.opacity(if coming { t } else { 1. - t })).into_any_element(),
+            Some((coming, serial)) => div()
+                .child(bar)
+                .with_animation(("foot-bar", serial as u64), Animation::new(crate::widgets::FOLD_ANIM).with_easing(ease_out_quint()), move |d, t| {
+                    let shown = if coming { t } else { 1. - t };
+                    crate::glass::show("foot", shown);
+                    d.opacity(shown)
+                })
+                .into_any_element(),
             None if on => bar,
             None => return None,
         };
         Some(div().absolute().left_0().right_0().bottom(self.foot() + px(FOOT_BAR_GAP)).flex().justify_center().child(bar).into_any_element())
     }
 
+    /// The bar over the keyboard in a compact window, while a note's words
+    /// have it, as Obsidian has one: what a keyboard on glass has no keys
+    /// for. On a round bar, in the order they are reached for, more of
+    /// them a swipe along it away: Undo and Redo, a heading (a size
+    /// smaller at each press, then none), bold, italic, struck, code, a
+    /// link, bullets, numbers, a task, a quote, and a list's item out and
+    /// in. Each is the editor's own action, sent to the words that have
+    /// the keyboard, which keep it. Beside the bar, a round button that
+    /// puts the keyboard away. It fades in and out with the keyboard.
+    fn render_keys_bar(&self, ground: Hsla, cx: &mut Context<Self>) -> Option<AnyElement> {
+        if !self.compact {
+            return None;
+        }
+        let on = self.keys_bar;
+        let theme = cx.theme().clone();
+        let glass = crate::glass::on();
+        let ink = theme.foreground.opacity(if glass { 0.86 } else { 0.8 });
+        type Act = fn() -> Box<dyn Action>;
+        let tools: [(&'static str, &'static str, Act); 14] = [
+            ("keys-undo", "icons/arrow-back-up.svg", || Box::new(gpui_component::input::Undo)),
+            ("keys-redo", "icons/arrow-forward-up.svg", || Box::new(gpui_component::input::Redo)),
+            ("keys-heading", "icons/heading.svg", || Box::new(crate::editor::MakeHeading)),
+            ("keys-bold", "icons/bold.svg", || Box::new(crate::editor::Bold)),
+            ("keys-italic", "icons/italic.svg", || Box::new(crate::editor::Italic)),
+            ("keys-strike", "icons/strikethrough.svg", || Box::new(crate::editor::MakeStrike)),
+            ("keys-code", "icons/code.svg", || Box::new(crate::editor::MakeCode)),
+            ("keys-link", "icons/link.svg", || Box::new(crate::editor::MakeLink)),
+            ("keys-bullets", "icons/list-bullets.svg", || Box::new(crate::editor::MakeBullets)),
+            ("keys-numbers", "icons/list-numbers.svg", || Box::new(crate::editor::MakeNumbers)),
+            ("keys-task", "icons/checkbox.svg", || Box::new(crate::editor::ToggleTask)),
+            ("keys-quote", "icons/blockquote.svg", || Box::new(crate::editor::MakeQuote)),
+            ("keys-out", "icons/indent-decrease.svg", || Box::new(crate::editor::Outdent)),
+            ("keys-in", "icons/indent-increase.svg", || Box::new(crate::editor::MakeIndent)),
+        ];
+        let row = h_flex().id("keys-row").h_full().items_center().overflow_x_scroll().track_scroll(&self.keys_scroll).children(tools.into_iter().map(|(id, icon, act)| {
+            div()
+                .id(id)
+                .w(px(KEYS_TOOL_W))
+                .h(px(KEYS_BAR_H - 8.))
+                .flex_shrink_0()
+                .rounded_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .cursor_pointer()
+                .children(crate::widgets::press_light(999.))
+                .child(crate::glass::icon(icon, 20., ink))
+                .on_click(cx.listener(move |_, _, window, cx| {
+                    swallow_click(window, cx);
+                    window.dispatch_action(act(), cx);
+                }))
+        }));
+        // The tools stop short of the bar's round ends, and fade where
+        // more of them are a swipe away, as far as there is to go.
+        let (at, most) = (f32::from(-self.keys_scroll.offset().x), f32::from(self.keys_scroll.max_offset().x));
+        let fade = |left: bool| {
+            let far = (if left { at } else { most - at } / 20.).clamp(0., 1.);
+            let (from, to) = if left { (theme.popover, theme.popover.opacity(0.)) } else { (theme.popover.opacity(0.), theme.popover) };
+            div().absolute().top_0().bottom_0().w(px(20.)).map(|d| if left { d.left_0() } else { d.right_0() }).opacity(far).bg(linear_gradient(90., linear_color_stop(from, 0.), linear_color_stop(to, 1.)))
+        };
+        let place = self.keys_at.clone();
+        let material = |d: Div, key: &'static str| d.relative().h(px(KEYS_BAR_H)).rounded_full().border_1().border_color(gpui::transparent_black()).when(!glass, |d| d.bg(theme.popover).border_color(theme.border).shadow(float_shadow(&theme))).children(crate::glass::plate(key, 999.));
+        let tools = material(h_flex(), "keys")
+            .id("keys-tools")
+            .flex_1()
+            .min_w_0()
+            .occlude()
+            .px(px(12.))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .child(div().relative().flex_1().min_w_0().h_full().overflow_hidden().children(crate::glass::within()).child(row).children(crate::glass::within_end()).when(!glass, |d| d.child(fade(true)).child(fade(false))).child(canvas(move |b, _, _| place.set(b), |_, _, _, _| ()).absolute().top_0().left_0().size_full()));
+        let away = material(div(), "keys-away")
+            .id("keys-away")
+            .w(px(KEYS_BAR_H))
+            .flex_shrink_0()
+            .occlude()
+            .flex()
+            .items_center()
+            .justify_center()
+            .cursor_pointer()
+            .children(crate::widgets::press_light(999.))
+            .child(crate::glass::icon("icons/keyboard-hide.svg", 20., ink))
+            .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
+            .on_click(cx.listener(|this, _, window, cx| {
+                swallow_click(window, cx);
+                window.focus(&this.focus, cx);
+                cx.notify();
+            }));
+        let bar = h_flex().gap(px(KEYS_BAR_GAP)).child(tools).child(away).into_any_element();
+        let bar = match self.motion.presence("keys-bar", on, cx) {
+            Some((coming, serial)) => div()
+                .child(bar)
+                .with_animation(("keys-bar", serial as u64), Animation::new(crate::widgets::FOLD_ANIM).with_easing(ease_out_quint()), move |d, t| {
+                    let shown = if coming { t } else { 1. - t };
+                    crate::glass::show("keys", shown);
+                    crate::glass::show("keys-away", shown);
+                    d.opacity(shown)
+                })
+                .into_any_element(),
+            None if on => bar,
+            None => return None,
+        };
+        // A swipe begun on the tools is theirs, not the page's under them (`scroll.rs`).
+        if on {
+            let moved = self.keys_scroll.clone();
+            self.scrollers.name_own(
+                self.keys_at.clone(),
+                Rc::new(move |e: &ScrollEvent, _: &mut Window, _: &mut App| {
+                    let x = (moved.offset().x + e.delta.pixel_delta(px(20.)).x).clamp(-moved.max_offset().x, px(0.));
+                    moved.set_offset(point(x, moved.offset().y));
+                }),
+            );
+        }
+        // The note fades out behind the bar, as it does at a page's foot,
+        // and none of its words show in the strip between the bar and the
+        // keyboard.
+        // Glass needs no such ground: what is under it shows through it.
+        let fade = div().absolute().left_0().right_0().bottom_0().h(px(KEYS_BAR_H + 2. * KEYS_BAR_GAP + 16.)).when(!glass, |d| d.bg(linear_gradient(180., linear_color_stop(ground.opacity(0.), 0.), linear_color_stop(ground, 0.55))));
+        let fade = match self.motion.presence("keys-fade", on, cx) {
+            Some((coming, serial)) => fade.with_animation(("keys-fade", serial as u64), Animation::new(crate::widgets::FOLD_ANIM).with_easing(ease_out_quint()), move |d, t| d.opacity(if coming { t } else { 1. - t })).into_any_element(),
+            None => fade.into_any_element(),
+        };
+        // The page runs under the keyboard (`foot`): the bar stands on its top.
+        Some(div().absolute().left_0().right_0().bottom(self.foot()).h(px(KEYS_BAR_H + 2. * KEYS_BAR_GAP + 16.)).child(fade).child(div().absolute().left(px(KEYS_BAR_GAP + 2.)).right(px(KEYS_BAR_GAP + 2.)).bottom(px(KEYS_BAR_GAP)).child(bar)).into_any_element())
+    }
+
     /// The room a button at an end of the tabs' row has: `TOGGLE_W`, and
     /// in a compact window a finger's, where the sidebar's button and the
     /// search's stand there.
     fn toggle_w(&self) -> Pixels {
-        if self.compact { px(36.) } else { TOGGLE_W }
+        if self.compact { px(44.) } else { TOGGLE_W }
     }
 
     /// The bar under the strip, after emaki's path line: at the left the
@@ -3641,6 +4704,7 @@ impl Shell {
             .rounded(px(6.))
             .cursor_pointer()
             .hover(move |s| s.bg(hover_bg))
+            .children(crate::widgets::press_light(6.))
             .font_family(self.look.mono_family.clone())
             // Eleven points is small print on an iPhone, where the path
             // is the title row's middle.
@@ -3710,6 +4774,7 @@ impl Shell {
             .rounded(px(6.))
             .cursor_pointer()
             .hover(move |s| s.bg(hover))
+            .children(crate::widgets::press_light(6.))
             .managed_tooltip(move |window, cx| tip(label, window, cx))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |this, _, window, cx| {
@@ -3746,6 +4811,7 @@ impl Shell {
             .text_color(if open { lit } else { theme.muted_foreground })
             .when(open, |d| d.bg(wash))
             .hover(move |s| s.bg(wash).text_color(lit))
+            .children(crate::widgets::press_light(7.))
             .managed_tooltip(|window, cx| tip(t("More"), window, cx))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(|this, ev: &ClickEvent, window, cx| {
@@ -3778,8 +4844,12 @@ impl Shell {
         // (`render_strip`); an iPhone and an iPad have no shell.
         let source = end("strip-source", note && !self.compact, source, cx);
         let term = end("strip-term", (self.vault.is_some() || self.term_on) && !self.compact && cfg!(not(target_os = "ios")), term, cx);
+        // An iPad's wide window has no shell, and reading's button in its
+        // place; a compact window has it on the bar at its foot.
+        let reading = self.toggle_button("strip-reading", "icons/book-open.svg", t("Reading Mode"), self.pressed_line(self.reading_anim, self.reading), Rc::new(|this, window, cx| this.toggle_reading(window, cx)), cx);
+        let reading = end("strip-reading", note && !self.compact && cfg!(target_os = "ios"), reading, cx);
         let left = h_flex().w(self.toggle_w()).flex_shrink_0().items_center().children(source).into_any_element();
-        let right = h_flex().w(self.toggle_w()).flex_shrink_0().justify_end().items_center().children(term).into_any_element();
+        let right = h_flex().w(self.toggle_w()).flex_shrink_0().justify_end().items_center().children(term).children(reading).into_any_element();
         (left, right)
     }
 
@@ -3815,6 +4885,7 @@ impl Shell {
             .cursor_pointer()
             .text_color(if on { lit } else { theme.muted_foreground })
             .hover(move |s| s.bg(wash).text_color(lit))
+            .children(crate::widgets::press_light(7.))
             .managed_tooltip(move |window, cx| tip(label.clone(), window, cx))
             .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
             .on_click(cx.listener(move |this, _, window, cx| {
@@ -4364,7 +5435,8 @@ impl Shell {
         let choice = |id: &'static str, icon: &'static str, label: &str, keys: &str, theme: &gpui_component::Theme| {
             let pill = choice_pill(id, icon, label.to_string(), Press::Quiet, false, theme);
             let pill = if compact { pill.min_w(px(280.)).h(px(44.)).px(px(18.)).gap(px(10.)).text_size(px(15.)) } else { pill.min_w(px(240.)).h(px(34.)).px(px(14.)).gap(px(8.)).text_size(px(13.)) };
-            pill.child(div().flex_1()).child(kbd_hint(keys, theme))
+            // An iPhone has no keys to name.
+            pill.child(div().flex_1()).when(!crate::sys::one_file(), |d| d.child(kbd_hint(keys, theme)))
         };
         v_flex()
             .size_full()
@@ -4550,14 +5622,21 @@ impl Shell {
         let compact = self.compact;
         let foot_room = self.foot_room();
         let ground = if compact { theme.background } else { ground };
-        editor.update(cx, |e, _| e.fill_page((line * 4. - gutter).max(0.)));
+        // The page runs under the keyboard: what the caret keeps clear of
+        // is the keyboard and the bar over it.
+        let covered = self.keys_room() + if self.keys_out { f32::from(self.foot()) } else { 0. };
+        editor.update(cx, |e, _| {
+            e.fill_page((line * 4. - gutter).max(0.));
+            e.set_ground(ground);
+            e.set_covered(covered);
+        });
         div()
             .relative()
             .size_full()
             .child(
                 // A press in the margin, off the words, takes the keyboard
                 // out of the editor: the note reads whole, with no caret.
-                div().id("note-scroll").size_full().overflow_y_scroll().track_scroll(&scroll).on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
+                div().id("note-scroll").size_full().relative().top(self.scrollers.stretch_of(&scroll)).overflow_y_scroll().track_scroll(&scroll).on_mouse_down(MouseButton::Left, cx.listener(|this, _, window, cx| {
                     crate::editor::stamp("margin press");
                     window.focus(&this.focus, cx);
                     cx.notify();
@@ -4631,6 +5710,7 @@ impl Shell {
                 .inset_0()
                 .occlude()
                 .bg(theme.overlay)
+                .children(crate::glass::cover("sheet"))
                 .children(crate::widgets::reaches(theme.overlay))
                 .flex()
                 .flex_col()
@@ -5039,6 +6119,11 @@ pub(crate) fn greeting(name: &str) -> String {
 
 impl Render for Shell {
     fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        self.show_link_sheet(window, cx);
+        // On an iPhone the name a Mac shared comes a moment after launch.
+        if cfg!(target_os = "ios") && self.user_name.is_empty() {
+            self.user_name = Self::name_of(&self.cfg);
+        }
         if let Some((file, name)) = self.pending_rename.take() {
             self.rename_entry(&file, &name, window, cx);
         }
@@ -5047,6 +6132,11 @@ impl Render for Shell {
             self.follow_moves(&moves, window, cx);
         }
         crate::editor::stamp("shell render begins");
+        crate::editor::tell_asks();
+        if crate::editor::tracing() {
+            // The window's thread is free again once this frame is drawn and handed on.
+            cx.spawn(async move |_, _| crate::editor::stamp("turn ends")).detach();
+        }
         self.scrollers.begin();
         // The router is the window's being drawn: the menu bar note's
         // window has scrollers of its own (`menubar.rs`), and a frame names
@@ -5066,6 +6156,7 @@ impl Render for Shell {
         let insets = window.insets();
         self.safe = Edges { bottom: insets.safe_area.bottom.max(insets.ime.bottom), ..insets.safe_area };
         self.keys_out = insets.ime.bottom > insets.safe_area.bottom;
+        crate::widgets::set_kept(self.safe);
         let whole = window.viewport_size();
         self.room = size(whole.width - self.safe.left - self.safe.right, whole.height - self.safe.top - self.safe.bottom);
         let compact = self.room.width < MIN_W;
@@ -5074,8 +6165,39 @@ impl Render for Shell {
         if compact && !self.compact && self.vault.is_none() && self.side_anim.is_none() {
             self.sidebar_open = false;
         }
+        // A note opened before the window knew it was compact (at launch)
+        // comes forward as `page_forward` brings one: the drawer is shut.
+        if compact && !self.compact && self.shown.is_some() && self.side_anim.is_none() {
+            self.sidebar_open = false;
+        }
         self.compact = compact;
+        // The bar over the keyboard is the note's, while its words have the keyboard.
+        self.keys_bar = compact && self.keys_out && self.shown_tab().is_some_and(|t| {
+            let editor = t.editor.read(cx);
+            t.asset.is_none() && !editor.locked() && editor.focus_handle(cx).is_focused(window)
+        });
+        // Where the keyboard was while the page stood alone, for what
+        // closes over it to give it back to; and a compact window's
+        // drawer takes it from the note it comes over.
+        let in_words = self.shown_tab().is_some_and(|t| t.editor.read(cx).focus_handle(cx).is_focused(window) || t.title.read(cx).focus_handle(cx).is_focused(window));
+        let drawer = compact && (self.sidebar_open || self.side_pull.is_some());
+        if drawer && in_words {
+            window.focus(&self.focus, cx);
+        }
+        if !drawer && self.menus.open.is_none() && self.new_vault.is_none() && self.rename.is_none() && self.making.is_none() && self.export.is_none() && !self.search_open && self.viewer.is_none() && !self.settings_in && self.folder_look.is_none() {
+            self.note_keys = in_words;
+        }
         crate::widgets::set_in_hand(compact);
+        crate::widgets::set_finger_rests(self.finger_rests, self.finger_on);
+        // A scroller pulled past its end comes back over frames of its own.
+        if self.scrollers.stretching() {
+            window.request_animation_frame();
+        }
+        // The frame's plates of glass, told to the system once it is drawn.
+        if crate::glass::on() {
+            crate::glass::begin(cx.theme().mode.is_dark());
+            window.defer(cx, |window, cx| crate::glass::flush(window, cx));
+        }
         // A compact window's page is the whole screen, on its own
         // ground under the status bar and the home indicator.
         let (reach_top, reach_foot) = if compact { (self.safe.top, self.foot()) } else { (px(0.), px(0.)) };
@@ -5130,7 +6252,7 @@ impl Render for Shell {
         };
         let (modes, widths) = self.render_strip_ends(cx);
         let notice = self.render_notice(&theme, cx);
-        let find_bar = (self.find_open && self.shown.is_some()).then(|| {
+        let find_bar = (self.find_open && self.shown.is_some() && !self.safari()).then(|| {
             div().w_full().flex_shrink_0().overflow_hidden().child(self.render_find_bar(cx)).with_animation("find-bar-in", Animation::new(crate::widgets::MENU_IN).with_easing(ease_out_quint()), |d, t| if t >= 1. { d } else { d.max_h(px(64. * t)).opacity(t) })
         });
         let page = self.render_page(window, cx);
@@ -5195,7 +6317,7 @@ impl Render for Shell {
             self.scrollers.name_over(&picker.read(cx).scroll);
         }
         let menu = if self.menus.open.as_ref().is_some_and(ours) || self.menus.gone.as_ref().is_some_and(|(m, _)| ours(m)) { self.menus.render(pick, close, cx) } else { None };
-        let sheet = self.render_new_vault(cx).or_else(|| self.render_rename(cx)).or_else(|| self.render_export(window, cx));
+        let sheet = self.render_link_sheet(cx).or_else(|| self.render_new_vault(cx)).or_else(|| self.render_rename(cx)).or_else(|| self.render_export(window, cx));
         let search = self.search_open.then(|| self.render_search(window, cx));
         let viewer = self.render_viewer(window, cx);
         let settings = self.render_settings_sheet(window, cx);
@@ -5214,10 +6336,24 @@ impl Render for Shell {
             div().h_full().flex_shrink_0().w(side_w).overflow_hidden().when(compact, |d| d.flex().justify_end().pt(reach_top).pb(reach_foot)).child(sidebar)
         });
         let foot_bar = self.render_foot_bar(cx);
+        let keys_bar = self.render_keys_bar(foot_ground, cx);
+        // A phone's find, at the page's foot over the keyboard, or over
+        // the home indicator (`foot`).
+        // While the keyboard is the note's, its bar is there instead.
+        let safari_find = (self.find_open && self.shown.is_some() && self.safari() && !self.keys_bar).then(|| div().absolute().left_0().right_0().bottom(self.foot() + px(SAFARI_GAP)).child(self.render_safari_bar(true, cx)).into_any_element());
+        // A press on the page while it shows puts it away, as its X does;
+        // the page still scrolls under it (the router goes by where a
+        // gesture begins, `scroll.rs`), and a rolled press is no press.
+        let find_off = safari_find.is_some().then(|| {
+            div().id("find-off").absolute().inset_0().occlude().on_click(cx.listener(|this, _, window, cx| {
+                swallow_click(window, cx);
+                this.close_find(window, cx)
+            }))
+        });
         // Beside the drawer the page is darkened, and a press on what is
         // left of it puts the drawer away.
         let dim = (compact && t_side > 0.).then(|| {
-            div().id("page-dim").absolute().inset_0().occlude().bg(gpui::black().opacity(DRAWER_DIM * t_side)).on_click(cx.listener(|this, _, window, cx| {
+            div().id("page-dim").absolute().inset_0().occlude().bg(gpui::black().opacity(DRAWER_DIM * t_side)).children(crate::glass::cover_by("drawer", t_side)).on_click(cx.listener(|this, _, window, cx| {
                 swallow_click(window, cx);
                 if this.sidebar_open {
                     this.toggle_sidebar(window, cx);
@@ -5225,7 +6361,7 @@ impl Render for Shell {
             }))
         });
         let page = if compact {
-            div().relative().w(self.room.width).flex_shrink_0().h_full().on_back_gesture(cx.listener(Self::side_pulled)).child(card).children(foot_bar).children(dim)
+            div().relative().w(self.room.width).flex_shrink_0().h_full().on_back_gesture(cx.listener(Self::side_pull_begins)).child(card).children(foot_bar).children(keys_bar).children(find_off).children(safari_find).children(dim)
         } else {
             div().flex_1().min_w_0().h_full().pt(FRAME).pb(FRAME).pr(FRAME).pl((RAIL_W - side_w).max(px(0.))).child(card)
         };
@@ -5338,13 +6474,54 @@ impl Render for Shell {
                                 let _ = lifter.update(cx, |s, cx| {
                                     s.side_drag_end(window, cx);
                                     s.source_drag_end(window, cx);
+                                    // A finger's tap ends here; a pointer's click leaves the pointer where it is.
+                                    if cfg!(target_os = "ios") {
+                                        s.finger_done(window, cx);
+                                    }
                                 });
+                            }
+                        });
+                        // A finger down, held and lifted (`finger_down`, `finger_done`).
+                        let (finger, held) = (this.clone(), this.clone());
+                        window.on_mouse_event(move |e: &TouchDragEvent, phase, _, cx| {
+                            if phase == DispatchPhase::Capture && e.phase == TouchPhase::Started {
+                                let _ = finger.update(cx, |s, cx| s.finger_down(cx));
+                            }
+                        });
+                        window.on_mouse_event(move |e: &LongPressEvent, phase, window, cx| {
+                            if phase == DispatchPhase::Capture && matches!(e.phase, TouchPhase::Ended | TouchPhase::Cancelled) {
+                                let _ = held.update(cx, |s, cx| s.finger_done(window, cx));
                             }
                         });
                         window.on_mouse_event(move |e: &ScrollEvent, phase, window, cx| {
                             if phase == DispatchPhase::Capture {
+                                let finger = e.source == ScrollSource::Touch;
+                                if finger {
+                                    let _ = router.update(cx, |s, cx| {
+                                        s.finger_done(window, cx);
+                                        s.pan_begins(e);
+                                    });
+                                }
+                                if router.update(cx, |s, cx| s.drawer_swipe(e, window, cx)).unwrap_or(false) {
+                                    let _ = router.update(cx, |s, _| s.pan = None);
+                                    cx.stop_propagation();
+                                    return;
+                                }
                                 let system = crate::sys::sheet_over(window);
-                                match router.update(cx, |s, _| s.scrollers.route(e, system)) {
+                                // A fling with nothing left to move ends here.
+                                let spent = e.source == ScrollSource::Touch && e.touch_phase == TouchPhase::Moved && router.read_with(cx, |s, _| s.keys_spent(e)).unwrap_or(false);
+                                let routed = router.update(cx, |s, _| s.scrollers.route(e, system));
+                                if finger {
+                                    let _ = router.update(cx, |s, cx| s.finger_pan(e, window, cx));
+                                }
+                                if e.source == ScrollSource::Touch && e.touch_phase == TouchPhase::Moved {
+                                    let _ = router.update(cx, |s, cx| {
+                                        if spent || s.scrollers.spent() {
+                                            s.end_fling(e.position, window, cx);
+                                        }
+                                    });
+                                }
+                                match routed {
                                     Ok(crate::scroll::Route::Stop) => {
                                         cx.stop_propagation();
                                         let _ = router.update(cx, |_, cx| cx.notify());
@@ -5355,6 +6532,14 @@ impl Render for Shell {
                                     }
                                     _ => {}
                                 }
+                            }
+                        });
+                        // The edge swipe's steps after its first, wherever
+                        // the page that claimed it has got to.
+                        let puller = this.clone();
+                        window.on_mouse_event(move |e: &BackGestureEvent, phase, window, cx| {
+                            if phase == DispatchPhase::Capture && puller.update(cx, |s, cx| s.side_pull_goes(e, window, cx)).unwrap_or(false) {
+                                cx.stop_propagation();
                             }
                         });
                         // A finger held still is the right button: every
@@ -5445,7 +6630,22 @@ impl Shell {
                         }
                     }
                 }
+                // `open=<part>`: the vault's first note with that in its
+                // name, for a device, whose paths a script does not know.
+                s if s.starts_with("open=") => {
+                    let part = s["open=".len()..].to_string();
+                    if let Some(root) = self.vault_root().map(Path::to_path_buf) {
+                        if let Some(found) = vault::notes(&root).into_iter().find(|p| p.file_stem().is_some_and(|n| n.to_string_lossy().contains(&part))) {
+                            self.open_note(found, window, cx);
+                        } else {
+                            eprintln!("open: no note");
+                        }
+                    } else {
+                        eprintln!("open: no vault");
+                    }
+                }
                 "sidebar" => self.toggle_sidebar(window, cx),
+                "reading" => self.toggle_reading(window, cx),
                 "home" => self.show_home(window, cx),
                 s if s.starts_with("key=") => {
                     if let Ok(keystroke) = Keystroke::parse_with_os(&s["key=".len()..], cx.platform_info().os) {
@@ -5524,9 +6724,10 @@ impl Shell {
                 // momentum), `longtap=x,y` (held for 700 ms, then lifted) and
                 // `back=<how far>` (the swipe from the screen's edge over the
                 // middle of the window, 0 to 1, let go there: past a half it
-                // goes back). Each goes through gpui's own reading of touches,
+                // goes back), `roll=x,y,dx,dy` (a tap that rolls by so much
+                // before it lifts). Each goes through gpui's own reading of touches,
                 // into this window alone.
-                s if s.starts_with("tap=") || s.starts_with("pan=") || s.starts_with("longtap=") || s.starts_with("back=") => {
+                s if s.starts_with("tap=") || s.starts_with("pan=") || s.starts_with("panhold=") || s.starts_with("longtap=") || s.starts_with("back=") || s.starts_with("rest=") || s.starts_with("roll=") => {
                     let (what, n) = s.split_once('=').map(|(what, v)| (what.to_string(), v.split(',').filter_map(|n| n.parse::<f32>().ok()).collect::<Vec<_>>())).unwrap_or_default();
                     let wait = later;
                     later += if what == "tap" { GO_STEP } else { GO_STEP * 3 };
@@ -5536,6 +6737,7 @@ impl Shell {
                         match (what.as_str(), &n[..]) {
                             ("tap", [x, y, ..]) => {
                                 let at = point(px(*x), px(*y));
+                                crate::editor::stamp("tap sent");
                                 for i in 0..n.get(2).map_or(1, |taps| *taps as u64) {
                                     let _ = cx.update(|window, cx| {
                                         window.dispatch_event(touch(TouchPhase::Started, 100 + i, at), cx);
@@ -5544,7 +6746,9 @@ impl Shell {
                                     cx.background_executor().timer(Duration::from_millis(60)).await;
                                 }
                             }
-                            ("pan", [x, y, tx, ty]) => {
+                            // `panhold=`: the same, the finger held at its end 1.5 s before it lifts.
+                            (what @ ("pan" | "panhold"), [x, y, tx, ty]) => {
+                                let hold = what == "panhold";
                                 let (from, to) = (point(px(*x), px(*y)), point(px(*tx), px(*ty)));
                                 let _ = cx.update(|window, cx| window.dispatch_event(touch(TouchPhase::Started, 200, from), cx));
                                 for step in 1..=10 {
@@ -5552,7 +6756,33 @@ impl Shell {
                                     let at = from + (to - from) * (step as f32 / 10.);
                                     let _ = cx.update(|window, cx| window.dispatch_event(touch(TouchPhase::Moved, 200, at), cx));
                                 }
+                                if hold {
+                                    eprintln!("holds");
+                                    cx.background_executor().timer(Duration::from_millis(1500)).await;
+                                }
                                 let _ = cx.update(|window, cx| window.dispatch_event(touch(TouchPhase::Ended, 200, to), cx));
+                            }
+                            // A finger that rests 450 ms and is taken back
+                            // by the system: no tap, no long press, and for
+                            // that while what is under it is lit.
+                            ("rest", [x, y]) => {
+                                let at = point(px(*x), px(*y));
+                                eprintln!("rests");
+                                let _ = cx.update(|window, cx| window.dispatch_event(touch(TouchPhase::Started, 400, at), cx));
+                                cx.background_executor().timer(Duration::from_millis(450)).await;
+                                let _ = cx.update(|window, cx| window.dispatch_event(touch(TouchPhase::Cancelled, 400, at), cx));
+                            }
+                            // A thumb's tap that rolls: down, moved by
+                            // so much in four steps, and lifted.
+                            ("roll", [x, y, dx, dy]) => {
+                                let (from, by) = (point(px(*x), px(*y)), point(px(*dx), px(*dy)));
+                                let _ = cx.update(|window, cx| window.dispatch_event(touch(TouchPhase::Started, 500, from), cx));
+                                for step in 1..=4 {
+                                    cx.background_executor().timer(Duration::from_millis(20)).await;
+                                    let _ = cx.update(|window, cx| window.dispatch_event(touch(TouchPhase::Moved, 500, from + by * (step as f32 / 4.)), cx));
+                                }
+                                cx.background_executor().timer(Duration::from_millis(20)).await;
+                                let _ = cx.update(|window, cx| window.dispatch_event(touch(TouchPhase::Ended, 500, from + by), cx));
                             }
                             ("longtap", [x, y]) => {
                                 let at = point(px(*x), px(*y));
@@ -5560,16 +6790,26 @@ impl Shell {
                                 cx.background_executor().timer(Duration::from_millis(700)).await;
                                 let _ = cx.update(|window, cx| window.dispatch_event(touch(TouchPhase::Ended, 300, at), cx));
                             }
-                            ("back", [far]) => {
+                            ("back", [far, ..]) => {
+                                // As a finger does it: begun a little in
+                                // from the edge, pulled in ten steps with a
+                                // frame drawn between each, so every step
+                                // after the first lands on a window whose
+                                // pages have moved; `back=<far>,1` leaves
+                                // the finger down there.
                                 let far = far.clamp(0., 1.);
-                                let _ = cx.update(|window, cx| {
-                                    let size = window.viewport_size();
-                                    let start_position = point(px(1.), size.height / 2.);
-                                    let step = |phase: BackGesturePhase, progress: f32| PlatformInput::BackGesture(BackGestureEvent { phase, start_position, progress });
-                                    window.dispatch_event(step(BackGesturePhase::Started, 0.), cx);
-                                    window.dispatch_event(step(BackGesturePhase::Progressed, far), cx);
-                                    window.dispatch_event(step(if far > 0.5 { BackGesturePhase::Committed } else { BackGesturePhase::Cancelled }, far), cx);
-                                });
+                                let hold = n.len() > 1;
+                                let start_position = cx.update(|window, _| point(px(12.), window.viewport_size().height / 2.)).unwrap_or_default();
+                                let step = move |phase: BackGesturePhase, progress: f32| PlatformInput::BackGesture(BackGestureEvent { phase, start_position, progress });
+                                let _ = cx.update(|window, cx| window.dispatch_event(step(BackGesturePhase::Started, 0.), cx));
+                                for i in 1..=10 {
+                                    cx.background_executor().timer(Duration::from_millis(16)).await;
+                                    let _ = cx.update(|window, cx| window.dispatch_event(step(BackGesturePhase::Progressed, far * i as f32 / 10.), cx));
+                                }
+                                if !hold {
+                                    cx.background_executor().timer(Duration::from_millis(16)).await;
+                                    let _ = cx.update(|window, cx| window.dispatch_event(step(if far > 0.5 { BackGesturePhase::Committed } else { BackGesturePhase::Cancelled }, far), cx));
+                                }
                             }
                             _ => {}
                         }
@@ -6067,6 +7307,17 @@ impl Shell {
                 }
                 // The pause before what comes next, in milliseconds.
                 s if s.starts_with("wait=") => later += s["wait=".len()..].parse::<u64>().unwrap_or(0),
+                // `mark`: a line printed at its turn, for a script that
+                // takes a picture of the screen at each (a simulator's).
+                "mark" => {
+                    let wait = later;
+                    later += GO_STEP * 2;
+                    cx.spawn(async move |_, cx| {
+                        cx.background_executor().timer(Duration::from_millis(wait)).await;
+                        eprintln!("mark");
+                    })
+                    .detach();
+                }
                 // On the terminal's screen once it is drawn, in its turn.
                 s if s.starts_with("term") => {
                     let (wait, step) = (later, s.to_string());

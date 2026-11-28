@@ -172,16 +172,16 @@ fn a_wikilink_finds_the_nearest_note_of_that_name() {
 fn the_assets_folder_stays_out_of_the_tree_and_lists_its_files() {
     let dir = a_vault();
     let r = dir.path();
-    std::fs::create_dir_all(r.join(".assets/Scans")).unwrap();
-    std::fs::write(r.join(".assets/b 10.png"), "").unwrap();
-    std::fs::write(r.join(".assets/b 2.png"), "").unwrap();
-    std::fs::write(r.join(".assets/Scans/a.pdf"), "").unwrap();
-    std::fs::write(r.join(".assets/.DS_Store"), "").unwrap();
+    std::fs::create_dir_all(r.join(".onyx/assets/Scans")).unwrap();
+    std::fs::write(r.join(".onyx/assets/b 10.png"), "").unwrap();
+    std::fs::write(r.join(".onyx/assets/b 2.png"), "").unwrap();
+    std::fs::write(r.join(".onyx/assets/Scans/a.pdf"), "").unwrap();
+    std::fs::write(r.join(".onyx/assets/.DS_Store"), "").unwrap();
     std::fs::create_dir_all(r.join("assets")).unwrap();
     let names: Vec<_> = vault::tree(r).children.iter().map(|c| c.name.clone()).collect();
-    assert!(!names.contains(&".assets".to_string()));
+    assert!(!names.contains(&".onyx".to_string()));
     assert!(names.contains(&"assets".to_string()));
-    assert_eq!(vault::asset_files(r), vec![r.join(".assets/Scans/a.pdf"), r.join(".assets/b 2.png"), r.join(".assets/b 10.png")]);
+    assert_eq!(vault::asset_files(r), vec![r.join(".onyx/assets/Scans/a.pdf"), r.join(".onyx/assets/b 2.png"), r.join(".onyx/assets/b 10.png")]);
 }
 
 #[test]
@@ -189,11 +189,11 @@ fn a_file_is_found_beside_the_note_then_in_the_assets_then_anywhere() {
     let dir = a_vault();
     let r = dir.path();
     let from = r.join("Projects/Onyx/Plan.md");
-    std::fs::create_dir_all(r.join(".assets")).unwrap();
-    std::fs::write(r.join(".assets/trip plan.pdf"), "").unwrap();
+    std::fs::create_dir_all(r.join(".onyx/assets")).unwrap();
+    std::fs::write(r.join(".onyx/assets/trip plan.pdf"), "").unwrap();
     std::fs::write(r.join("Projects/deep.png"), "").unwrap();
-    assert_eq!(vault::find_file(Some(r), &from, "trip plan.pdf"), Some(r.join(".assets/trip plan.pdf")));
-    assert_eq!(vault::find_file(Some(r), &from, "../../.assets/trip%20plan.pdf"), Some(r.join(".assets/trip plan.pdf")));
+    assert_eq!(vault::find_file(Some(r), &from, "trip plan.pdf"), Some(r.join(".onyx/assets/trip plan.pdf")));
+    assert_eq!(vault::find_file(Some(r), &from, "../../.onyx/assets/trip%20plan.pdf"), Some(r.join(".onyx/assets/trip plan.pdf")));
     assert_eq!(vault::find_file(Some(r), &from, "deep.png|300"), Some(r.join("Projects/deep.png")));
     assert_eq!(vault::find_file(Some(r), &from, "picture.png"), Some(r.join("picture.png")));
     assert_eq!(vault::find_file(Some(r), &from, "https://example.com/a.png"), None);
@@ -209,13 +209,13 @@ fn an_asset_takes_a_free_name_and_one_in_the_vault_stays_put() {
     std::fs::write(&file, "pdf").unwrap();
     let a = vault::copy_asset(r, &file).unwrap();
     let b = vault::copy_asset(r, &file).unwrap();
-    assert_eq!(a, r.join(".assets/scan (1).pdf"));
-    assert_eq!(b, r.join(".assets/scan (1) 1.pdf"));
+    assert_eq!(a, r.join(".onyx/assets/scan (1).pdf"));
+    assert_eq!(b, r.join(".onyx/assets/scan (1) 1.pdf"));
     assert_eq!(std::fs::read(&b).unwrap(), b"pdf");
     assert_eq!(vault::copy_asset(r, &r.join("picture.png")).unwrap(), r.join("picture.png"));
     let pasted = vault::add_asset(r, "Pasted image.png", b"png").unwrap();
-    assert_eq!(pasted, r.join(".assets/Pasted image.png"));
-    let leftovers = std::fs::read_dir(r.join(".assets")).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().contains(".tmp")).count();
+    assert_eq!(pasted, r.join(".onyx/assets/Pasted image.png"));
+    let leftovers = std::fs::read_dir(r.join(".onyx/assets")).unwrap().filter(|e| e.as_ref().unwrap().file_name().to_string_lossy().contains(".tmp")).count();
     assert_eq!(leftovers, 0);
 }
 
@@ -235,16 +235,43 @@ fn assets_coming_in_at_once_each_take_their_own_name() {
     kept.dedup();
     assert_eq!(kept.len(), 8);
     assert!(kept.iter().all(|p| std::fs::read(p).unwrap() == b"pdf"));
-    assert_eq!(std::fs::read_dir(r.join(".assets")).unwrap().count(), 8);
+    assert_eq!(std::fs::read_dir(r.join(".onyx/assets")).unwrap().count(), 8);
 }
 
+
+#[test]
+fn an_older_assets_folder_goes_into_onyx_and_its_links_follow() {
+    let dir = a_vault();
+    let r = dir.path();
+    std::fs::create_dir_all(r.join(".assets/Scans")).unwrap();
+    std::fs::write(r.join(".assets/map.png"), "png").unwrap();
+    std::fs::write(r.join(".assets/Scans/plan a.pdf"), "pdf").unwrap();
+    let trip = r.join("Projects/Trip.md");
+    std::fs::write(&trip, "![map](../.assets/map.png) and ![[map.png]] and [plan](../.assets/Scans/plan%20a.pdf)\n").unwrap();
+    std::fs::write(r.join("Top.md"), "<img src=\".assets/map.png\" width=\"300\">\n").unwrap();
+    assert_eq!(vault::gather_assets(r).unwrap(), 2);
+    assert!(!r.join(".assets").exists());
+    assert_eq!(std::fs::read(r.join(".onyx/assets/Scans/plan a.pdf")).unwrap(), b"pdf");
+    assert_eq!(std::fs::read_to_string(&trip).unwrap(), "![map](../.onyx/assets/map.png) and ![[map.png]] and [plan](../.onyx/assets/Scans/plan%20a.pdf)\n");
+    assert_eq!(std::fs::read_to_string(r.join("Top.md")).unwrap(), "<img src=\".onyx/assets/map.png\" width=\"300\">\n");
+    // An older Onyx puts a file in `.assets` again, under a name taken.
+    std::fs::create_dir_all(r.join(".assets")).unwrap();
+    std::fs::write(r.join(".assets/map.png"), "new").unwrap();
+    std::fs::write(r.join("New.md"), "![map](.assets/map.png)\n").unwrap();
+    assert_eq!(vault::gather_assets(r).unwrap(), 1);
+    assert_eq!(std::fs::read(r.join(".onyx/assets/map 1.png")).unwrap(), b"new");
+    assert_eq!(std::fs::read_to_string(r.join("New.md")).unwrap(), "![map 1](.onyx/assets/map%201.png)\n");
+    assert_eq!(std::fs::read_to_string(&trip).unwrap(), "![map](../.onyx/assets/map.png) and ![[map.png]] and [plan](../.onyx/assets/Scans/plan%20a.pdf)\n");
+    assert!(!r.join(".assets").exists());
+    assert_eq!(vault::gather_assets(r).unwrap(), 0);
+}
 #[test]
 fn a_reference_is_standard_markdown_from_the_notes_folder() {
     let r = std::path::Path::new("/v");
     let note = r.join("旅行/Trip.md");
-    assert_eq!(vault::reference(&note, &r.join(".assets/夏威夷 banner.png")), "![夏威夷 banner](../.assets/夏威夷%20banner.png)");
-    assert_eq!(vault::reference(&note, &r.join(".assets/Plan (v2).pdf")), "![Plan (v2)](../.assets/Plan%20%28v2%29.pdf)");
-    assert_eq!(vault::reference(&r.join("Top.md"), &r.join(".assets/a.jpg")), "![a](.assets/a.jpg)");
+    assert_eq!(vault::reference(&note, &r.join(".onyx/assets/夏威夷 banner.png")), "![夏威夷 banner](../.onyx/assets/夏威夷%20banner.png)");
+    assert_eq!(vault::reference(&note, &r.join(".onyx/assets/Plan (v2).pdf")), "![Plan (v2)](../.onyx/assets/Plan%20%28v2%29.pdf)");
+    assert_eq!(vault::reference(&r.join("Top.md"), &r.join(".onyx/assets/a.jpg")), "![a](.onyx/assets/a.jpg)");
     assert_eq!(vault::decoded("my%20picture.png"), "my picture.png");
     assert_eq!(vault::decoded("100%.png"), "100%.png");
 }
@@ -506,49 +533,49 @@ mod writing {
 fn renaming_a_pasted_picture_follows_its_link_from_a_folder_with_an_emoji() {
     let dir = a_vault();
     let r = dir.path();
-    std::fs::create_dir_all(r.join(".assets")).unwrap();
+    std::fs::create_dir_all(r.join(".onyx/assets")).unwrap();
     std::fs::create_dir_all(r.join("资料🗂️")).unwrap();
-    std::fs::write(r.join(".assets/Pasted image 20261104135838.png"), "png").unwrap();
+    std::fs::write(r.join(".onyx/assets/Pasted image 20261104135838.png"), "png").unwrap();
     let note = r.join("资料🗂️/代码📝.md");
-    let text = "# 代码📝\n\n一张图片：\n\n![Pasted image 20261104135838](../.assets/Pasted%20image%2020261104135838.png)\n";
+    let text = "# 代码📝\n\n一张图片：\n\n![Pasted image 20261104135838](../.onyx/assets/Pasted%20image%2020261104135838.png)\n";
     std::fs::write(&note, text).unwrap();
-    let old = r.join(".assets/Pasted image 20261104135838.png");
+    let old = r.join(".onyx/assets/Pasted image 20261104135838.png");
     // Found as the picture's own path, not one through the note's folder,
     // so the window knows it for an asset and renames it as one.
-    assert_eq!(vault::find_file(Some(r), &note, "../.assets/Pasted%20image%2020261104135838.png"), Some(old.clone()));
+    assert_eq!(vault::find_file(Some(r), &note, "../.onyx/assets/Pasted%20image%2020261104135838.png"), Some(old.clone()));
     let new = vault::asset_renamed(&old, "图片1").unwrap();
     let edits = vault::relink(r, &note, text, &old, &new);
-    assert_eq!(vault::apply_edits(text, &edits), "# 代码📝\n\n一张图片：\n\n![图片1](../.assets/图片1.png)\n");
+    assert_eq!(vault::apply_edits(text, &edits), "# 代码📝\n\n一张图片：\n\n![图片1](../.onyx/assets/图片1.png)\n");
     vault::rename_asset(r, &old, &new, &[]).unwrap();
-    assert_eq!(std::fs::read_to_string(&note).unwrap(), "# 代码📝\n\n一张图片：\n\n![图片1](../.assets/图片1.png)\n");
+    assert_eq!(std::fs::read_to_string(&note).unwrap(), "# 代码📝\n\n一张图片：\n\n![图片1](../.onyx/assets/图片1.png)\n");
 }
 
 #[test]
 fn renaming_an_asset_follows_every_link_to_it() {
     let dir = a_vault();
     let r = dir.path();
-    std::fs::create_dir_all(r.join(".assets")).unwrap();
+    std::fs::create_dir_all(r.join(".onyx/assets")).unwrap();
     std::fs::create_dir_all(r.join("Trips")).unwrap();
-    std::fs::write(r.join(".assets/Hawaii plan.pdf"), "pdf").unwrap();
-    std::fs::write(r.join(".assets/map.png"), "png").unwrap();
+    std::fs::write(r.join(".onyx/assets/Hawaii plan.pdf"), "pdf").unwrap();
+    std::fs::write(r.join(".onyx/assets/map.png"), "png").unwrap();
     let note = r.join("Trips/Hawaii.md");
     let text = "\
 # Hawaii
 
-[Hawaii plan](../.assets/Hawaii%20plan.pdf#page=2) and [the plan](<../.assets/Hawaii plan.pdf>).
+[Hawaii plan](../.onyx/assets/Hawaii%20plan.pdf#page=2) and [the plan](<../.onyx/assets/Hawaii plan.pdf>).
 
-![[Hawaii plan.pdf|Plan]] and [[.assets/Hawaii plan.pdf]]
+![[Hawaii plan.pdf|Plan]] and [[.onyx/assets/Hawaii plan.pdf]]
 
-<a href=\"../.assets/Hawaii%20plan.pdf\">plan</a>
+<a href=\"../.onyx/assets/Hawaii%20plan.pdf\">plan</a>
 
-![map](../.assets/map.png) stays, and so does `[Hawaii plan](../.assets/Hawaii%20plan.pdf)` in code.
+![map](../.onyx/assets/map.png) stays, and so does `[Hawaii plan](../.onyx/assets/Hawaii%20plan.pdf)` in code.
 ";
     std::fs::write(&note, text).unwrap();
     let other = r.join("Other.md");
-    std::fs::write(&other, "See [Hawaii plan](.assets/Hawaii%20plan.pdf).\n").unwrap();
-    let old = r.join(".assets/Hawaii plan.pdf");
+    std::fs::write(&other, "See [Hawaii plan](.onyx/assets/Hawaii%20plan.pdf).\n").unwrap();
+    let old = r.join(".onyx/assets/Hawaii plan.pdf");
     let new = vault::asset_renamed(&old, "Oahu (final)").unwrap();
-    assert_eq!(new, r.join(".assets/Oahu (final).pdf"));
+    assert_eq!(new, r.join(".onyx/assets/Oahu (final).pdf"));
     // The open note's changes, from its own text, while the old file is there.
     let edits = vault::relink(r, &note, text, &old, &new);
     vault::rename_asset(r, &old, &new, &[note.clone()]).unwrap();
@@ -558,19 +585,19 @@ fn renaming_an_asset_follows_every_link_to_it() {
         "\
 # Hawaii
 
-[Oahu (final)](../.assets/Oahu%20%28final%29.pdf#page=2) and [the plan](<../.assets/Oahu (final).pdf>).
+[Oahu (final)](../.onyx/assets/Oahu%20%28final%29.pdf#page=2) and [the plan](<../.onyx/assets/Oahu (final).pdf>).
 
-![[Oahu (final).pdf|Plan]] and [[.assets/Oahu (final).pdf]]
+![[Oahu (final).pdf|Plan]] and [[.onyx/assets/Oahu (final).pdf]]
 
-<a href=\"../.assets/Oahu%20%28final%29.pdf\">plan</a>
+<a href=\"../.onyx/assets/Oahu%20%28final%29.pdf\">plan</a>
 
-![map](../.assets/map.png) stays, and so does `[Hawaii plan](../.assets/Hawaii%20plan.pdf)` in code.
+![map](../.onyx/assets/map.png) stays, and so does `[Hawaii plan](../.onyx/assets/Hawaii%20plan.pdf)` in code.
 "
     );
     // The open note's file is left for its editor; the other note is written.
     assert_eq!(std::fs::read_to_string(&note).unwrap(), text);
-    assert_eq!(std::fs::read_to_string(&other).unwrap(), "See [Oahu (final)](.assets/Oahu%20%28final%29.pdf).\n");
-    std::fs::write(r.join(".assets/taken.pdf"), "").unwrap();
+    assert_eq!(std::fs::read_to_string(&other).unwrap(), "See [Oahu (final)](.onyx/assets/Oahu%20%28final%29.pdf).\n");
+    std::fs::write(r.join(".onyx/assets/taken.pdf"), "").unwrap();
     assert!(vault::asset_renamed(&new, "taken").is_err());
     assert!(vault::asset_renamed(&new, "a/b").is_err());
 }
@@ -600,13 +627,13 @@ fn a_note_or_folder_is_made_only_under_a_free_name_typed_for_it() {
 fn moving_notes_and_folders_keeps_every_link_going_where_it_went() {
     let dir = a_vault();
     let r = dir.path();
-    std::fs::create_dir_all(r.join(".assets")).unwrap();
-    std::fs::write(r.join(".assets/map.png"), "png").unwrap();
+    std::fs::create_dir_all(r.join(".onyx/assets")).unwrap();
+    std::fs::write(r.join(".onyx/assets/map.png"), "png").unwrap();
     std::fs::create_dir_all(r.join("Trips/Hawaii")).unwrap();
     std::fs::create_dir_all(r.join("Archive")).unwrap();
     // A note that links out by paths from its own folder.
     let trip = r.join("Trips/Hawaii/Plan.md");
-    std::fs::write(&trip, "![map](../../.assets/map.png) [about](../../about.md) [[Note 2]]\n").unwrap();
+    std::fs::write(&trip, "![map](../../.onyx/assets/map.png) [about](../../about.md) [[Note 2]]\n").unwrap();
     // A note that links to it three ways.
     let index = r.join("Index.md");
     std::fs::write(&index, "[plan](Trips/Hawaii/Plan.md) [[Trips/Hawaii/Plan]] [[Plan]]\n").unwrap();
@@ -615,7 +642,7 @@ fn moving_notes_and_folders_keeps_every_link_going_where_it_went() {
     let moves = vault::move_into(r, &[r.join("Trips")], &r.join("Archive"), &open).unwrap();
     assert_eq!(moves, vec![(r.join("Trips"), r.join("Archive/Trips"))]);
     let moved = r.join("Archive/Trips/Hawaii/Plan.md");
-    assert_eq!(std::fs::read_to_string(&moved).unwrap(), "![map](../../../.assets/map.png) [about](../../../about.md) [[Note 2]]\n");
+    assert_eq!(std::fs::read_to_string(&moved).unwrap(), "![map](../../../.onyx/assets/map.png) [about](../../../about.md) [[Note 2]]\n");
     assert_eq!(std::fs::read_to_string(&index).unwrap(), "[plan](Archive/Trips/Hawaii/Plan.md) [[Archive/Trips/Hawaii/Plan]] [[Plan]]\n");
     // One already there is passed by; a taken name refuses before anything moves.
     assert!(vault::move_into(r, &[r.join("Index.md")], r, &open).unwrap().is_empty());

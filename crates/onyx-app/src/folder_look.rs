@@ -181,7 +181,7 @@ const LOOK_AGAIN: std::time::Duration = std::time::Duration::from_millis(500);
 impl Global for Looks {}
 
 fn file(root: &Path) -> PathBuf {
-    root.join(".onyx").join("folders.json")
+    onyx_core::vault::own(root).join("folders.json")
 }
 
 /// A folder's key in its vault's looks: its path from the root, and `.`
@@ -218,7 +218,17 @@ pub fn ensure(root: &Path, cx: &mut App) {
     if vaults.get(root).is_some_and(|(seen, _)| *seen == at) {
         return;
     }
-    let map = std::fs::read_to_string(file(root)).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
+    // A file iCloud has not brought to this device yet is asked for and
+    // read when it has come, at a later look: read here, the window waits
+    // for the network. Until then the folders wear what they wore, or
+    // nothing, under a date no file has, so the next look reads it.
+    let from = file(root);
+    if !onyx_core::vault::at_hand(&from) {
+        crate::sys::bring(&from);
+        vaults.entry(root.to_path_buf()).or_insert((Some(SystemTime::UNIX_EPOCH), BTreeMap::new()));
+        return;
+    }
+    let map = std::fs::read_to_string(from).ok().and_then(|s| serde_json::from_str(&s).ok()).unwrap_or_default();
     vaults.insert(root.to_path_buf(), (at, map));
 }
 
@@ -380,7 +390,7 @@ pub fn icon(path: &Path, name: &str, open: bool, dark: bool, theme: &gpui_compon
 /// a mask, as Tabler's do.
 fn drawn(glyph: Option<&str>, ink: Option<Hsla>, name: &str, open: bool, dark: bool, size: f32, theme: &gpui_component::Theme) -> AnyElement {
     match (glyph, ink) {
-        (None, None) => img(crate::file_icons::path(name, true, open, dark)).size(px(size)).flex_shrink_0().into_any_element(),
+        (None, None) => crate::file_icons::picture(name, true, open, dark, size).size(px(size)).flex_shrink_0().into_any_element(),
         (None, Some(ink)) => Icon::default().path(crate::file_icons::path(name, true, open, dark)).with_size(px(size)).text_color(ink).flex_shrink_0().into_any_element(),
         (Some(glyph), ink) => Icon::default().path(glyph_path(glyph)).with_size(px(size)).text_color(ink.unwrap_or(theme.muted_foreground)).flex_shrink_0().into_any_element(),
     }
@@ -855,6 +865,7 @@ impl Render for Picker {
                 .inset_0()
                 .occlude()
                 .bg(theme.overlay)
+                .children(crate::glass::cover("look"))
                 .children(crate::widgets::reaches(theme.overlay))
                 .flex()
                 .flex_col()

@@ -1,0 +1,3 @@
+- A map of every walk from the front door
+- Bread for the neighbors on Sundays
+- Letters instead of messages, one a month

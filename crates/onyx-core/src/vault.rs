@@ -138,6 +138,51 @@ pub fn read(path: &Path) -> io::Result<String> {
     fs::read_to_string(path)
 }
 
+/// Whether a file's contents are on this device. A file kept in iCloud
+/// (or by another provider of files) may be here by its name, size and
+/// dates alone, its contents fetched when it is first read: such a read
+/// waits for the network, a second and more on an iPhone for a note of a
+/// few lines, so nothing on the window's thread reads a file that is not
+/// at hand. Asking is one `lstat`, which fetches nothing. Always true
+/// where no such file exists.
+pub fn at_hand(path: &Path) -> bool {
+    #[cfg(any(target_os = "macos", target_os = "ios"))]
+    {
+        use std::os::unix::ffi::OsStrExt;
+        // `SF_DATALESS`, the system's mark on a file with no contents here.
+        const DATALESS: u32 = 0x4000_0000;
+        let Ok(name) = std::ffi::CString::new(path.as_os_str().as_bytes()) else { return true };
+        let mut st: libc::stat = unsafe { std::mem::zeroed() };
+        // SAFETY: `name` is a C string and `st` is the struct `lstat` fills.
+        if unsafe { libc::lstat(name.as_ptr(), &mut st) } != 0 {
+            return true;
+        }
+        st.st_flags & DATALESS == 0
+    }
+    #[cfg(not(any(target_os = "macos", target_os = "ios")))]
+    {
+        let _ = path;
+        true
+    }
+}
+
+/// Every file of a vault, the dotted ones too (`.onyx` and its assets), for
+/// what is done to all of them (`sys::bring_vault`).
+pub fn every_file(root: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut folders = vec![root.to_path_buf()];
+    while let Some(folder) = folders.pop() {
+        for entry in fs::read_dir(folder).into_iter().flatten().flatten() {
+            match entry.file_type() {
+                Ok(kind) if kind.is_dir() => folders.push(entry.path()),
+                Ok(kind) if kind.is_file() => found.push(entry.path()),
+                _ => {}
+            }
+        }
+    }
+    found
+}
+
 /// A note written whole: a temp file beside it and a rename, so a reader
 /// (another app, a sync) sees the old note or the new one and never half.
 pub fn write(path: &Path, text: &str) -> io::Result<()> {
@@ -337,13 +382,91 @@ pub fn resolve_link_with(root: &Path, from: &Path, link: &str, notes_of: &mut dy
     found.into_iter().next()
 }
 
-/// The vault's assets folder, at its top: every note's pictures and
-/// files in one place. Dotted, so it is never a folder of the person's
-/// and the tree and the watcher pass it by as they do `.obsidian`.
-pub const ASSETS: &str = ".assets";
+/// Onyx's own folder at a vault's top: everything Onyx keeps in a vault
+/// is in it, and nothing else of Onyx's is anywhere in the vault. Dotted,
+/// so it is never a folder of the person's and the tree passes it by as it
+/// does `.obsidian`; what is in it is not dotted again.
+pub const OWN: &str = ".onyx";
+
+/// The vault's assets folder, in Onyx's own: every note's pictures and
+/// files in one place.
+pub const ASSETS: &str = "assets";
+
+/// Where the assets were kept before they went into Onyx's own folder,
+/// at the vault's top (`gather_assets`).
+pub const OLD_ASSETS: &str = ".assets";
+
+pub fn own(root: &Path) -> PathBuf {
+    root.join(OWN)
+}
 
 pub fn assets(root: &Path) -> PathBuf {
-    root.join(ASSETS)
+    own(root).join(ASSETS)
+}
+
+/// A vault's `.assets` at its top, from before the assets went into
+/// `.onyx/assets`, moved there, and every link to what was in it with
+/// it: the folder whole where there is no `.onyx/assets` yet, else each
+/// file into it under its name or the first free one after it (an older
+/// Onyx elsewhere may still put a file in `.assets`). Each note that names
+/// one of them is written whole (`relink_moves`), but one not on this
+/// device yet (`at_hand`), whose links still find the files by their names
+/// in the assets folder (`find_file`); then `.assets` goes, once empty.
+/// Hands back how many notes were written. Runs off the window's thread.
+pub fn gather_assets(root: &Path) -> io::Result<usize> {
+    let old = root.join(OLD_ASSETS);
+    if !old.is_dir() {
+        return Ok(0);
+    }
+    let new = assets(root);
+    let mut moves: Vec<(PathBuf, PathBuf)> = Vec::new();
+    if !new.exists() {
+        moves.push((old.clone(), new.clone()));
+    } else {
+        let mut stack = vec![old.clone()];
+        while let Some(dir) = stack.pop() {
+            for entry in fs::read_dir(&dir)?.flatten() {
+                let path = entry.path();
+                let name = entry.file_name().to_string_lossy().to_string();
+                if path.is_dir() {
+                    stack.push(path);
+                } else if name != ".DS_Store" && !name.ends_with(".icloud") {
+                    let rest = path.strip_prefix(&old).unwrap_or(&path);
+                    let dir = new.join(rest.parent().unwrap_or(Path::new("")));
+                    moves.push((path.clone(), claim(&dir, &name)?));
+                }
+            }
+        }
+    }
+    let mut found = Vec::new();
+    for note in notes(root).into_iter().filter(|n| at_hand(n)) {
+        let Ok(text) = read(&note) else { continue };
+        if !text.contains(OLD_ASSETS) {
+            continue;
+        }
+        let edits = relink_moves(root, &note, &note, &text, &moves);
+        if !edits.is_empty() {
+            found.push((note, apply_edits(&text, &edits)));
+        }
+    }
+    fs::create_dir_all(own(root))?;
+    for (from, to) in &moves {
+        fs::rename(from, to)?;
+    }
+    for (note, text) in &found {
+        write(note, text)?;
+    }
+    // What is left of `.assets` (empty folders, the Finder's own file) goes.
+    if old.is_dir() {
+        let left = fs::read_dir(&old).into_iter().flatten().flatten().any(|e| {
+            let p = e.path();
+            p.is_file() && e.file_name() != ".DS_Store" || p.is_dir() && fs::read_dir(&p).into_iter().flatten().flatten().any(|_| true)
+        });
+        if !left {
+            let _ = fs::remove_dir_all(&old);
+        }
+    }
+    Ok(found.len())
 }
 
 /// Every file in the assets folder, at any depth, but dotted ones, by name in the file manager's order.

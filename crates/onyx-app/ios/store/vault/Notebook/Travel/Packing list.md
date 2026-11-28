@@ -1,0 +1,6 @@
+- [x] Passport
+- [x] Rail pass voucher
+- [ ] Light coat
+- [ ] Walking shoes
+- [ ] Camera, two batteries
+- [ ] Notebook and a pen that works

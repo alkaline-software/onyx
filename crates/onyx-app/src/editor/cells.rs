@@ -105,7 +105,7 @@ fn row_span(t: &Table, row: usize, cache: &Cache) -> Option<(f32, f32)> {
 pub(super) fn table_box(t: &Table, cache: &Cache) -> Option<TableBox> {
     let Row::Table(r) = &*cache.entries.get(t.first)?.row else { return None };
     let last = cache.entries.get(t.last)?;
-    let (left, top) = (r.inset, cache.tops[t.first]);
+    let (left, top) = (r.left(), cache.tops[t.first]);
     Some(TableBox { left, top, bottom: cache.tops[t.last] + last.height, right: left + r.grid.width, grid: r.grid.clone() })
 }
 

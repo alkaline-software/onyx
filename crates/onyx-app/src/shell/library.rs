@@ -81,6 +81,8 @@ pub(crate) struct Library {
     /// An SVG's square, drawn by the card and let go of with the vault's
     /// assets, not kept by gpui (`pictures.rs`).
     pub kept: Option<Entity<crate::pictures::Kept>>,
+    /// An older `.assets` being moved into `.onyx/assets` (`gather_assets`).
+    pub gathering: bool,
 }
 
 /// What a tab of an asset holds besides its editor.
@@ -250,6 +252,34 @@ impl Shell {
         }
     }
 
+    /// A vault's `.assets` from before they went into `.onyx/assets`
+    /// moved there, with every link to them, off the window's thread
+    /// (`vault::gather_assets`): as the vault opens, and whenever something
+    /// comes into `.assets` again from an older Onyx elsewhere. The notes
+    /// it writes come back through the watcher as any change on the disk.
+    pub(crate) fn gather_assets(&mut self, cx: &mut Context<Self>) {
+        let Some(root) = self.vault_root().map(Path::to_path_buf) else { return };
+        if self.library.gathering || !root.join(vault::OLD_ASSETS).is_dir() {
+            return;
+        }
+        self.library.gathering = true;
+        let task = cx.background_spawn({
+            let root = root.clone();
+            async move { vault::gather_assets(&root) }
+        });
+        cx.spawn(async move |this, cx| {
+            let done = task.await;
+            let _ = this.update(cx, |s, cx| {
+                s.library.gathering = false;
+                if let Err(e) = done {
+                    s.say(crate::i18n::tf("The assets could not be moved into .onyx: {why}", &[("why", &e)]), cx);
+                }
+                s.reread_assets(cx);
+            });
+        })
+        .detach();
+    }
+
     /// Whether a change on the disk is one in the assets folder.
     pub(crate) fn assets_changed(root: &Path, paths: &[PathBuf]) -> bool {
         let assets = vault::assets(root);
@@ -357,6 +387,7 @@ impl Shell {
                 .cursor_pointer()
                 .text_color(muted)
                 .hover(move |s| s.bg(wash).text_color(lit))
+                .children(crate::widgets::press_light(999.))
                 .active(move |s| s.bg(wash).text_color(lit))
                 .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
                 .child(Icon::default().path(icon).with_size(px(22.)))
@@ -590,6 +621,8 @@ impl Shell {
                     .size_full()
                     .px(px(8.))
                     .pb(px(12.))
+                    .relative()
+                    .top(self.scrollers.stretch_of(&self.library.scroll))
                     .overflow_y_scroll()
                     .track_scroll(&self.library.scroll)
                     .children(sections),
@@ -612,7 +645,7 @@ impl Shell {
             _ => false,
         };
         let mark: AnyElement = if !picture {
-            img(crate::file_icons::path(&name, false, false, true)).size(px(hand(16.))).flex_shrink_0().into_any_element()
+            crate::file_icons::picture(&name, false, false, true, hand(16.)).size(px(hand(16.))).flex_shrink_0().into_any_element()
         } else {
             let square: AnyElement = if let Some(kept) = self.library.kept.as_ref().filter(|_| is_svg(path)) {
                 img(crate::pictures::through(kept, ImageSource::Resource(Resource::Path(path.to_path_buf().into())), THUMB_PX)).size_full().object_fit(ObjectFit::Contain).into_any_element()
@@ -727,6 +760,9 @@ impl Shell {
         });
         let sub = Self::listen(&editor, path.clone(), cx);
         let (title, title_sub) = self.make_title(&path, window, cx);
+        if let Some(note) = self.shown.clone().filter(|s| vault::is_note(s)) {
+            self.opened_from.insert(path.clone(), note);
+        }
         let asset = Asset { body: Body::Reading, opened: Instant::now(), _sub: None };
         self.tabs.push(Tab { path: path.clone(), editor, title, dirty: false, saved: String::new(), save_due: None, _sub: sub, _title_sub: title_sub, asset: Some(asset), source: None });
         self.closed_tabs.retain(|c| *c != path);
@@ -875,7 +911,7 @@ impl Shell {
     pub(crate) fn render_asset(&mut self, path: &Path, _: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let theme = cx.theme().clone();
         let Some(asset) = self.tabs.iter().find(|t| t.path == path).and_then(|t| t.asset.as_ref()) else { return div().into_any_element() };
-        let icon = crate::file_icons::path(&name_of(path), false, false, theme.mode.is_dark());
+        let icon = crate::file_icons::picture(&name_of(path), false, false, theme.mode.is_dark(), 48.);
         let body: AnyElement = match &asset.body {
             Body::Reading | Body::Words => div().into_any_element(),
             Body::Frame(frame) => div().size_full().p(px(ASSET_PAD)).child(frame.clone()).into_any_element(),
@@ -890,7 +926,7 @@ impl Shell {
                 .items_center()
                 .justify_center()
                 .gap(px(14.))
-                .child(img(icon).size(px(48.)))
+                .child(icon.size(px(48.)))
                 .child(div().text_size(px(13.)).text_color(theme.muted_foreground).child(why.clone()))
                 // Not on an iPhone or an iPad, where a file is no other app's to open.
                 .when(cfg!(not(target_os = "ios")), |d| {
@@ -1132,6 +1168,7 @@ pub(crate) fn vault_block(id: impl Into<ElementId>, root: &Path, name: &str, siz
         .text_size(px(size.text))
         .cursor_pointer()
         .hover(move |s| s.bg(lit))
+        .children(crate::widgets::press_light(10.))
         .child(mark)
         .child(div().flex_1().min_w_0().truncate().font_weight(FontWeight::SEMIBOLD).text_color(theme.foreground).child(name.to_string()))
 }
@@ -1185,7 +1222,9 @@ pub(crate) fn row_tool(id: impl Into<ElementId>, icon: &'static str, words: Shar
         .cursor_pointer()
         .text_color(muted)
         .hover(move |s| s.bg(wash).text_color(lit))
+        .children(crate::widgets::press_light(6.))
         .active(move |s| s.bg(lit.opacity(0.14)))
+        .children(crate::widgets::press_light(6.))
         .managed_tooltip(move |window, cx| crate::widgets::tip(words.clone(), window, cx))
         .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
         .child(Icon::default().path(icon).with_size(px(hand(14.))))

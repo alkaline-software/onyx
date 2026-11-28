@@ -2,7 +2,7 @@
 
 ## What this is
 
-**Onyx** is a note-taking app: a folder of plain markdown files, a vault, shown in a sidebar, and a note drawn as it reads while you write it, as Obsidian's live preview does. Rust and GPUI, built to the Alkaline Software standards; it took the place of MiniNotes, a Swift menu bar app, at v0.5.0, and MiniNotes lives on in it as the note in the menu bar (`menubar.rs`). **Only the Mac version is published.** The code keeps the standards' Windows and Linux paths, but no release is cut for them and nothing is checked there. The same app runs on an iPhone and an iPad through gpui's backend for them, checked in simulators and not yet on a device or published (`docs/platform.md`, iPhone and iPad).
+**Onyx** is a note-taking app: a folder of plain markdown files, a vault, shown in a sidebar, and a note drawn as it reads while you write it, as Obsidian's live preview does. Rust and GPUI, built to the Alkaline Software standards; it took the place of MiniNotes, a Swift menu bar app, at v0.5.0, and MiniNotes lives on in it as the note in the menu bar (`menubar.rs`). **Only the Mac version is published.** The code keeps the standards' Windows and Linux paths, but no release is cut for them and nothing is checked there. The same app runs on an iPhone and an iPad through gpui's backend for them (carried in `vendor/gpui_ios`), checked in simulators and on an iPhone, and sent to the App Store's side, its page written, but not yet reviewed or published there (`docs/platform.md`, iPhone and iPad; `docs/release.md`, An iPhone's and an iPad's release).
 
 ## The one idea
 
@@ -41,8 +41,12 @@ Each is here because breaking it loses data or brings back a fixed bug. The doc 
 - **A key is drawn on caps** through `key_text`, `kbd_hint` or `tip`, named as the Mac has it and bound as `secondary-<key>` through `sys::key`, never `KeyBinding::new`, which panics on `secondary-` (`docs/platform.md`).
 - **Every child process starts through `onyx_core::process::command`**, never `Command::new`; the terminal's shell is the one exception, a pty's child that portable-pty starts (`pty.rs`).
 - **Per-system calls live in `sys.rs`**, each with a body for every system, an iPhone and an iPad among them. (`docs/platform.md`)
+- **Nothing on the window's thread reads a file that is not on the device** (`vault::at_hand`): a file in iCloud may be here by its name alone, and its first read waits for the network, a second and more on an iPhone. What is not at hand is asked for (`sys::bring`) and waited for off the thread. (`docs/platform.md`, On a device)
+- **What a finger presses lays `widgets::press_light` first in itself**: gpui draws no hover after a touch and acts on a tap only at the lift, so without it a press says nothing until the finger has left; and the window takes a press that rolled, or that landed while a scroll still coasted, only where the light was laid. (`docs/platform.md`)
+- **Nothing is reached by a pointer's hover alone.** On an iPhone and an iPad a tap brings a hover and the lift takes it away: what a hover shows on a Mac shows there by what is selected (a file's bar), and what scrolls inside a note scrolls there only once it is selected. A press never gives the keyboard to a note's words unless it was in them. (`docs/platform.md`)
+- **What floats over the page on an iPhone and an iPad stands on the system's glass** (`glass.rs`): a plate holds icons, never words gpui sets (a field's words are the system's own, `glass::field`), its icons are named with `glass::icon` so the system draws them over the glass, and what gpui draws over a plate says so with `glass::cover`, or the plate shows through it. (`docs/platform.md`)
 - **The window is measured by its room, never `viewport_size()`** (`Shell::room`, the window less what the system keeps of it, `Shell::safe`): on an iPhone the status bar, the home indicator and the keyboard are part of the window. (`docs/window.md`)
-- **One copy of gpui.** The pin is in `Cargo.lock`. Changes to the toolkit go in `vendor/gpui-component/`, marked `(Studio addition.)` and listed in its `UPSTREAM.md`. Build from the root, never inside `vendor/`.
+- **One copy of gpui.** The pin is in `Cargo.lock`. Changes to the toolkit go in `vendor/gpui-component/`, and to gpui's backend for an iPhone and an iPad in `vendor/gpui_ios/`, a copy of that same pin's (moved with it), each marked `(Studio addition.)` and listed in its `UPSTREAM.md`. Build from the root, never inside `vendor/`.
 
 ## Before you edit, read
 
@@ -51,7 +55,7 @@ Each is here because breaking it loses data or brings back a fixed bug. The doc 
 | `editor.rs`, `editor/`, `embed.rs`, `viewer.rs`, `layout.rs`, `lines.rs`, `markdown.rs`, `tables.rs`, `source.rs`, `sublime.rs`; `onyx-core/src/rhythm.rs`, `html.rs`, `check.rs`: the live preview, the source pane, spacing, the caret, the keys, tables, HTML, pictures, spelling | `docs/editor.md` |
 | `shell.rs`, `shell/library.rs`, `shell/places.rs`, `tabs.rs`, `terminal.rs`, `menubar.rs`, `note_menu.rs`, `folder_look.rs`, `ui_state.rs`, `main.rs`: the sidebar, the vault, a note's life, the tabs, the strip, the terminal, the menu bar note, the page before a vault, the menus; `onyx-core/src/vault.rs`, `pty.rs`, `shell_marks.rs`, `shortcut.rs` | `docs/window.md` |
 | `settings.rs`, `look.rs`, `fonts.rs`, `assets.rs`, `themes/onyx.json`, `scripts/icon/`; anything a person sees, new or changed | `docs/design.md`, then the doc of the part it is in |
-| `sys.rs`, `sys/`, `csd.rs`, `update.rs`, `process.rs`, `terminal_none.rs`, `onyx-core/src/watch.rs`, `ios/`, `scripts/ios-app.sh`, `vendor/`, `Cargo.toml`, `.github/workflows/`, any `cfg` for an OS | `docs/platform.md` |
+| `sys.rs`, `sys/`, `csd.rs`, `update.rs`, `process.rs`, `terminal_none.rs`, `onyx-core/src/watch.rs`, `ios/`, `scripts/ios-app.sh`, `scripts/ios-bundle.sh`, `vendor/`, anything a finger presses or drags, `Cargo.toml`, `.github/workflows/`, any `cfg` for an OS | `docs/platform.md` |
 | `export.rs`, `onyx-core/src/pdf.rs`, `docx.rs`, `web.rs`, `reading.rs`, `pdf/template.typ`: Export (PDF, image, Word, web page), printing, its sheet, how a note looks on paper | `docs/export.md` |
 | An optimization pass, or anything that runs at every frame, in a row, on a timer or in a loop, or that decodes or keeps a picture | `docs/optimize.md`, its log first |
 | Checking a change in the window from a script | `docs/probing.md` |
@@ -105,6 +109,7 @@ crates/onyx-app/           the window
   src/file_undo.rs           a removal, a move and a rename taken back and done again, for both windows; the holding folder
   src/card.rs                a link alone on its line as a card, small, medium or large: a file's, a web page's
   src/editor/cards.rs        a link shown as a link, a card or the whole file: its line written again
+  src/editor/touch.rs        a finger in the words on an iPhone and an iPad: the hold and its loupe, the handles, the system's edit menu
   src/editor/writing.rs      a note's spelling and grammar, off the window's thread
   src/layout.rs              a note laid out: Rhythm, Reader, Flow, the rows, the grid
   src/tables.rs              a table's lines changed as a whole, as text
@@ -114,20 +119,21 @@ crates/onyx-app/           the window
   src/widgets.rs             the shared drawing: choice_pill, key_text, tip, page_in, round_corners, Motion
   src/menu.rs                the app's own menu, in and out in motion
   src/scroll.rs              a gesture stays in the scroller it began in
+  src/glass.rs               Liquid Glass on an iPhone and an iPad: the plates a frame names, their icons and fields, what covers them
   src/ambient.rs             the window's clock
   src/look.rs                appearance, accents, code's inks
   src/fonts.rs               the faces carried, and which each place uses
   src/assets.rs              the icons and pictures built in
   src/file_icons.rs          Catppuccin's file icons for the tree
   src/i18n.rs                the window's words in eight languages
-  src/sys.rs                 per-system calls; sys/: the menu bar item, the hot key, the shortcut's recorder (Mado's)
+  src/sys.rs                 per-system calls; sys/: the menu bar item, the hot key, the shortcut's recorder (Mado's), the edit menu and loupe on an iPhone and an iPad
   src/csd.rs                 the window's own buttons where the system draws none
   src/ui_state.rs            what the window remembers: bounds, sidebar, vault, tabs, note, source, widths, recent vaults, the menu bar note
   assets/ themes/ locales/   icons (tabler/: Tabler's whole outline set as one file), fonts, the app icon; the palette; the words
   macos/ windows/ linux/     what each system's package needs
-  ios/                       an iPhone's and an iPad's bundle: Info.plist, the entitlements, the asset catalog (the icon, the launch color)
-vendor/                    the toolkit, the blocks crate and the terminal's screen model (vt100), each with an UPSTREAM.md
-scripts/                   the dev build, a simulator's (ios-app.sh), a press's and a corner's checks (press-diff.R, corners.R), the icon, the README's picture (make-readme-gif.sh, readme/), Tabler's icons (tabler.py), the release
+  ios/                       an iPhone's and an iPad's bundle: Info.plist, the entitlements, the privacy manifest, the asset catalog (the icon, the launch color); store/: the App Store page's words in each language and the sample vault its pictures are taken on
+vendor/                    the toolkit, gpui's backend for an iPhone and an iPad (gpui_ios), the blocks crate and the terminal's screen model (vt100), each with an UPSTREAM.md
+scripts/                   the dev build, a simulator's and a device's (ios-app.sh, on ios-bundle.sh's bundle), a press's and a corner's checks (press-diff.R, corners.R), the icon, the README's picture (make-readme-gif.sh, readme/), Tabler's icons (tabler.py), a finger through UIKit in a simulator (touch.R, touch/), the release, the App Store's page (store-shots.R, store-ios.R)
 docs/                      how each part works and its traps; release.md; probing.md
 ```
 
@@ -142,6 +148,12 @@ For an iPhone or an iPad, in a simulator (`rustup target add aarch64-apple-ios a
 
 ```
 cargo build -p onyx-app --target aarch64-apple-ios-sim && scripts/ios-app.sh "iPhone 17 Pro"
+```
+
+And on a device joined to the Mac, registered in the developer account and with Developer Mode on (`docs/release.md`, One-time setup; `rustup target add aarch64-apple-ios` once). It takes the place of the store's copy there, with the person's vaults in it:
+
+```
+cargo build --release -p onyx-app --target aarch64-apple-ios && scripts/ios-app.sh --device
 ```
 
 One dev build at a time: two copies share `~/.onyx` and both write what the window remembers. After a change to the app, build it and run `scripts/relaunch.sh` as the last command, without being asked; a change to documents alone needs no relaunch. Probe a change with a copy of its own first (`docs/probing.md`), never the copy the person is writing in. On the maintainer's Mac the vaults in Onyx's iCloud folder (`~/Library/Mobile Documents/iCloud~com~alkalinesoftware~onyx/Documents/`) are copies kept for testing: a probe may use and change them.

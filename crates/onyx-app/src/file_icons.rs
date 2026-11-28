@@ -80,6 +80,37 @@ pub fn path(name: &str, dir: bool, open: bool, dark: bool) -> SharedString {
     format!("{PREFIX}{}/{id}.svg", if dark { "mocha" } else { "latte" }).into()
 }
 
+/// The icon as a picture drawn `size` points wide, sharp at that size.
+/// gpui reads an SVG picture once, at twice the size its file says, and
+/// scales that copy to wherever it is drawn: a 16-point icon drawn at 72
+/// on a phone's three pixels a point was a blur with its edges' pixels
+/// smeared down its sides. So the file is served saying a size near the
+/// drawn one (`sized_svg`, under `<path>@<points>`), a step of 8 points
+/// at a time, enough for three pixels a point.
+pub fn picture(name: &str, dir: bool, open: bool, dark: bool, size: f32) -> gpui::Img {
+    let points = ((size * 1.5 / 8.).ceil() * 8.).max(16.) as u32;
+    gpui::img(SharedString::from(format!("{}@{points}", path(name, dir, open, dark))))
+}
+
+/// An icon's SVG saying it is `points` wide and high, for `picture`.
+pub fn sized_svg(svg: &[u8], points: u32) -> Option<Vec<u8>> {
+    let text = std::str::from_utf8(svg).ok()?;
+    let start = text.find("<svg")?;
+    let end = start + text[start..].find('>')?;
+    let mut tag = text[start..end].to_string();
+    for attr in ["width", "height"] {
+        let key = format!(" {attr}=\"");
+        if let Some(at) = tag.find(&key) {
+            let from = at + key.len();
+            let to = from + tag[from..].find('"')?;
+            tag.replace_range(from..to, &points.to_string());
+        } else {
+            tag.push_str(&format!(" {attr}=\"{points}\""));
+        }
+    }
+    Some(format!("{}{tag}{}", &text[..start], &text[end..]).into_bytes())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
